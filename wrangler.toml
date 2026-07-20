@@ -1,0 +1,23 @@
+name = "video-app"
+main = "src/index.js"
+compatibility_date = "2026-07-16"
+
+# Serves the built frontend from ./public
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
+
+# D1 — already created in your Cloudflare account
+[[d1_databases]]
+binding = "DB"
+database_name = "video-app-db"
+database_id = "bd2c9e85-462a-42c7-839e-1850b6065625"
+
+# R2 — enable R2 in the dashboard first, then:
+#   npx wrangler r2 bucket create video-app-media
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "video-app-media"
+
+[vars]
+MAX_UPLOAD_BYTES = "104857600"
