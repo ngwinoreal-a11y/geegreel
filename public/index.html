@@ -222,8 +222,11 @@
   .notif-row .thumb img { width: 100%; height: 100%; object-fit: cover; }
 
   /* Inbox: white, like TikTok's — a deliberate break from the app's dark
-     theme, same as the comment sheet already does. */
-  .msgs-page { background: #fff; color: #000; }
+     theme, same as the comment sheet already does.
+     Double-classed selector so it wins over .page regardless of source
+     order — a same-specificity tie between the two, declared in the wrong
+     order, is exactly what silently kept the inbox black before. */
+  .page.msgs-page { background: #fff; color: #000; }
   .msgs-page h2 { color: #000; }
   .thread-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid #F0F0F0; }
   .tav { position: relative; width: 52px; height: 52px; flex-shrink: 0; border-radius: 50%; overflow: hidden;
