@@ -396,6 +396,19 @@
     padding: 6px 16px; background: #F6F6F7; font-size: 12px; color: #55555A;
   }
 
+  /* "•••" sheet: a 4-up icon grid rather than another scrolling list. */
+  .opt-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; padding: 18px 16px 24px; }
+  .opt-btn { display: flex; flex-direction: column; align-items: center; gap: 8px; color: #111; }
+  .opt-btn svg { color: #111; }
+  .opt-btn span { font-size: 11px; color: #55555A; text-align: center; }
+
+  .speed-opt, .report-reason {
+    display: flex; justify-content: space-between; align-items: center; width: 100%;
+    padding: 14px 16px; font-size: 15px; color: #111; border-bottom: 1px solid #EDEDED; text-align: left;
+  }
+  .speed-opt .dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #D8D8DA; }
+  .speed-opt .dot.on { border-color: #FF3040; background: #FF3040; }
+
   .toast {
     position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
     background: rgba(255,255,255,.95); color: #000; padding: 10px 16px; border-radius: 20px;
@@ -434,8 +447,12 @@ const I = {
   cdislike: `<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.7a2 2 0 0 0-2 1.7l-1.4 9a2 2 0 0 0 2 2.3zm7-13h2.7A2.3 2.3 0 0 1 22 4.3v6.4a2.3 2.3 0 0 1-2.3 2.3H17"/></svg>`,
   x: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>`,
   gift: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M20 12v10H4V12"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>`,
-  download: `<svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13"/><path d="M6 11l6 6 6-6"/><path d="M4 20h16"/></svg>`,
+  download: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13"/><path d="M6 11l6 6 6-6"/><path d="M4 20h16"/></svg>`,
   heartFill: `<svg width="88" height="88" viewBox="0 0 24 24" fill="#FF3040" stroke="#FF3040" stroke-width="1"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21.2l7.8-7.7 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>`,
+  dots: `<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`,
+  speedIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="14" r="8"/><path d="M12 14l3-3"/><path d="M9 2h6"/></svg>`,
+  flagIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22V3"/></svg>`,
+  heartOffIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L9.5 18"/><path d="M3 3l18 18"/></svg>`,
   home: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>`,
   bell: `<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
   user: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>`,
@@ -533,7 +550,7 @@ function slide(v) {
         <button class="cmt">${I.comment}<span class="n">${fmt(v.counts.comments)}</span></button>
         <button class="rep">${I.repost}<span class="n">${fmt(v.counts.reposts)}</span></button>
         <button class="shr">${I.share}<span class="n">${fmt(v.counts.shares)}</span></button>
-        <button class="dl">${I.download}<span class="n">Save</span></button>
+        <button class="more">${I.dots}</button>
         ${mine ? "" : `<button class="gift">${I.gift}<span class="n">${fmt(v.giftCoins || 0)}</span></button>`}
       </div>
     </div>
@@ -616,36 +633,16 @@ function slide(v) {
     }
   });
 
-  el.querySelector(".dl").addEventListener("click", async (e) => {
-    e.stopPropagation();
-    // A plain <a download> is ignored by most mobile browsers for video —
-    // they just navigate to it instead of saving. Pulling the bytes down as
-    // a blob and handing them to the native share sheet (which has a real
-    // "Save video" action) is what actually gets a file onto the phone.
-    toast("Preparing download…");
-    try {
-      const res = await fetch(v.videoUrl);
-      if (!res.ok) throw new Error("Couldn't fetch that video");
-      const blob = await res.blob();
-      const filename = `${v.user.username}-${v.id}.mp4`;
-      const file = new File([blob], filename, { type: blob.type || "video/mp4" });
+  // Playback speed survives a source reload (warmNeighbours drops and
+  // re-attaches the buffer as slides move in and out of range), since
+  // reapplying it here runs every time the video actually starts playing.
+  video.addEventListener("play", () => {
+    video.playbackRate = parseFloat(el.dataset.rate || "1");
+  });
 
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file] });
-      } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 4000);
-        toast("Downloading…");
-      }
-    } catch (err) {
-      if (err.name !== "AbortError") toast(err.message || "Couldn't download that video");
-    }
+  el.querySelector(".more").addEventListener("click", (e) => {
+    e.stopPropagation();
+    openMoreOptions(v, el);
   });
 
   el.querySelector(".cmt").addEventListener("click", (e) => { e.stopPropagation(); openComments(v, el); });
@@ -723,6 +720,112 @@ function adSlide(v) {
   });
 
   return el;
+}
+
+// A plain <a download> is ignored by most mobile browsers for video — they
+// just navigate to it instead of saving. Pulling the bytes down as a blob
+// and handing them to the native share sheet (which has a real "Save video"
+// action) is what actually gets a file onto the phone.
+async function downloadVideo(v) {
+  toast("Preparing download…");
+  try {
+    const res = await fetch(v.videoUrl);
+    if (!res.ok) throw new Error("Couldn't fetch that video");
+    const blob = await res.blob();
+    const filename = `${v.user.username}-${v.id}.mp4`;
+    const file = new File([blob], filename, { type: blob.type || "video/mp4" });
+
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file] });
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast("Downloading…");
+    }
+  } catch (err) {
+    if (err.name !== "AbortError") toast(err.message || "Couldn't download that video");
+  }
+}
+
+// The "•••" sheet: save, speed, report, not interested — a TikTok-style grid
+// rather than piling every action onto the rail.
+function openMoreOptions(v, slideEl) {
+  const sheet = $(`
+    <div class="sheet" style="height:auto;max-height:60%">
+      <div class="sheet-head"><span class="title">More</span><button class="x">${I.x}</button></div>
+      <div class="opt-grid">
+        <button class="opt-btn" data-a="save">${I.download}<span>Save video</span></button>
+        <button class="opt-btn" data-a="speed">${I.speedIcon}<span>Speed</span></button>
+        <button class="opt-btn" data-a="report">${I.flagIcon}<span>Report</span></button>
+        <button class="opt-btn" data-a="notint">${I.heartOffIcon}<span>Not interested</span></button>
+      </div>
+    </div>
+  `);
+  const close = mountSheet(sheet);
+  sheet.querySelector(".x").onclick = close;
+
+  sheet.querySelector('[data-a="save"]').onclick = () => { close(); downloadVideo(v); };
+  sheet.querySelector('[data-a="speed"]').onclick = () => { close(); openSpeedSheet(v, slideEl); };
+  sheet.querySelector('[data-a="report"]').onclick = () => { close(); openReportSheet(v); };
+  sheet.querySelector('[data-a="notint"]').onclick = () => {
+    close();
+    slideEl.remove();
+    state.videos = state.videos.filter(x => x.id !== v.id);
+    toast("Won't show you videos like this as often");
+  };
+}
+
+function openSpeedSheet(v, slideEl) {
+  const rates = [2, 1.5, 1, 0.75, 0.5];
+  const current = parseFloat(slideEl.dataset.rate || "1");
+  const sheet = $(`
+    <div class="sheet" style="height:auto;max-height:60%">
+      <div class="sheet-head"><span class="title">Playback speed</span><button class="x">${I.x}</button></div>
+      <div class="sheet-body">
+        ${rates.map(r => `
+          <button class="speed-opt" data-r="${r}">
+            <span>${r}×</span>
+            <span class="dot ${r === current ? "on" : ""}"></span>
+          </button>`).join("")}
+      </div>
+    </div>
+  `);
+  const close = mountSheet(sheet);
+  sheet.querySelector(".x").onclick = close;
+  sheet.querySelectorAll(".speed-opt").forEach(b => b.onclick = () => {
+    const rate = parseFloat(b.dataset.r);
+    slideEl.dataset.rate = rate;
+    const video = slideEl.querySelector("video");
+    if (video) video.playbackRate = rate;
+    close();
+  });
+}
+
+function openReportSheet(v) {
+  const reasons = ["Spam", "Nudity or sexual content", "Violence", "Harassment or bullying", "Hate speech", "Something else"];
+  const sheet = $(`
+    <div class="sheet" style="height:auto;max-height:70%">
+      <div class="sheet-head"><span class="title">Report video</span><button class="x">${I.x}</button></div>
+      <div class="sheet-body">
+        ${reasons.map(r => `<button class="report-reason" data-r="${esc(r)}">${esc(r)}</button>`).join("")}
+      </div>
+    </div>
+  `);
+  const close = mountSheet(sheet);
+  sheet.querySelector(".x").onclick = close;
+  sheet.querySelectorAll(".report-reason").forEach(b => b.onclick = async () => {
+    close();
+    try {
+      await api("/reports", { method: "POST", body: { videoId: v.id, reason: b.dataset.r } });
+      toast("Thanks — we'll take a look");
+    } catch (e) { toast(e.message); }
+  });
 }
 
 // Mounts a sheet with a dimmed backdrop, and gives back a close() that slides
