@@ -209,7 +209,16 @@
     border-top: 1px solid var(--border); margin-top: 20px;
   }
   .chrome-pill { display: flex; align-items: center; gap: 2px; background: var(--chrome); border-radius: 20px; padding: 3px 5px; }
-  .chrome-pill button { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--on-chrome); }
+  .chrome-pill button { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--on-chrome); position: relative; }
+  .badge-dot {
+    position: absolute; top: 3px; right: 3px; width: 9px; height: 9px; border-radius: 50%;
+    background: #FF3040; border: 1.5px solid var(--chrome);
+  }
+  .notif-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .notif-row.unread { background: rgba(255,255,255,.04); margin: 0 -20px; padding: 12px 20px; }
+  .notif-row .av { width: 42px; height: 42px; flex-shrink: 0; }
+  .notif-row .thumb { width: 42px; height: 42px; border-radius: 6px; overflow: hidden; flex-shrink: 0; background: var(--raised); }
+  .notif-row .thumb img { width: 100%; height: 100%; object-fit: cover; }
 
   .tabs {
     position: absolute; top: 56px; left: 0; right: 0; z-index: 5;
@@ -403,6 +412,7 @@ const I = {
   download: `<svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13"/><path d="M6 11l6 6 6-6"/><path d="M4 20h16"/></svg>`,
   heartFill: `<svg width="88" height="88" viewBox="0 0 24 24" fill="#FF3040" stroke="#FF3040" stroke-width="1"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21.2l7.8-7.7 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>`,
   home: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>`,
+  bell: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
   user: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>`,
 };
 
@@ -470,7 +480,7 @@ const burstHeart = (container, x, y) => {
 
 // ---------- state ----------
 let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: null, loading: false,
-              viewUser: null, chatWith: null, followList: null,
+              viewUser: null, chatWith: null, followList: null, unreadCount: 0,
               // Kept apart from `videos` so opening a profile feed doesn't
               // wipe the main feed you'll scroll back into.
               userVideos: [], startAt: 0 };
@@ -1500,6 +1510,14 @@ function settingsPage() {
           <div class="switch ${u[k] ? "on" : ""}" data-k="${k}"><i></i></div>
         </div>`).join("")}
 
+      <button id="enablePush" style="width:100%;border:1px solid var(--border);border-radius:10px;padding:12px 0;color:#fff;font-size:13px;font-weight:600;margin-top:14px">
+        Enable push notifications
+      </button>
+      <p style="font-size:11px;color:var(--faint);margin:6px 0 0;line-height:1.5">
+        Get a notification on your phone for likes, comments, follows and gifts —
+        even when the app isn't open. On iPhone, add this app to your home screen first (Share → Add to Home Screen).
+      </p>
+
       <p class="sect">Earning</p>
       <button id="monet" style="width:100%;display:flex;align-items:center;justify-content:space-between;border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px">
         <span style="font-size:14px;color:#fff;font-weight:500">Monetization</span>
@@ -1549,6 +1567,7 @@ function settingsPage() {
 
     // --- avatar ---
     el.querySelector("#monet").onclick = () => { state.page = "monetization"; render(); };
+    el.querySelector("#enablePush").onclick = (ev) => { ev.currentTarget.disabled = true; enablePush().finally(() => ev.currentTarget.disabled = false); };
     el.querySelector("#admin")?.addEventListener("click", () => { state.page = "admin"; render(); });
     el.querySelector("#boot")?.addEventListener("click", async () => {
       try {
@@ -2940,6 +2959,7 @@ function render() {
   if (state.page === "wallet") { app.appendChild(walletPage()); return; }
   if (state.page === "wallet-history") { app.appendChild(walletHistoryPage()); return; }
   if (state.page === "search") { app.appendChild(searchPage()); attachNav(app, "search"); return; }
+  if (state.page === "notifications") { app.appendChild(notificationsPage()); return; }
 
   const isMsg = state.tab === "messages";
 
@@ -2948,12 +2968,14 @@ function render() {
       <button class="me-btn" id="me">${avatarInner(store.user)}</button>
       <div class="chrome-pill">
         <button id="search">${I.search}</button>
+        <button id="notifBell">${I.bell}${state.unreadCount ? '<span class="badge-dot"></span>' : ""}</button>
         <button id="settings">${I.gear}</button>
       </div>
     </div>`));
 
   app.querySelector("#me").onclick = () => { state.viewUser = null; state.tab = "profile"; state.page = "profile"; render(); };
   app.querySelector("#search").onclick = () => { state.tab = "search"; state.page = "search"; render(); };
+  app.querySelector("#notifBell").onclick = () => { state.page = "notifications"; render(); };
   app.querySelector("#settings").onclick = () => { state.page = "settings"; render(); };
 
   if (isMsg) {
@@ -2994,6 +3016,75 @@ function render() {
 // pages, so those feel like tabs rather than dead ends. `active` says which
 // tab to light up when the page differs from state.tab (e.g. viewing someone
 // else's profile still lights "Me" off).
+// Fetches one video by id and opens it as a standalone single-slide feed —
+// what a notification tap and a push-notification deep link both land on.
+async function openVideoById(id) {
+  try {
+    const r = await api(`/videos/${id}`);
+    state.userVideos = [r.video];
+    state.startAt = 0;
+    state.page = "userfeed";
+    render();
+  } catch {
+    toast("That video isn't available anymore");
+  }
+}
+
+function notificationsPage() {
+  const el = $(`<div class="page"><div class="spin"></div></div>`);
+
+  const text = (n) => {
+    const name = esc(n.actor?.displayName || n.actor?.username || "Someone");
+    return {
+      like: `${name} liked your video`,
+      comment: `${name} commented on your video`,
+      reply: `${name} replied to your comment`,
+      follow: `${name} started following you`,
+      gift: `${name} sent you a gift`,
+    }[n.type] || `${name} did something`;
+  };
+
+  api("/notifications").then(r => {
+    el.innerHTML = `
+      <div class="pagehead"><button id="back">${I.back}</button><h2>Notifications</h2></div>
+      ${r.notifications.length ? r.notifications.map(n => `
+        <div class="notif-row tap ${n.read ? "" : "unread"}" data-id="${n.id}" data-type="${n.type}"
+             data-video="${n.videoId || ""}" data-user="${n.actor ? esc(n.actor.username) : ""}">
+          <div class="av">${n.actor ? avatarInner(n.actor) : "?"}</div>
+          <div style="flex:1;min-width:0">
+            <p style="margin:0;font-size:14px;line-height:1.4">${text(n)}</p>
+            <p style="margin:3px 0 0;font-size:12px;color:var(--muted)">${ago(n.createdAt)}</p>
+          </div>
+          ${n.videoThumb ? `<div class="thumb"><img src="${n.videoThumb}"></div>` : ""}
+        </div>`).join("")
+        : `<p class="empty">Nothing yet. Likes, comments and follows will show up here.</p>`}
+    `;
+
+    el.querySelector("#back").onclick = () => { state.page = null; render(); };
+
+    el.querySelectorAll(".notif-row").forEach(row => {
+      row.onclick = () => {
+        if (row.dataset.type === "follow") {
+          if (!row.dataset.user) return;
+          state.viewUser = row.dataset.user;
+          state.page = "profile";
+          render();
+        } else if (row.dataset.video) {
+          openVideoById(row.dataset.video);
+        }
+      };
+    });
+
+    // Opening the list is what clears it, same as TikTok's inbox.
+    if (r.notifications.some(n => !n.read)) {
+      api("/notifications/read", { method: "POST" }).catch(() => {});
+    }
+    state.unreadCount = 0;
+  }).catch(e => { el.innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+
+  return el;
+}
+
 function attachNav(container, active) {
   const cur = active || state.tab;
   const isMsg = cur === "messages";
@@ -3023,6 +3114,75 @@ function attachNav(container, active) {
   });
 }
 
+// ---------- push notifications ----------
+
+const VAPID_PUBLIC_KEY = "BDxnjK4QgylUjOx-k0OSSKjRwdI045q33K5SQvv5FmpGwaHk4FQ6mI7FjwBEKDO4jlWMrCRHbZ5aNXmTT_-3dvA";
+
+const urlB64ToUint8Array = (base64String) => {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const raw = atob((base64String + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+};
+
+async function enablePush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    toast("Push isn't supported on this browser"); return false;
+  }
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Notification permission denied"); return false; }
+    const existing = await reg.pushManager.getSubscription();
+    const sub = existing || await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlB64ToUint8Array(VAPID_PUBLIC_KEY),
+    });
+    await api("/push/subscribe", { method: "POST", body: sub.toJSON() });
+    toast("Notifications enabled");
+    return true;
+  } catch {
+    toast("Couldn't enable notifications");
+    return false;
+  }
+}
+
+// Both a fresh page load carrying ?video=/?user= (a push tap that opened a
+// new tab) and a service-worker message (a push tap while a tab was already
+// open) land here.
+function handleDeepLink(params) {
+  const videoId = params.get("video");
+  const username = params.get("user");
+  if (videoId) { openVideoById(videoId); return true; }
+  if (username) { state.viewUser = username; state.page = "profile"; render(); return true; }
+  return false;
+}
+
+let unreadTimer;
+async function pollUnread() {
+  if (!store.token) return;
+  try {
+    const r = await api("/notifications/unread-count");
+    state.unreadCount = r.count;
+    const btn = document.querySelector("#notifBell");
+    if (btn) {
+      const dot = btn.querySelector(".badge-dot");
+      if (r.count && !dot) btn.insertAdjacentHTML("beforeend", '<span class="badge-dot"></span>');
+      if (!r.count && dot) dot.remove();
+    }
+  } catch {}
+}
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data?.type === "navigate") {
+      handleDeepLink(new URL(event.data.url, location.origin).searchParams);
+    }
+  });
+}
+
 // Verify the stored session is still valid before showing the app
 (async () => {
   if (store.token) {
@@ -3030,6 +3190,16 @@ function attachNav(container, active) {
     catch { store.token = null; store.user = null; }
   }
   render();
+
+  const deepLinkParams = new URLSearchParams(location.search);
+  if (store.token && handleDeepLink(deepLinkParams)) {
+    history.replaceState(null, "", location.pathname);
+  }
+
+  if (store.token) {
+    pollUnread();
+    unreadTimer = setInterval(pollUnread, 25000);
+  }
 })();
 </script>
 </body>

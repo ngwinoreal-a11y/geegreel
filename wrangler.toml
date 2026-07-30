@@ -21,3 +21,8 @@ bucket_name = "video-app-media"
 
 [vars]
 MAX_UPLOAD_BYTES = "104857600"
+# Public half of the VAPID keypair used to sign Web Push requests — safe to
+# expose, the frontend sends it as the push subscription's applicationServerKey.
+# Private half lives only as the VAPID_PRIVATE_JWK secret.
+VAPID_PUBLIC_KEY = "BDxnjK4QgylUjOx-k0OSSKjRwdI045q33K5SQvv5FmpGwaHk4FQ6mI7FjwBEKDO4jlWMrCRHbZ5aNXmTT_-3dvA"
+VAPID_SUBJECT = "mailto:ngwinoreal@gmail.com"

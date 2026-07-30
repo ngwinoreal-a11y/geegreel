@@ -164,6 +164,173 @@ async function logAdmin(env, adminId, action, targetType, targetId, note) {
   `).bind(uid(), adminId, action, targetType || null, targetId || null, note || null, now()).run();
 }
 
+// ---------- notifications + web push ----------
+//
+// Two halves: a `notifications` row (the in-app inbox, always written) and,
+// best-effort, a native push (RFC 8291 message encryption + RFC 8292 VAPID)
+// so a like/comment/follow/gift can surface even with the app closed.
+
+const b64urlToBytes = (s) => {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+};
+const bytesToB64url = (bytes) => {
+  let bin = "";
+  const arr = new Uint8Array(bytes);
+  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+
+const te = new TextEncoder();
+
+function concatBytes(...arrs) {
+  const total = arrs.reduce((n, a) => n + a.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const a of arrs) { out.set(a, off); off += a.length; }
+  return out;
+}
+
+async function hmacSha256(keyBytes, dataBytes) {
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, dataBytes));
+}
+
+// A short-lived JWT that identifies this server to the push service, signed
+// with the VAPID private key. One per request, scoped to that endpoint's origin.
+async function vapidHeader(env, endpoint) {
+  const jwk = JSON.parse(env.VAPID_PRIVATE_JWK);
+  const key = await crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const aud = new URL(endpoint).origin;
+  const header = bytesToB64url(te.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const payload = bytesToB64url(te.encode(JSON.stringify({
+    aud, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: env.VAPID_SUBJECT,
+  })));
+  // WebCrypto's ECDSA signature is already raw r||s (IEEE P1363) — exactly
+  // what a JWS expects, no DER conversion needed.
+  const sig = new Uint8Array(await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" }, key, te.encode(`${header}.${payload}`)
+  ));
+  return `vapid t=${header}.${payload}.${bytesToB64url(sig)}, k=${env.VAPID_PUBLIC_KEY}`;
+}
+
+// Encrypts one payload for one subscription per RFC 8291 (aes128gcm content
+// coding): ECDH with the browser's subscription key, double HKDF to derive a
+// content-encryption key and nonce, then AES-128-GCM.
+async function encryptPushPayload(subscription, payloadObj) {
+  const plaintext = te.encode(JSON.stringify(payloadObj));
+  const uaPublicRaw = b64urlToBytes(subscription.p256dh);
+  const authSecret = b64urlToBytes(subscription.auth);
+
+  const uaPublicKey = await crypto.subtle.importKey("raw", uaPublicRaw, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const serverKeyPair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const asPublicRaw = new Uint8Array(await crypto.subtle.exportKey("raw", serverKeyPair.publicKey));
+
+  const ecdhSecret = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: "ECDH", public: uaPublicKey }, serverKeyPair.privateKey, 256
+  ));
+
+  const prkKey = await hmacSha256(authSecret, ecdhSecret);
+  const keyInfo = concatBytes(te.encode("WebPush: info\0"), uaPublicRaw, asPublicRaw);
+  const ikm = (await hmacSha256(prkKey, concatBytes(keyInfo, new Uint8Array([1])))).slice(0, 32);
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const prk = await hmacSha256(salt, ikm);
+
+  const cek = (await hmacSha256(prk, concatBytes(te.encode("Content-Encoding: aes128gcm\0"), new Uint8Array([1])))).slice(0, 16);
+  const nonce = (await hmacSha256(prk, concatBytes(te.encode("Content-Encoding: nonce\0"), new Uint8Array([1])))).slice(0, 12);
+
+  const aesKey = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  // Delimiter octet 0x02 marks this as the final (only) record — no padding.
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce }, aesKey, concatBytes(plaintext, new Uint8Array([2]))
+  ));
+
+  const recordSize = new Uint8Array(4);
+  new DataView(recordSize.buffer).setUint32(0, 4096);
+
+  return concatBytes(salt, recordSize, new Uint8Array([asPublicRaw.length]), asPublicRaw, ciphertext);
+}
+
+// Best-effort by design: a push failing never fails the like/comment/follow
+// that triggered it, and a subscription the browser has abandoned (404/410)
+// is quietly dropped rather than retried forever.
+async function sendPush(env, userId, payloadObj) {
+  if (!env.VAPID_PRIVATE_JWK) return;
+  const { results: subs } = await env.DB.prepare(
+    "SELECT * FROM push_subscriptions WHERE user_id = ?"
+  ).bind(userId).all();
+  if (!subs.length) return;
+
+  await Promise.all(subs.map(async (sub) => {
+    try {
+      const body = await encryptPushPayload(sub, payloadObj);
+      const authHeader = await vapidHeader(env, sub.endpoint);
+      const res = await fetch(sub.endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Encoding": "aes128gcm",
+          "TTL": "60",
+          "Authorization": authHeader,
+        },
+        body,
+      });
+      if (res.status === 404 || res.status === 410) {
+        await env.DB.prepare("DELETE FROM push_subscriptions WHERE id = ?").bind(sub.id).run();
+      }
+    } catch {}
+  }));
+}
+
+const NOTIF_TEXT = {
+  like: (name) => [`${name} liked your video`, ""],
+  comment: (name, text) => [`${name} commented`, text || ""],
+  reply: (name, text) => [`${name} replied to your comment`, text || ""],
+  follow: (name) => [`${name} started following you`, ""],
+  gift: (name) => [`${name} sent you a gift`, ""],
+};
+
+// Writes the in-app notification (always) and fires a push (best-effort),
+// respecting the recipient's existing notify_* toggles — gifts are the one
+// exception, since money landing on your video shouldn't be optional.
+async function notify(env, ctx, userId, actorId, type, extra = {}) {
+  if (!userId || userId === actorId) return;
+  const recipient = await env.DB.prepare(
+    "SELECT notify_likes, notify_comments, notify_follows FROM users WHERE id = ?"
+  ).bind(userId).first();
+  if (!recipient) return;
+
+  const pref = type === "follow" ? recipient.notify_follows
+             : type === "like" ? recipient.notify_likes
+             : type === "gift" ? 1
+             : recipient.notify_comments; // comment, reply
+  if (!pref) return;
+
+  const id = uid();
+  await env.DB.prepare(`
+    INSERT INTO notifications (id, user_id, actor_id, type, video_id, comment_id, read, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+  `).bind(id, userId, actorId, type, extra.videoId || null, extra.commentId || null, now()).run();
+
+  ctx.waitUntil((async () => {
+    const actor = await env.DB.prepare("SELECT username, display_name FROM users WHERE id = ?").bind(actorId).first();
+    const name = actor?.display_name || actor?.username || "Someone";
+    const build = NOTIF_TEXT[type];
+    if (!build) return;
+    const [title, body] = build(name, extra.text);
+    await sendPush(env, userId, {
+      title, body,
+      url: extra.videoId ? `/?video=${extra.videoId}` : extra.username ? `/?user=${extra.username}` : "/",
+      tag: type,
+    });
+  })().catch(() => {}));
+}
+
 // Real follower/like/video counts for a user, used by both the applicant's
 // progress screen and the admin review — the same numbers either way.
 async function monetizeStats(env, userId) {
@@ -766,6 +933,75 @@ async function handle(request, env, ctx) {
     return json({ ok: true });
   }
 
+  // ----- notifications -----
+  if (path === "/api/notifications" && method === "GET") {
+    requireUser(user);
+    const cursor = url.searchParams.get("cursor");
+    let sql = `
+      SELECT n.id, n.type, n.video_id, n.comment_id, n.read, n.created_at,
+             a.id AS actor_id, a.username AS actor_username, a.display_name AS actor_display_name, a.avatar_key AS actor_avatar_key,
+             v.thumb_key AS video_thumb_key
+      FROM notifications n
+      LEFT JOIN users a ON a.id = n.actor_id
+      LEFT JOIN videos v ON v.id = n.video_id
+      WHERE n.user_id = ?
+    `;
+    const binds = [user.id];
+    if (cursor) { sql += " AND n.created_at < ?"; binds.push(parseInt(cursor)); }
+    sql += " ORDER BY n.created_at DESC LIMIT 30";
+
+    const { results } = await env.DB.prepare(sql).bind(...binds).all();
+    return json({
+      notifications: results.map(r => ({
+        id: r.id,
+        type: r.type,
+        read: !!r.read,
+        createdAt: r.created_at,
+        videoId: r.video_id,
+        videoThumb: r.video_thumb_key ? `/api/media/${r.video_thumb_key}` : null,
+        actor: r.actor_id ? {
+          id: r.actor_id, username: r.actor_username, displayName: r.actor_display_name,
+          avatarUrl: r.actor_avatar_key ? `/api/media/${r.actor_avatar_key}` : null,
+        } : null,
+      })),
+      nextCursor: results.length === 30 ? String(results[results.length - 1].created_at) : null,
+    });
+  }
+
+  if (path === "/api/notifications/unread-count" && method === "GET") {
+    requireUser(user);
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read = 0"
+    ).bind(user.id).first();
+    return json({ count: r.n });
+  }
+
+  if (path === "/api/notifications/read" && method === "POST") {
+    requireUser(user);
+    await env.DB.prepare("UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0").bind(user.id).run();
+    return json({ ok: true });
+  }
+
+  // ----- web push subscriptions -----
+  if (path === "/api/push/subscribe" && method === "POST") {
+    requireUser(user);
+    const { endpoint, keys } = await request.json();
+    if (!endpoint || !keys?.p256dh || !keys?.auth) return err("Invalid subscription");
+    await env.DB.prepare(`
+      INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth
+    `).bind(uid(), user.id, endpoint, keys.p256dh, keys.auth, now()).run();
+    return json({ ok: true });
+  }
+
+  if (path === "/api/push/unsubscribe" && method === "POST") {
+    requireUser(user);
+    const { endpoint } = await request.json();
+    if (endpoint) await env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?").bind(endpoint, user.id).run();
+    return json({ ok: true });
+  }
+
   // ----- upload -----
   if (path === "/api/videos" && method === "POST") {
     requireUser(user);
@@ -863,6 +1099,8 @@ async function handle(request, env, ctx) {
       await env.DB.prepare(
         "INSERT OR IGNORE INTO likes (user_id, video_id, created_at) VALUES (?, ?, ?)"
       ).bind(user.id, videoId, now()).run();
+      const owner = await env.DB.prepare("SELECT user_id FROM videos WHERE id = ?").bind(videoId).first();
+      if (owner) await notify(env, ctx, owner.user_id, user.id, "like", { videoId });
     } else {
       await env.DB.prepare(
         "DELETE FROM likes WHERE user_id = ? AND video_id = ?"
@@ -950,19 +1188,26 @@ async function handle(request, env, ctx) {
 
     // A reply attaches to the top-level comment, so threads stay one level deep
     let rootId = null;
+    let parentAuthorId = null;
     if (parentId) {
       const parent = await env.DB.prepare(
-        "SELECT id, parent_id, video_id FROM comments WHERE id = ?"
+        "SELECT id, parent_id, video_id, user_id FROM comments WHERE id = ?"
       ).bind(parentId).first();
       if (!parent) return err("That comment no longer exists", 404);
       if (parent.video_id !== commentMatch[1]) return err("Comment doesn't belong to this video");
       rootId = parent.parent_id || parent.id;
+      parentAuthorId = parent.user_id;
     }
 
     const id = uid();
     await env.DB.prepare(
       "INSERT INTO comments (id, video_id, user_id, body, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
     ).bind(id, commentMatch[1], user.id, body.trim(), rootId, now()).run();
+
+    await notify(env, ctx, vid.user_id, user.id, "comment", { videoId: commentMatch[1], commentId: id, text: body.trim() });
+    if (parentAuthorId && parentAuthorId !== vid.user_id) {
+      await notify(env, ctx, parentAuthorId, user.id, "reply", { videoId: commentMatch[1], commentId: id, text: body.trim() });
+    }
 
     const c = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM comments WHERE video_id = ?"
@@ -1106,6 +1351,7 @@ async function handle(request, env, ctx) {
         INSERT OR IGNORE INTO follows (follower_id, followee_id, status, created_at)
         VALUES (?, ?, 'accepted', ?)
       `).bind(user.id, targetId, now()).run();
+      await notify(env, ctx, targetId, user.id, "follow", { username: user.username });
     } else {
       await env.DB.prepare(
         "DELETE FROM follows WHERE follower_id = ? AND followee_id = ?"
@@ -1452,6 +1698,8 @@ async function handle(request, env, ctx) {
                    me.coin_balance, me.gift_balance_cents, giftId, `${gift.emoji} ${gift.name}`);
     await recordTx(env, video.user_id, "gift_received", 0, creatorCents,
                    them.coin_balance, them.gift_balance_cents, giftId, `${gift.emoji} ${gift.name}`);
+
+    await notify(env, ctx, video.user_id, user.id, "gift", { videoId: video.id });
 
     const count = await env.DB.prepare(
       "SELECT COUNT(*) AS n, COALESCE(SUM(coins),0) AS coins FROM gifts WHERE video_id = ?"
