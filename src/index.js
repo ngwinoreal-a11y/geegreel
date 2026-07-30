@@ -1509,26 +1509,61 @@ async function handle(request, env, ctx) {
   // ----- messages -----
   if (path === "/api/messages" && method === "GET") {
     requireUser(user);
+    // One row per conversation partner (the latest message with them), not
+    // one row per message — a chat with 20 messages back and forth is one
+    // person in the inbox, not twenty.
     const { results } = await env.DB.prepare(`
-      SELECT m.*, u.username, u.display_name, u.avatar_key FROM messages m
+      WITH convo AS (
+        SELECT
+          CASE WHEN sender_id < recipient_id THEN sender_id ELSE recipient_id END AS a,
+          CASE WHEN sender_id < recipient_id THEN recipient_id ELSE sender_id END AS b,
+          MAX(created_at) AS last_at
+        FROM messages
+        WHERE sender_id = ? OR recipient_id = ?
+        GROUP BY a, b
+      )
+      SELECT m.id, m.sender_id, m.recipient_id, m.body, m.created_at,
+             u.username, u.display_name, u.avatar_key, u.last_active_at,
+             (SELECT COUNT(*) FROM messages um
+               WHERE um.recipient_id = ? AND um.read = 0
+                 AND um.sender_id = CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END
+             ) AS unread_count
+      FROM convo c
+      JOIN messages m ON ((m.sender_id = c.a AND m.recipient_id = c.b) OR (m.sender_id = c.b AND m.recipient_id = c.a))
+                      AND m.created_at = c.last_at
       JOIN users u ON u.id = CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END
-      WHERE m.sender_id = ? OR m.recipient_id = ?
       ORDER BY m.created_at DESC LIMIT 50
-    `).bind(user.id, user.id, user.id).all();
+    `).bind(user.id, user.id, user.id, user.id, user.id).all();
 
     return json({
       threads: results.map(m => ({
         id: m.id,
         body: m.body,
         createdAt: m.created_at,
+        unreadCount: m.unread_count,
         with: {
           username: m.username,
           displayName: m.display_name,
           avatarUrl: m.avatar_key ? `/api/media/${m.avatar_key}` : null,
+          online: !!(m.last_active_at && now() - m.last_active_at < 120000),
         },
         outgoing: m.sender_id === user.id,
       })),
     });
+  }
+
+  if (path === "/api/messages/unread-count" && method === "GET") {
+    requireUser(user);
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM messages WHERE recipient_id = ? AND read = 0"
+    ).bind(user.id).first();
+    return json({ count: r.n });
+  }
+
+  if (path === "/api/presence/ping" && method === "POST") {
+    requireUser(user);
+    await env.DB.prepare("UPDATE users SET last_active_at = ? WHERE id = ?").bind(now(), user.id).run();
+    return json({ ok: true });
   }
 
   // One conversation, oldest first — what the chat screen reads.
@@ -1538,12 +1573,19 @@ async function handle(request, env, ctx) {
     const other = convoMatch[1];
 
     const them = await env.DB.prepare(
-      "SELECT id, username, display_name, avatar_key, status FROM users WHERE id = ? OR username = ?"
+      "SELECT id, username, display_name, avatar_key, status, last_active_at FROM users WHERE id = ? OR username = ?"
     ).bind(other, other).first();
     if (!them) return err("User not found", 404);
 
+    // Opening the thread is what marks their messages read, same as tapping
+    // into any chat app's conversation — done before the select so the
+    // response the opener gets back is already consistent with it.
+    await env.DB.prepare(
+      "UPDATE messages SET read = 1 WHERE sender_id = ? AND recipient_id = ? AND read = 0"
+    ).bind(them.id, user.id).run();
+
     const { results } = await env.DB.prepare(`
-      SELECT id, sender_id, body, video_id, created_at FROM messages
+      SELECT id, sender_id, body, video_id, created_at, read FROM messages
       WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
       ORDER BY created_at ASC LIMIT 200
     `).bind(user.id, them.id, them.id, user.id).all();
@@ -1554,6 +1596,7 @@ async function handle(request, env, ctx) {
         username: them.username,
         displayName: them.display_name,
         avatarUrl: them.avatar_key ? `/api/media/${them.avatar_key}` : null,
+        online: !!(them.last_active_at && now() - them.last_active_at < 120000),
       },
       messages: results.map(m => ({
         id: m.id,
@@ -1561,6 +1604,7 @@ async function handle(request, env, ctx) {
         videoId: m.video_id,
         createdAt: m.created_at,
         outgoing: m.sender_id === user.id,
+        read: !!m.read,
       })),
     });
   }

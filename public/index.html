@@ -208,8 +208,9 @@
     position: sticky; bottom: 0; background: var(--bg); padding: 12px 0 0;
     border-top: 1px solid var(--border); margin-top: 20px;
   }
-  .chrome-pill { display: flex; align-items: center; gap: 2px; background: var(--chrome); border-radius: 20px; padding: 3px 5px; }
-  .chrome-pill button { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--on-chrome); position: relative; }
+  .chrome-pill { display: flex; align-items: center; gap: 3px; background: #1C1C1E; border-radius: 24px; padding: 4px; box-shadow: 0 4px 24px rgba(0,0,0,.35); }
+  .chrome-pill button { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #9A9A9E; position: relative; }
+  .chrome-pill button:active { color: var(--accent); }
   .badge-dot {
     position: absolute; top: 3px; right: 3px; width: 9px; height: 9px; border-radius: 50%;
     background: #FF3040; border: 1.5px solid var(--chrome);
@@ -219,6 +220,27 @@
   .notif-row .av { width: 42px; height: 42px; flex-shrink: 0; }
   .notif-row .thumb { width: 42px; height: 42px; border-radius: 6px; overflow: hidden; flex-shrink: 0; background: var(--raised); }
   .notif-row .thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+  /* Inbox: white, like TikTok's — a deliberate break from the app's dark
+     theme, same as the comment sheet already does. */
+  .msgs-page { background: #fff; color: #000; }
+  .msgs-page h2 { color: #000; }
+  .thread-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid #F0F0F0; }
+  .thread-row .tav { position: relative; width: 52px; height: 52px; flex-shrink: 0; border-radius: 50%; overflow: hidden;
+    background: #E4E4E6; display: grid; place-items: center; font-family: var(--display); font-weight: 700; color: #55555A; }
+  .thread-row .tav img { width: 100%; height: 100%; object-fit: cover; }
+  .online-dot { position: absolute; bottom: 1px; right: 1px; width: 13px; height: 13px; border-radius: 50%; background: #31D158; border: 2.5px solid #fff; }
+  .thread-name { margin: 0; font-size: 15px; font-weight: 600; color: #111; }
+  .thread-preview { margin: 2px 0 0; font-size: 13px; color: #8A8A8E; }
+  .thread-row.unread .thread-preview { color: #111; font-weight: 600; }
+  .thread-time { font-size: 11px; color: #8A8A8E; flex-shrink: 0; }
+  .thread-dot { width: 9px; height: 9px; border-radius: 50%; background: #FF3040; flex-shrink: 0; }
+
+  .msg-badge {
+    position: absolute; top: -3px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 8px; background: #FF3040; color: #fff; font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; line-height: 1;
+  }
 
   .tabs {
     position: absolute; top: 56px; left: 0; right: 0; z-index: 5;
@@ -1952,10 +1974,10 @@ function chatPage() {
     <div class="page" style="padding:0;display:flex;flex-direction:column">
       <div style="position:sticky;top:0;z-index:2;background:var(--bg);display:flex;align-items:center;gap:10px;padding:16px 16px 12px;border-bottom:1px solid var(--border)">
         <button id="back">${I.back}</button>
-        <div class="av" style="width:34px;height:34px">${avatarInner(who)}</div>
+        <div class="av" id="chatAv" style="width:34px;height:34px;position:relative">${avatarInner(who)}</div>
         <div style="flex:1;min-width:0">
           <p style="margin:0;font-size:14px;font-weight:600">${esc(who.displayName || who.username)}</p>
-          <p style="margin:1px 0 0;font-size:11px;color:var(--muted)">${esc(who.username)}</p>
+          <p style="margin:1px 0 0;font-size:11px;color:var(--muted)" id="chatStatus">${esc(who.username)}</p>
         </div>
       </div>
       <div id="thread" style="flex:1;overflow-y:auto;padding:14px 16px"><div class="spin"></div></div>
@@ -1978,19 +2000,38 @@ function chatPage() {
     render();
   };
 
+  // Read receipt: a single check once it's sent, a second (blue) once the
+  // other person has actually opened the thread — the same escalation
+  // WhatsApp uses, so it reads as familiar rather than invented.
+  const checks = (m) => m.outgoing
+    ? `<span style="margin-left:4px;color:${m.read ? "#4FC3F7" : "inherit"};opacity:${m.read ? "1" : ".5"}">${m.read ? "✓✓" : "✓"}</span>`
+    : "";
+
   const load = async () => {
     try {
       const r = await api(`/messages/${who.id}`);
+
+      const statusEl = el.querySelector("#chatStatus");
+      if (statusEl) {
+        statusEl.textContent = r.with.online ? "Online" : esc(who.username);
+        statusEl.style.color = r.with.online ? "#31D158" : "var(--muted)";
+      }
+      const avEl = el.querySelector("#chatAv");
+      if (avEl && r.with.online && !avEl.querySelector(".online-dot")) {
+        avEl.insertAdjacentHTML("beforeend", `<span class="online-dot" style="border-color:var(--bg)"></span>`);
+      }
+
       thread.innerHTML = r.messages.length ? r.messages.map(m => `
         <div style="display:flex;justify-content:${m.outgoing ? "flex-end" : "flex-start"};margin-bottom:8px">
           <div style="max-width:78%;min-width:0;background:${m.outgoing ? "#fff" : "var(--surface)"};
                       color:${m.outgoing ? "#000" : "#fff"};border-radius:18px;padding:8px 14px">
             <span style="font-size:14px;line-height:1.35;word-break:break-word">${esc(m.body || "")}</span>
-            <span style="font-size:10px;opacity:.5;margin-left:8px;white-space:nowrap">${ago(m.createdAt)}</span>
+            <span style="font-size:10px;opacity:.5;margin-left:8px;white-space:nowrap">${ago(m.createdAt)}${checks(m)}</span>
           </div>
         </div>`).join("")
         : `<p class="empty">No messages yet. Say hello.</p>`;
       thread.scrollTop = thread.scrollHeight;
+      pollUnread();
     } catch (e) {
       thread.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
     }
@@ -2062,7 +2103,7 @@ function searchPage() {
 }
 
 function messagesPage() {
-  const el = $(`<div class="page" style="padding-top:62px"><div class="spin"></div></div>`);
+  const el = $(`<div class="page msgs-page" style="padding-top:62px"><div class="spin" style="border-color:#eee;border-top-color:#000"></div></div>`);
   api("/messages").then(r => {
     el.innerHTML = `
       <div style="margin-bottom:14px">
@@ -2073,18 +2114,25 @@ function messagesPage() {
     const list = el.querySelector("#threads");
     list.innerHTML = r.threads.length
       ? r.threads.map(m => `
-          <div class="row thread tap" data-u="${esc(m.with.username)}">
-            <div class="av">${avatarInner(m.with)}</div>
-            <div style="flex:1">
-              <p style="margin:0;font-size:14px;font-weight:600">@${m.with.username}</p>
-              <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">${m.outgoing ? "You: " : ""}${m.body || "Sent a video"}</p>
+          <div class="thread-row tap" data-u="${esc(m.with.username)}">
+            <div class="tav">
+              ${m.with.avatarUrl ? `<img src="${m.with.avatarUrl}" alt="">` : esc((m.with.username || "?")[0].toUpperCase())}
+              ${m.with.online ? `<span class="online-dot"></span>` : ""}
+            </div>
+            <div style="flex:1;min-width:0">
+              <p class="thread-name">${esc(m.with.displayName || m.with.username)}</p>
+              <p class="thread-preview">${m.outgoing ? "You: " : ""}${esc(m.body || "Sent a video")}</p>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+              <span class="thread-time">${ago(m.createdAt)}</span>
+              ${m.unreadCount ? `<span class="thread-dot"></span>` : ""}
             </div>
           </div>`).join("")
-      : `<p class="empty">No messages yet. Tap + to find friends.</p>`;
+      : `<p class="empty" style="color:#8A8A8E">No messages yet. Tap + to find friends.</p>`;
 
     // The thread list carries usernames; the chat screen needs the id, so
     // resolve it on tap rather than widening the messages payload.
-    el.querySelectorAll(".thread").forEach(row => row.onclick = async () => {
+    el.querySelectorAll(".thread-row").forEach(row => row.onclick = async () => {
       try {
         const p = await api(`/users/${encodeURIComponent(row.dataset.u)}`);
         state.chatWith = p.user;
@@ -3098,7 +3146,10 @@ function attachNav(container, active) {
       <div class="navpill">
         <div class="chip" style="left:${isMsg ? "5px" : "50%"}"></div>
         <div class="navrow">
-          <button class="${isMsg ? "on" : ""}" data-tab="messages">${I.mail}<span>Messages</span></button>
+          <button class="${isMsg ? "on" : ""}" data-tab="messages">
+            <span style="position:relative;display:inline-flex">${I.mail}${state.unreadMessages ? `<span class="msg-badge">${state.unreadMessages > 9 ? "9+" : state.unreadMessages}</span>` : ""}</span>
+            <span>Messages</span>
+          </button>
           <button class="${!isMsg ? "on" : ""}" data-tab="feed">${I.video}<span>Feed</span></button>
         </div>
       </div>
@@ -3159,17 +3210,34 @@ function handleDeepLink(params) {
   return false;
 }
 
-let unreadTimer;
+let unreadTimer, presenceTimer;
 async function pollUnread() {
   if (!store.token) return;
   try {
-    const r = await api("/notifications/unread-count");
-    state.unreadCount = r.count;
-    const btn = document.querySelector("#notifBell");
-    if (btn) {
-      const dot = btn.querySelector(".badge-dot");
-      if (r.count && !dot) btn.insertAdjacentHTML("beforeend", '<span class="badge-dot"></span>');
-      if (!r.count && dot) dot.remove();
+    const [n, m] = await Promise.all([
+      api("/notifications/unread-count"),
+      api("/messages/unread-count"),
+    ]);
+    state.unreadCount = n.count;
+    state.unreadMessages = m.count;
+
+    const bell = document.querySelector("#notifBell");
+    if (bell) {
+      const dot = bell.querySelector(".badge-dot");
+      if (n.count && !dot) bell.insertAdjacentHTML("beforeend", '<span class="badge-dot"></span>');
+      if (!n.count && dot) dot.remove();
+    }
+
+    const msgWrap = document.querySelector('.navrow button[data-tab="messages"] span');
+    if (msgWrap) {
+      const existing = msgWrap.querySelector(".msg-badge");
+      if (m.count && !existing) {
+        msgWrap.insertAdjacentHTML("beforeend", `<span class="msg-badge">${m.count > 9 ? "9+" : m.count}</span>`);
+      } else if (m.count && existing) {
+        existing.textContent = m.count > 9 ? "9+" : m.count;
+      } else if (!m.count && existing) {
+        existing.remove();
+      }
     }
   } catch {}
 }
@@ -3199,6 +3267,10 @@ if ("serviceWorker" in navigator) {
   if (store.token) {
     pollUnread();
     unreadTimer = setInterval(pollUnread, 25000);
+
+    const ping = () => api("/presence/ping", { method: "POST" }).catch(() => {});
+    ping();
+    presenceTimer = setInterval(ping, 45000);
   }
 })();
 </script>
