@@ -152,6 +152,23 @@
     transition: all .28s cubic-bezier(.22,.61,.36,1);
   }
 
+  /* An ad slide reuses the feed's full-bleed frame, but with a "Sponsored"
+     tag instead of a follow pill and a CTA button instead of the like/comment
+     rail — a different object, so it shouldn't pretend to be a video post. */
+  .ad-slide img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+  .ad-slide video { object-fit: cover; }
+  .ad-slide .overlay { bottom: 154px; }
+  .ad-tag {
+    position: absolute; left: 16px; top: 18px; z-index: 2;
+    background: rgba(0,0,0,.55); color: #fff; font-size: 11px; font-weight: 600;
+    padding: 4px 10px; border-radius: 6px; letter-spacing: .3px;
+  }
+  .ad-cta {
+    position: absolute; left: 16px; right: 16px; bottom: 96px; z-index: 2;
+    background: #fff; color: #000; font-weight: 700; font-size: 15px;
+    padding: 14px 0; border-radius: 10px; text-align: center;
+  }
+
   /* Top bar */
   .topbar {
     position: absolute; top: 0; left: 0; right: 0; z-index: 5;
@@ -564,15 +581,36 @@ function slide(v) {
     }
   });
 
-  el.querySelector(".dl").addEventListener("click", (e) => {
+  el.querySelector(".dl").addEventListener("click", async (e) => {
     e.stopPropagation();
-    const a = document.createElement("a");
-    a.href = v.videoUrl;
-    a.download = `${v.user.username}-${v.id}.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    toast("Downloading…");
+    // A plain <a download> is ignored by most mobile browsers for video —
+    // they just navigate to it instead of saving. Pulling the bytes down as
+    // a blob and handing them to the native share sheet (which has a real
+    // "Save video" action) is what actually gets a file onto the phone.
+    toast("Preparing download…");
+    try {
+      const res = await fetch(v.videoUrl);
+      if (!res.ok) throw new Error("Couldn't fetch that video");
+      const blob = await res.blob();
+      const filename = `${v.user.username}-${v.id}.mp4`;
+      const file = new File([blob], filename, { type: blob.type || "video/mp4" });
+
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file] });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toast("Downloading…");
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") toast(err.message || "Couldn't download that video");
+    }
   });
 
   el.querySelector(".cmt").addEventListener("click", (e) => { e.stopPropagation(); openComments(v, el); });
@@ -610,6 +648,43 @@ function slide(v) {
     e.stopPropagation();
     if (!store.token) return toast("Log in to send gifts");
     openGifts(v, el);
+  });
+
+  return el;
+}
+
+// A sponsored slide: same full-bleed frame as a real video, but a
+// "Sponsored" tag instead of a follow pill and a CTA button instead of the
+// like/comment rail — it isn't a video post wearing an ad's clothes.
+function adSlide(v) {
+  const el = $(`
+    <div class="slide ad-slide" data-id="${v.id}" data-ad="1">
+      ${v.adType === "video"
+        ? `<video src="${v.mediaUrl}" data-src="${v.mediaUrl}" loop playsinline preload="auto"></video>`
+        : `<img src="${v.mediaUrl}" alt="">`}
+      <div class="ad-tag">Sponsored</div>
+      <div class="overlay">
+        <div class="author">
+          <div class="avatar" style="width:40px;height:40px;font-size:14px">${esc((v.sponsorName || "?")[0].toUpperCase())}</div>
+          <span class="aname">${esc(v.sponsorName)}</span>
+        </div>
+        ${v.caption ? `<p class="caption">${esc(v.caption)}</p>` : ""}
+      </div>
+      <button class="ad-cta">${esc(v.ctaText)}</button>
+    </div>
+  `);
+
+  const video = el.querySelector("video");
+
+  el.querySelector(".ad-cta").addEventListener("click", (e) => {
+    e.stopPropagation();
+    api(`/ads/${v.id}/click`, { method: "POST" }).catch(() => {});
+    window.open(v.linkUrl, "_blank", "noopener");
+  });
+
+  el.addEventListener("click", (e) => {
+    if (e.target.closest(".ad-cta")) return;
+    if (video) video.paused ? video.play() : video.pause();
   });
 
   return el;
@@ -822,7 +897,7 @@ async function loadFeed(reset = true) {
       if (!state.videos.length) {
         wrap.innerHTML = `<p class="empty">${state.feedTab === "following" ? "Follow people to see their videos here." : "No videos yet. Be the first to post."}</p>`;
       } else {
-        r.videos.forEach(v => wrap.appendChild(slide(v)));
+        r.videos.forEach(v => wrap.appendChild(v.isAd ? adSlide(v) : slide(v)));
         observePlayback();
       }
     }
@@ -877,30 +952,34 @@ function observePlayback() {
 
   io = new IntersectionObserver((entries) => {
     entries.forEach(en => {
+      const isAd = en.target.dataset.ad === "1";
+      const id = en.target.dataset.id;
       const v = en.target.querySelector("video");
-      if (!v) return;
+      // A photo ad has no <video> — it still needs its impression counted,
+      // it just never plays or pauses.
+      if (!v && !isAd) return;
 
       if (en.isIntersecting && en.intersectionRatio >= 0.25) {
-        v.play().catch(() => {});
-        warmNeighbours(slides.indexOf(en.target));
+        if (v) { v.play().catch(() => {}); warmNeighbours(slides.indexOf(en.target)); }
 
-        // Count a view once, and only after it's genuinely been watched —
-        // a flick past shouldn't inflate anyone's numbers.
-        const id = en.target.dataset.id;
+        // Count a view/impression once, and only after it's genuinely been
+        // seen — a flick past shouldn't inflate anyone's numbers.
         if (!viewed.has(id)) {
-          clearTimeout(v._viewTimer);
-          v._viewTimer = setTimeout(() => {
-            if (!v.paused) {
-              viewed.add(id);
-              api(`/videos/${id}/view`, { method: "POST" }).catch(() => {});
-            }
+          clearTimeout(en.target._viewTimer);
+          en.target._viewTimer = setTimeout(() => {
+            if (v && v.paused) return;
+            viewed.add(id);
+            const ep = isAd ? `/ads/${id}/view` : `/videos/${id}/view`;
+            api(ep, { method: "POST" }).catch(() => {});
           }, 1000);
         }
       } else {
-        clearTimeout(v._viewTimer);
-        v.pause();
-        // Rewind so it replays from the top when scrolled back to.
-        if (en.intersectionRatio === 0) v.currentTime = 0;
+        clearTimeout(en.target._viewTimer);
+        if (v) {
+          v.pause();
+          // Rewind so it replays from the top when scrolled back to.
+          if (en.intersectionRatio === 0) v.currentTime = 0;
+        }
       }
     });
   }, { threshold: [0, 0.25, 0.6] });
@@ -1346,8 +1425,13 @@ function friendsPage() {
 function settingsPage() {
   const el = $(`<div class="page"><div class="spin"></div></div>`);
 
-  api("/settings").then(({ user: u }) => {
+  Promise.all([
+    api("/settings"),
+    // Only relevant if this account could still claim it; skip the request otherwise.
+    api("/admin/status").catch(() => ({ hasAdmin: true })),
+  ]).then(([{ user: u }, adminStatus]) => {
     store.user = u;
+    const canClaimAdmin = u.role === "user" && !adminStatus.hasAdmin;
     el.innerHTML = `
       <div class="pagehead"><button id="back">${I.back}</button><h2>Settings</h2></div>
 
@@ -1448,7 +1532,7 @@ function settingsPage() {
         Delete account
       </button>
 
-      ${u.role === "user" ? `
+      ${canClaimAdmin ? `
         <p class="sect">Site setup</p>
         <button id="boot" style="width:100%;border:1px dashed var(--border);border-radius:10px;padding:12px 0;color:var(--muted);font-size:12px">
           Claim admin (first account only)
@@ -2428,7 +2512,7 @@ function adminPage() {
     <div class="pagehead"><button id="back">${I.back}</button><h2>Admin</h2></div>
     <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:18px;padding-bottom:2px">
       ${[["overview", "Overview"], ["apps", "Applications"], ["coins", "Coins"], ["reports", "Reports"],
-         ["users", "Users"], ["payouts", "Payouts"], ["log", "Log"]]
+         ["users", "Users"], ["ads", "Ads"], ["payouts", "Payouts"], ["log", "Log"]]
         .map(([k, l]) => `
           <button data-tab="${k}" style="flex-shrink:0;padding:7px 12px;border-radius:16px;font-size:12px;font-weight:600;
             background:${tab === k ? "#fff" : "var(--surface)"};color:${tab === k ? "#000" : "var(--muted)"};
@@ -2667,6 +2751,97 @@ function adminPage() {
           t = setTimeout(() => loadUsers(e.target.value.trim()), 300);
         });
         loadUsers();
+      }
+
+      if (tab === "ads") {
+        body.innerHTML = `
+          <p class="sect" style="margin-top:0">New ad</p>
+          <div class="field"><input id="adSponsor" placeholder="Sponsor name"></div>
+          <div class="field"><input id="adCaption" placeholder="Caption (optional)"></div>
+          <div class="field"><input id="adCta" placeholder="Button text" value="Learn more"></div>
+          <div class="field"><input id="adLink" placeholder="https://..."></div>
+          <div class="field"><input id="adFile" type="file" accept="image/*,video/*"></div>
+          <button class="btn-primary" id="adSubmit" style="margin-bottom:22px">Publish ad</button>
+          <p class="sect">Running</p>
+          <div id="adList"><div class="spin"></div></div>`;
+
+        const loadAds = async () => {
+          const list = body.querySelector("#adList");
+          list.innerHTML = `<div class="spin"></div>`;
+          const r = await api("/admin/ads");
+          list.innerHTML = r.ads.length ? r.ads.map(a => `
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px;display:flex;gap:12px">
+              <div style="width:56px;height:74px;border-radius:8px;overflow:hidden;background:var(--raised);flex-shrink:0">
+                ${a.adType === "video"
+                  ? `<video src="${a.mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted></video>`
+                  : `<img src="${a.mediaUrl}" style="width:100%;height:100%;object-fit:cover">`}
+              </div>
+              <div style="flex:1;min-width:0">
+                <p style="margin:0;font-size:14px;font-weight:600">${esc(a.sponsorName)}
+                  <span style="font-size:10px;font-weight:600;margin-left:6px;padding:1px 6px;border-radius:4px;
+                    background:${a.status === "active" ? "#4ADE80" : "var(--raised)"};color:${a.status === "active" ? "#000" : "var(--muted)"}">${a.status}</span>
+                </p>
+                <p style="margin:3px 0 0;font-size:12px;color:var(--muted)">"${esc(a.ctaText)}" → ${esc(a.linkUrl)}</p>
+                <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">${fmt(a.impressions)} views · ${fmt(a.clicks)} clicks</p>
+                <div style="display:flex;gap:6px;margin-top:8px">
+                  <button data-toggle="${a.id}" data-next="${a.status === "active" ? "paused" : "active"}"
+                    style="flex:1;border:1px solid var(--border);border-radius:6px;padding:6px 0;font-size:11px;font-weight:600;color:var(--muted)">
+                    ${a.status === "active" ? "Pause" : "Resume"}
+                  </button>
+                  <button data-del="${a.id}" style="flex:1;border:1px solid #5C1F1F;border-radius:6px;padding:6px 0;font-size:11px;font-weight:600;color:#FF6B6B">Delete</button>
+                </div>
+              </div>
+            </div>`).join("") : `<p class="empty">No ads yet.</p>`;
+
+          list.querySelectorAll("[data-toggle]").forEach(b => b.onclick = async () => {
+            try {
+              await api(`/admin/ads/${b.dataset.toggle}`, { method: "PATCH", body: { status: b.dataset.next } });
+              loadAds();
+            } catch (e) { toast(e.message); }
+          });
+          list.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+            if (!confirm("Delete this ad?")) return;
+            try {
+              await api(`/admin/ads/${b.dataset.del}`, { method: "DELETE" });
+              toast("Deleted"); loadAds();
+            } catch (e) { toast(e.message); }
+          });
+        };
+
+        body.querySelector("#adSubmit").onclick = async (ev) => {
+          const sponsorName = body.querySelector("#adSponsor").value.trim();
+          const linkUrl = body.querySelector("#adLink").value.trim();
+          const fileInput = body.querySelector("#adFile");
+          const file = fileInput.files[0];
+          if (!sponsorName) return toast("Sponsor name is required");
+          if (!linkUrl) return toast("Link is required");
+          if (!file) return toast("Choose a photo or video");
+
+          const fd = new FormData();
+          fd.append("media", file);
+          fd.append("sponsorName", sponsorName);
+          fd.append("caption", body.querySelector("#adCaption").value.trim());
+          fd.append("ctaText", body.querySelector("#adCta").value.trim() || "Learn more");
+          fd.append("linkUrl", linkUrl);
+
+          ev.currentTarget.disabled = true;
+          try {
+            await api("/admin/ads", { method: "POST", body: fd });
+            toast("Ad published");
+            body.querySelector("#adSponsor").value = "";
+            body.querySelector("#adCaption").value = "";
+            body.querySelector("#adCta").value = "Learn more";
+            body.querySelector("#adLink").value = "";
+            fileInput.value = "";
+            loadAds();
+          } catch (e) {
+            toast(e.message);
+          } finally {
+            ev.currentTarget.disabled = false;
+          }
+        };
+
+        loadAds();
       }
 
       if (tab === "payouts") {

@@ -272,6 +272,17 @@ const shapeVideo = r => ({
   giftCoins: r.gift_coins || 0,
 });
 
+const shapeAd = r => ({
+  id: r.id,
+  isAd: true,
+  adType: r.type,
+  mediaUrl: `/api/media/${r.media_key}`,
+  sponsorName: r.sponsor_name,
+  caption: r.caption,
+  ctaText: r.cta_text,
+  linkUrl: r.link_url,
+});
+
 // ---------- routes ----------
 
 async function handle(request, env, ctx) {
@@ -289,14 +300,21 @@ async function handle(request, env, ctx) {
     // Media is immutable — a video's bytes never change once uploaded — so it
     // can be cached at the edge indefinitely. Without this, every viewer pulls
     // from R2 again: slower for them, and billed per operation for you.
-    const cache = caches.default;
-    const cacheKey = new Request(new URL(request.url).toString(), {
-      method: "GET",
-      headers: range ? { Range: range } : {},
-    });
-
-    const hit = await cache.match(cacheKey);
-    if (hit) return hit;
+    // The Cache API isn't available on every deployment target (notably plain
+    // workers.dev), so a miss there must degrade to "serve from R2" rather
+    // than take the whole request down.
+    let cache = null, cacheKey = null;
+    try {
+      cache = caches.default;
+      cacheKey = new Request(new URL(request.url).toString(), {
+        method: "GET",
+        headers: range ? { Range: range } : {},
+      });
+      const hit = await cache.match(cacheKey);
+      if (hit) return hit;
+    } catch {
+      cache = null;
+    }
 
     let response;
 
@@ -342,7 +360,7 @@ async function handle(request, env, ctx) {
     }
 
     // Fill the cache in the background — the viewer doesn't wait for it.
-    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    if (cache) ctx.waitUntil(cache.put(cacheKey, response.clone()).catch(() => {}));
     return response;
   }
 
@@ -606,6 +624,8 @@ async function handle(request, env, ctx) {
           ))
     )`;
 
+    let offset = 0;
+
     if (tab === "following") {
       requireUser(user);
       sql += ` WHERE ${NOT_BANNED} AND ${visible} AND v.user_id IN (
@@ -614,21 +634,136 @@ async function handle(request, env, ctx) {
                )`;
       binds.push(viewerId, viewerId, user.id);
       if (cursor) { sql += " AND v.created_at < ?"; binds.push(parseInt(cursor)); }
+      sql += " ORDER BY v.created_at DESC LIMIT ?";
+      binds.push(limit);
     } else {
       sql += ` WHERE ${NOT_BANNED} AND ${visible}`;
       binds.push(viewerId, viewerId);
-      if (cursor) { sql += " AND v.created_at < ?"; binds.push(parseInt(cursor)); }
-    }
 
-    sql += " ORDER BY v.created_at DESC LIMIT ?";
-    binds.push(limit);
+      // "For you" ranks by recent engagement decayed by age (a small "hot"
+      // score) with a flat boost for creators the viewer follows, instead of
+      // pure recency — a feed that's only ever "newest first" never
+      // resurfaces something good that's an hour old. created_at stays as
+      // the tiebreaker so ties don't reorder between requests.
+      offset = cursor ? Math.max(0, parseInt(cursor)) : 0;
+      sql += `
+        ORDER BY (
+          (COALESCE(like_count,0) * 3 + COALESCE(comment_count,0) * 4 +
+           COALESCE(share_count,0) * 5 + COALESCE(repost_count,0) * 3 +
+           v.views * 0.05 + 1)
+          / pow((? - v.created_at) / 3600000.0 + 2, 1.5)
+          + (CASE WHEN EXISTS(
+               SELECT 1 FROM follows f2
+               WHERE f2.follower_id = ? AND f2.followee_id = v.user_id AND f2.status = 'accepted'
+             ) THEN 80 ELSE 0 END)
+        ) DESC, v.created_at DESC
+        LIMIT ? OFFSET ?
+      `;
+      binds.push(now(), viewerId, limit, offset);
+    }
 
     const { results } = await env.DB.prepare(sql).bind(...binds).all();
     const videos = results.map(shapeVideo);
-    return json({
-      videos,
-      nextCursor: videos.length === limit ? String(results[results.length - 1].created_at) : null,
+
+    let nextCursor;
+    if (tab === "following") {
+      nextCursor = videos.length === limit ? String(results[results.length - 1].created_at) : null;
+    } else {
+      nextCursor = results.length === limit ? String(offset + limit) : null;
+      // One ad woven into each batch, a few videos in rather than first thing —
+      // never on the (ad-free) following tab.
+      if (videos.length >= 3) {
+        const ad = await env.DB.prepare(
+          "SELECT * FROM ads WHERE status = 'active' ORDER BY RANDOM() LIMIT 1"
+        ).first();
+        if (ad) videos.splice(Math.min(4, videos.length), 0, shapeAd(ad));
+      }
+    }
+
+    return json({ videos, nextCursor });
+  }
+
+  // ----- ads: public view/click tracking -----
+  const adViewMatch = /^\/api\/ads\/([\w-]+)\/view$/.exec(path);
+  if (adViewMatch && method === "POST") {
+    await env.DB.prepare("UPDATE ads SET impressions = impressions + 1 WHERE id = ?")
+      .bind(adViewMatch[1]).run();
+    return json({ ok: true });
+  }
+
+  const adClickMatch = /^\/api\/ads\/([\w-]+)\/click$/.exec(path);
+  if (adClickMatch && method === "POST") {
+    await env.DB.prepare("UPDATE ads SET clicks = clicks + 1 WHERE id = ?")
+      .bind(adClickMatch[1]).run();
+    return json({ ok: true });
+  }
+
+  // ----- admin: ads -----
+  if (path === "/api/admin/ads" && method === "GET") {
+    requireStaff(user);
+    const { results } = await env.DB.prepare(
+      "SELECT * FROM ads ORDER BY created_at DESC"
+    ).all();
+    return json({ ads: results.map(a => ({ ...shapeAd(a), status: a.status, impressions: a.impressions, clicks: a.clicks, createdAt: a.created_at })) });
+  }
+
+  if (path === "/api/admin/ads" && method === "POST") {
+    requireStaff(user);
+    const form = await request.formData();
+    const file = form.get("media");
+    if (!file || typeof file === "string") return err("A photo or video file is required");
+
+    const type = /^video\//.test(file.type) ? "video" : /^image\//.test(file.type) ? "photo" : null;
+    if (!type) return err("File must be an image or a video");
+
+    const linkUrl = (form.get("linkUrl") || "").trim();
+    if (!linkUrl) return err("A destination link is required");
+    if (!/^https?:\/\//i.test(linkUrl)) return err("Link must start with http:// or https://");
+
+    const sponsorName = (form.get("sponsorName") || "").trim();
+    if (!sponsorName) return err("Sponsor name is required");
+
+    const id = uid();
+    const ext = (file.name?.split(".").pop() || (type === "video" ? "mp4" : "jpg")).toLowerCase();
+    const key = `ads/${id}.${ext}`;
+    await env.MEDIA.put(key, file.stream(), {
+      httpMetadata: { contentType: file.type },
     });
+
+    await env.DB.prepare(`
+      INSERT INTO ads (id, type, media_key, sponsor_name, caption, cta_text, link_url, status, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+    `).bind(
+      id, type, key, sponsorName,
+      (form.get("caption") || "").trim(),
+      (form.get("ctaText") || "Learn more").trim(),
+      linkUrl, user.id, now()
+    ).run();
+
+    await logAdmin(env, user.id, "ad_created", "ad", id, sponsorName);
+
+    const row = await env.DB.prepare("SELECT * FROM ads WHERE id = ?").bind(id).first();
+    return json({ ad: shapeAd(row) }, 201);
+  }
+
+  const adPatchMatch = /^\/api\/admin\/ads\/([\w-]+)$/.exec(path);
+  if (adPatchMatch && method === "PATCH") {
+    requireStaff(user);
+    const { status } = await request.json();
+    if (!["active", "paused"].includes(status)) return err("status must be active or paused");
+    await env.DB.prepare("UPDATE ads SET status = ? WHERE id = ?").bind(status, adPatchMatch[1]).run();
+    await logAdmin(env, user.id, status === "active" ? "ad_resumed" : "ad_paused", "ad", adPatchMatch[1]);
+    return json({ ok: true });
+  }
+
+  if (adPatchMatch && method === "DELETE") {
+    requireStaff(user);
+    const ad = await env.DB.prepare("SELECT media_key FROM ads WHERE id = ?").bind(adPatchMatch[1]).first();
+    if (!ad) return err("Not found", 404);
+    await env.MEDIA.delete(ad.media_key).catch(() => {});
+    await env.DB.prepare("DELETE FROM ads WHERE id = ?").bind(adPatchMatch[1]).run();
+    await logAdmin(env, user.id, "ad_deleted", "ad", adPatchMatch[1]);
+    return json({ ok: true });
   }
 
   // ----- upload -----
@@ -1083,7 +1218,7 @@ async function handle(request, env, ctx) {
     }
 
     const { results } = canSeeVideos
-      ? await env.DB.prepare(FEED_SQL + " WHERE v.user_id = ? ORDER BY v.created_at DESC")
+      ? await env.DB.prepare(FEED_SQL + " WHERE v.user_id = ? ORDER BY v.created_at DESC LIMIT 60")
           .bind(user?.id || "", user?.id || "", u.id).all()
       : { results: [] };
 
@@ -1957,6 +2092,16 @@ async function handle(request, env, ctx) {
   }
 
   // First-run bootstrap: turns the very first account into the admin.
+  // Lets the client hide the "Claim admin" button once a site has one,
+  // instead of showing it to every new signup and letting the 409 surprise
+  // them. Deliberately public — knowing an admin exists reveals nothing.
+  if (path === "/api/admin/status" && method === "GET") {
+    const existing = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM users WHERE role = 'admin'"
+    ).first();
+    return json({ hasAdmin: existing.n > 0 });
+  }
+
   // Only works while no admin exists, so it can't be used to seize an
   // established site.
   if (path === "/api/admin/bootstrap" && method === "POST") {
@@ -1990,8 +2135,12 @@ export default {
     try {
       const res = await handle(request, env, ctx);
       if (res) {
-        res.headers.set("Access-Control-Allow-Origin", "*");
-        return res;
+        // Some responses this handler returns (notably a Cache API hit) have
+        // immutable headers — wrapping in a fresh Response before mutating
+        // is the only way that works for every response shape uniformly.
+        const out = new Response(res.body, res);
+        out.headers.set("Access-Control-Allow-Origin", "*");
+        return out;
       }
       return env.ASSETS.fetch(request);
     } catch (e) {
