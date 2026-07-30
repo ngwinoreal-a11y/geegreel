@@ -1982,21 +1982,21 @@ function chatPage() {
   if (!who) { state.page = null; render(); return $(`<div></div>`); }
 
   const el = $(`
-    <div class="page" style="padding:0;display:flex;flex-direction:column;background:#fff;color:#000">
-      <div style="position:sticky;top:0;z-index:2;background:#fff;display:flex;align-items:center;gap:10px;padding:16px 16px 12px;border-bottom:1px solid #EDEDED">
-        <button id="back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <div class="tav" id="chatAv" style="width:38px;height:38px">${avatarInner(who)}</div>
+    <div class="page" style="padding:0;display:flex;flex-direction:column">
+      <div style="position:sticky;top:0;z-index:2;background:var(--bg);display:flex;align-items:center;gap:10px;padding:16px 16px 12px;border-bottom:1px solid var(--border)">
+        <button id="back">${I.back}</button>
+        <div class="av" id="chatAv" style="width:34px;height:34px;position:relative">${avatarInner(who)}</div>
         <div style="flex:1;min-width:0">
-          <p style="margin:0;font-size:14px;font-weight:600;color:#111">${esc(who.displayName || who.username)}</p>
-          <p style="margin:1px 0 0;font-size:11px;color:#8A8A8E" id="chatStatus">${esc(who.username)}</p>
+          <p style="margin:0;font-size:14px;font-weight:600">${esc(who.displayName || who.username)}</p>
+          <p style="margin:1px 0 0;font-size:11px;color:var(--muted)" id="chatStatus">${esc(who.username)}</p>
         </div>
       </div>
-      <div id="thread" style="flex:1;overflow-y:auto;padding:14px 16px"><div class="spin" style="border-color:#eee;border-top-color:#000"></div></div>
-      <div style="position:sticky;bottom:0;background:#fff;padding:10px 12px;border-top:1px solid #EDEDED;display:flex;gap:8px;align-items:center">
-        <input id="msg" placeholder="Message..." maxlength="1000" style="flex:1;background:#F1F1F2;
-          border:none;border-radius:20px;padding:11px 16px;color:#111;
+      <div id="thread" style="flex:1;overflow-y:auto;padding:14px 16px"><div class="spin"></div></div>
+      <div style="position:sticky;bottom:0;background:var(--bg);padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">
+        <input id="msg" placeholder="Message..." maxlength="1000" style="flex:1;background:var(--surface);
+          border:1px solid var(--border);border-radius:20px;padding:11px 16px;color:#fff;
           outline:none;font-size:14px">
-        <button id="send" style="background:#111;color:#fff;border-radius:20px;padding:0 16px;
+        <button id="send" style="background:#fff;color:#000;border-radius:20px;padding:0 16px;
           height:38px;font-weight:600;font-size:13px">Send</button>
       </div>
     </div>
@@ -2025,22 +2025,22 @@ function chatPage() {
       const statusEl = el.querySelector("#chatStatus");
       if (statusEl) {
         statusEl.textContent = r.with.online ? "Online" : esc(who.username);
-        statusEl.style.color = r.with.online ? "#31D158" : "#8A8A8E";
+        statusEl.style.color = r.with.online ? "#31D158" : "var(--muted)";
       }
       const avEl = el.querySelector("#chatAv");
       if (avEl && r.with.online && !avEl.querySelector(".online-dot")) {
-        avEl.insertAdjacentHTML("beforeend", `<span class="online-dot"></span>`);
+        avEl.insertAdjacentHTML("beforeend", `<span class="online-dot" style="border-color:var(--bg)"></span>`);
       }
 
       thread.innerHTML = r.messages.length ? r.messages.map(m => `
         <div style="display:flex;justify-content:${m.outgoing ? "flex-end" : "flex-start"};margin-bottom:8px">
-          <div style="max-width:78%;min-width:0;background:${m.outgoing ? "#DCF8C6" : "#F1F1F2"};
-                      color:#111;border-radius:18px;padding:8px 14px">
+          <div style="max-width:78%;min-width:0;background:${m.outgoing ? "#fff" : "var(--surface)"};
+                      color:${m.outgoing ? "#000" : "#fff"};border-radius:18px;padding:8px 14px">
             <span style="font-size:14px;line-height:1.35;word-break:break-word">${esc(m.body || "")}</span>
-            <span style="font-size:10px;opacity:.55;margin-left:8px;white-space:nowrap">${ago(m.createdAt)}${checks(m)}</span>
+            <span style="font-size:10px;opacity:.5;margin-left:8px;white-space:nowrap">${ago(m.createdAt)}${checks(m)}</span>
           </div>
         </div>`).join("")
-        : `<p class="empty" style="color:#8A8A8E">No messages yet. Say hello.</p>`;
+        : `<p class="empty">No messages yet. Say hello.</p>`;
       thread.scrollTop = thread.scrollHeight;
       pollUnread();
     } catch (e) {
