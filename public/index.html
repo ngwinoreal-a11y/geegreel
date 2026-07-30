@@ -3222,6 +3222,21 @@ function handleDeepLink(params) {
 }
 
 let unreadTimer, presenceTimer;
+// 4s is fast enough to feel live without a persistent connection — true
+// push-the-instant-it-happens needs a WebSocket (Durable Objects, which
+// needs the paid Workers plan); this is the free-tier-friendly middle ground.
+const UNREAD_POLL_MS = 4000;
+
+function startUnreadPolling() {
+  clearInterval(unreadTimer);
+  pollUnread();
+  unreadTimer = setInterval(pollUnread, UNREAD_POLL_MS);
+}
+function stopUnreadPolling() {
+  clearInterval(unreadTimer);
+  unreadTimer = null;
+}
+
 async function pollUnread() {
   if (!store.token) return;
   try {
@@ -3262,6 +3277,15 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+// No point polling every 4s while the tab is backgrounded — pause, and
+// catch up the instant it's looked at again instead of waiting out the
+// interval.
+document.addEventListener("visibilitychange", () => {
+  if (!store.token) return;
+  if (document.visibilityState === "visible") startUnreadPolling();
+  else stopUnreadPolling();
+});
+
 // Verify the stored session is still valid before showing the app
 (async () => {
   if (store.token) {
@@ -3276,8 +3300,7 @@ if ("serviceWorker" in navigator) {
   }
 
   if (store.token) {
-    pollUnread();
-    unreadTimer = setInterval(pollUnread, 25000);
+    startUnreadPolling();
 
     const ping = () => api("/presence/ping", { method: "POST" }).catch(() => {});
     ping();
