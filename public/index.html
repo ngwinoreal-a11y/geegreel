@@ -953,8 +953,7 @@ const viewed = new Set();
 const WARM_AHEAD = 2;
 const WARM_BEHIND = 1;
 
-function warmNeighbours(index) {
-  const slides = [...document.querySelectorAll(".slide")];
+function warmNeighbours(index, slides) {
   slides.forEach((s, i) => {
     const v = s.querySelector("video");
     if (!v) return;
@@ -978,8 +977,11 @@ function warmNeighbours(index) {
   });
 }
 
+let lastWarmIndex = -1;
+
 function observePlayback() {
   io?.disconnect();
+  lastWarmIndex = -1;
   const slides = [...document.querySelectorAll(".slide")];
 
   io = new IntersectionObserver((entries) => {
@@ -992,7 +994,15 @@ function observePlayback() {
       if (!v && !isAd) return;
 
       if (en.isIntersecting && en.intersectionRatio >= 0.25) {
-        if (v) { v.play().catch(() => {}); warmNeighbours(slides.indexOf(en.target)); }
+        if (v) {
+          v.play().catch(() => {});
+          const idx = slides.indexOf(en.target);
+          // The 0 / 0.25 / 0.6 thresholds can all fire for the same slide
+          // within one settle — re-scanning every slide's warm state three
+          // times for no change is exactly the kind of per-scroll work that
+          // adds up into a laggy feed as the list grows.
+          if (idx !== lastWarmIndex) { lastWarmIndex = idx; warmNeighbours(idx, slides); }
+        }
 
         // Count a view/impression once, and only after it's genuinely been
         // seen — a flick past shouldn't inflate anyone's numbers.
@@ -1018,7 +1028,8 @@ function observePlayback() {
 
   slides.forEach(s => io.observe(s));
   // Prime the first screenful straight away rather than waiting for a scroll.
-  warmNeighbours(0);
+  lastWarmIndex = 0;
+  warmNeighbours(0, slides);
 }
 
 // ---------- screens ----------
