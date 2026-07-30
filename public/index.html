@@ -121,7 +121,36 @@
     color: #111; background: #fff; flex-shrink: 0;
   }
   .author .follow-btn.done { background: rgba(255,255,255,.18); color: rgba(255,255,255,.75); }
-  .liked svg { fill: #fff; }
+  .liked svg { fill: #FF3040; stroke: #FF3040; }
+
+  /* Heart-burst: the big heart that pops on the video and fades, from a
+     double-tap or a like-button tap — same delight either way. */
+  .heart-burst {
+    position: absolute; z-index: 6; pointer-events: none;
+    left: 0; top: 0; transform: translate(-50%,-50%) scale(.3); opacity: 0;
+    animation: heartburst .7s cubic-bezier(.17,.89,.32,1.49) forwards;
+    filter: drop-shadow(0 4px 16px rgba(0,0,0,.4));
+  }
+  @keyframes heartburst {
+    0%   { transform: translate(-50%,-50%) scale(.3); opacity: 0; }
+    15%  { transform: translate(-50%,-50%) scale(1.15); opacity: 1; }
+    30%  { transform: translate(-50%,-50%) scale(1); opacity: 1; }
+    100% { transform: translate(-50%,-50%) scale(1); opacity: 0; }
+  }
+
+  /* While the comment sheet is open, the video shrinks into a small clip up
+     top instead of being hidden — the point of a comment sheet is to talk
+     about the video, not lose it. */
+  .slide.commenting .overlay, .slide.commenting .rail {
+    opacity: 0; pointer-events: none; transition: opacity .2s ease;
+  }
+  .slide.commenting video {
+    top: 14px; left: 50%; right: auto; bottom: auto;
+    transform: translateX(-50%);
+    width: 120px; height: 160px; border-radius: 12px;
+    object-fit: cover; box-shadow: 0 4px 20px rgba(0,0,0,.5);
+    transition: all .28s cubic-bezier(.22,.61,.36,1);
+  }
 
   /* Top bar */
   .topbar {
@@ -250,6 +279,9 @@
     /* Decelerating ease so the sheet arrives softly instead of stopping dead. */
     animation: up .32s cubic-bezier(.22,.61,.36,1);
     box-shadow: 0 -8px 40px rgba(0,0,0,.35);
+    /* Lets the keyboard-avoidance JS slide the sheet up smoothly rather than
+       jumping the moment the keyboard's resize event fires. */
+    transition: transform .15s ease-out;
   }
   /* A dim layer fades in behind any sheet, so the content behind recedes. */
   .sheet-backdrop {
@@ -351,6 +383,8 @@ const I = {
   cdislike: `<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.7a2 2 0 0 0-2 1.7l-1.4 9a2 2 0 0 0 2 2.3zm7-13h2.7A2.3 2.3 0 0 1 22 4.3v6.4a2.3 2.3 0 0 1-2.3 2.3H17"/></svg>`,
   x: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>`,
   gift: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M20 12v10H4V12"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>`,
+  download: `<svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13"/><path d="M6 11l6 6 6-6"/><path d="M4 20h16"/></svg>`,
+  heartFill: `<svg width="88" height="88" viewBox="0 0 24 24" fill="#FF3040" stroke="#FF3040" stroke-width="1"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21.2l7.8-7.7 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>`,
   home: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>`,
   user: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>`,
 };
@@ -408,6 +442,15 @@ const toast = (msg) => {
   setTimeout(() => t.remove(), 1800);
 };
 
+// The big heart that pops at (x, y) inside `container` and fades on its own.
+const burstHeart = (container, x, y) => {
+  const h = $(`<div class="heart-burst">${I.heartFill}</div>`);
+  h.style.left = `${x}px`;
+  h.style.top = `${y}px`;
+  container.appendChild(h);
+  setTimeout(() => h.remove(), 700);
+};
+
 // ---------- state ----------
 let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: null, loading: false,
               viewUser: null, chatWith: null, followList: null,
@@ -438,6 +481,7 @@ function slide(v) {
         <button class="cmt">${I.comment}<span class="n">${fmt(v.counts.comments)}</span></button>
         <button class="rep">${I.repost}<span class="n">${fmt(v.counts.reposts)}</span></button>
         <button class="shr">${I.share}<span class="n">${fmt(v.counts.shares)}</span></button>
+        <button class="dl">${I.download}<span class="n">Save</span></button>
         ${mine ? "" : `<button class="gift">${I.gift}<span class="n">${fmt(v.giftCoins || 0)}</span></button>`}
       </div>
     </div>
@@ -480,9 +524,29 @@ function slide(v) {
     if (ratio < 0.62) el.classList.add("cover");
   });
 
+  // Single tap plays/pauses; a second tap inside the window is a double-tap
+  // that likes the video and pops a heart where the finger landed — the
+  // single-tap action waits briefly to see if a second tap is coming.
+  let tapTimer = null;
   el.addEventListener("click", (e) => {
     if (e.target.closest(".rail") || e.target.closest(".author")) return;
-    video.paused ? video.play() : video.pause();
+    if (tapTimer) {
+      clearTimeout(tapTimer); tapTimer = null;
+      const rect = el.getBoundingClientRect();
+      burstHeart(el, e.clientX - rect.left, e.clientY - rect.top);
+      const likeBtn = el.querySelector(".like");
+      if (!likeBtn.classList.contains("liked")) {
+        likeBtn.classList.add("liked");
+        api(`/videos/${v.id}/like`, { method: "POST" })
+          .then(r => { likeBtn.querySelector(".n").textContent = fmt(r.count); })
+          .catch(err => { likeBtn.classList.remove("liked"); toast(err.message); });
+      }
+      return;
+    }
+    tapTimer = setTimeout(() => {
+      tapTimer = null;
+      video.paused ? video.play() : video.pause();
+    }, 250);
   });
 
   el.querySelector(".like").addEventListener("click", async (e) => {
@@ -490,6 +554,7 @@ function slide(v) {
     const btn = e.currentTarget;
     const on = btn.classList.contains("liked");
     btn.classList.toggle("liked");
+    if (!on) burstHeart(el, el.clientWidth / 2, el.clientHeight / 2);
     try {
       const r = await api(`/videos/${v.id}/like`, { method: on ? "DELETE" : "POST" });
       btn.querySelector(".n").textContent = fmt(r.count);
@@ -497,6 +562,17 @@ function slide(v) {
       btn.classList.toggle("liked");
       toast(err.message);
     }
+  });
+
+  el.querySelector(".dl").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const a = document.createElement("a");
+    a.href = v.videoUrl;
+    a.download = `${v.user.username}-${v.id}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast("Downloading…");
   });
 
   el.querySelector(".cmt").addEventListener("click", (e) => { e.stopPropagation(); openComments(v, el); });
@@ -542,7 +618,7 @@ function slide(v) {
 // Mounts a sheet with a dimmed backdrop, and gives back a close() that slides
 // it away smoothly instead of yanking it out. Both close paths — the X and a
 // tap on the backdrop — run through the same animation.
-function mountSheet(sheet) {
+function mountSheet(sheet, onClose) {
   const backdrop = $(`<div class="sheet-backdrop"></div>`);
   app.appendChild(backdrop);
   app.appendChild(sheet);
@@ -550,6 +626,7 @@ function mountSheet(sheet) {
   let closing = false;
   const close = () => {
     if (closing) return; closing = true;
+    onClose?.();
     sheet.style.animation = "down .26s cubic-bezier(.4,0,1,1) forwards";
     backdrop.style.animation = "fadeout .26s ease forwards";
     setTimeout(() => { sheet.remove(); backdrop.remove(); }, 250);
@@ -576,7 +653,29 @@ function openComments(v, slideEl) {
       </div>
     </div>
   `);
-  const close = mountSheet(sheet);
+  // The video shrinks to a small clip up top instead of disappearing behind
+  // the sheet, so commenting doesn't mean losing sight of what you're
+  // commenting on.
+  slideEl.classList.add("commenting");
+
+  // On mobile, position:fixed elements don't follow the soft keyboard — the
+  // input would end up hidden behind it. Track the visual viewport and slide
+  // the whole sheet up by exactly the keyboard's height, same trick apps use
+  // for a keyboard-docked input bar.
+  const vv = window.visualViewport;
+  const onViewport = () => {
+    if (!vv) return;
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    sheet.style.transform = kb > 40 ? `translateY(-${kb}px)` : "";
+  };
+  vv?.addEventListener("resize", onViewport);
+  vv?.addEventListener("scroll", onViewport);
+
+  const close = mountSheet(sheet, () => {
+    slideEl.classList.remove("commenting");
+    vv?.removeEventListener("resize", onViewport);
+    vv?.removeEventListener("scroll", onViewport);
+  });
   const body = sheet.querySelector(".sheet-body");
   const input = sheet.querySelector("input");
   const send = sheet.querySelector(".send");
