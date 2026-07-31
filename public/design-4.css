@@ -1,0 +1,312 @@
+/* ============================================================================
+   design-4.css — LOADING STATES AND ACTION FEEDBACK
+   ============================================================================
+
+   FOR CLAUDE CODE:
+
+   Two things here: what the app shows while it waits, and what it says after
+   an action. Save at public/design-4.css and link it after design-3.css.
+
+   ---------------------------------------------------------------------------
+   FIRST — A BUG, NOT A STYLE PROBLEM
+
+   The screenshots show a bare "0" in the middle of the screen while the feed
+   loads. That is a count rendering before its data arrives.
+
+   "0" is not a neutral placeholder. It is a false statement: it tells the
+   person there are zero likes, zero comments, zero videos — when the truth is
+   that we don't know yet. Someone reads it and believes it.
+
+   The fix is in the render code, not the CSS:
+
+       WRONG   <span>{video.counts.likes}</span>          // 0 before load
+       WRONG   <span>{count || 0}</span>                  // same lie
+       RIGHT   <span>{loaded ? count : ""}</span>         // blank until known
+       RIGHT   {loaded ? <span>{count}</span> : <i class="sk sk-num" />}
+
+   Apply that everywhere a number renders before its fetch resolves: the
+   action rail, profile stats, comment counts, wallet balances, admin stats.
+   A blank is honest; a skeleton is honest and better. Zero is neither.
+
+   ---------------------------------------------------------------------------
+   WHICH LOADER GOES WHERE
+
+   The right answer depends on what is coming, so there are three:
+
+     SKELETON   for content whose shape is known — the feed, any list, the
+                profile grid, comments. The layout appears instantly in grey
+                and fills in. This reads as far faster than a spinner because
+                the eye has structure to settle on straight away.
+
+     DOTS       for short waits with no shape — sending a message, following
+                someone, a button that is working. Put the feedback where the
+                tap happened, not in the middle of the screen.
+
+     LOGO       for the cold start ONLY — the very first paint, before the
+                app knows who you are. Never on every screen: a brand mark
+                shown on every load is a brag, not a service.
+
+   Do not use a centred spinner for anything that has a known shape. Replace
+   the existing .spin usages in the feed, lists and profile with skeletons.
+   ========================================================================= */
+
+
+/* ============================================================================
+   TOKENS
+   ========================================================================= */
+:root {
+  --sk-base:  #1C1C1C;   /* skeleton fill — visible against black, not loud */
+  --sk-lift:  #2A2A2E;   /* the sweep that passes across it */
+  --sk-sheet: #EAEAEC;   /* skeleton on a white sheet (comments) */
+  --sk-sheet-lift: #F4F4F6;
+}
+
+
+/* ============================================================================
+   1. SKELETON
+   ---------------------------------------------------------------------------
+   MARKUP: an empty element with .sk plus a shape class.
+
+       <i class="sk sk-line"></i>          one line of text
+       <i class="sk sk-line short"></i>    a shorter line
+       <i class="sk sk-av"></i>            a round avatar
+       <i class="sk sk-cell"></i>          a grid cell
+       <i class="sk sk-num"></i>           a count in the action rail
+
+   Build the skeleton out of the SAME layout as the real content, so nothing
+   jumps when the data lands. A skeleton that doesn't match its content is
+   worse than none — the shift is what people notice.
+   ========================================================================= */
+.sk {
+  display: block;
+  background: var(--sk-base);
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* A single sweep travelling left to right. One highlight, not a pulse: the
+   direction implies progress, where a pulse just blinks. */
+.sk::after {
+  content: "";
+  position: absolute; inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg,
+    transparent 0%, var(--sk-lift) 50%, transparent 100%);
+  animation: sweep 1.4s ease-in-out infinite;
+}
+@keyframes sweep { to { transform: translateX(100%); } }
+
+/* On a white sheet the skeleton flips to the light pair. */
+.sheet .sk { background: var(--sk-sheet); }
+.sheet .sk::after {
+  background: linear-gradient(90deg,
+    transparent 0%, var(--sk-sheet-lift) 50%, transparent 100%);
+}
+
+/* Shapes */
+.sk-line       { height: 12px; width: 100%; border-radius: 4px; }
+.sk-line.short { width: 45%; }
+.sk-line.tiny  { width: 28%; height: 10px; }
+.sk-av         { width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; }
+.sk-av.lg      { width: 88px; height: 88px; }
+.sk-cell       { width: 100%; aspect-ratio: 9/14; border-radius: 6px; }
+.sk-num        { width: 22px; height: 12px; border-radius: 3px; margin: 0 auto; }
+.sk-btn        { width: 84px; height: 32px; border-radius: 8px; flex-shrink: 0; }
+
+/* A skeleton row matching the real .row: avatar, two lines, a button. */
+.sk-row {
+  display: flex; align-items: center; gap: 12px; padding: 12px 0;
+}
+.sk-row .sk-lines { flex: 1; display: flex; flex-direction: column; gap: 7px; }
+
+/* Feed skeleton: the video area plus the author line and rail, so the first
+   real frame lands into the same layout. */
+.sk-feed { position: absolute; inset: 0; padding: 0; }
+.sk-feed .sk-video {
+  position: absolute; inset: 0;
+  background: var(--sk-base);
+}
+.sk-feed .sk-author {
+  position: absolute; left: 16px; right: 88px; bottom: 96px;
+  display: flex; align-items: center; gap: 10px;
+}
+
+
+/* ============================================================================
+   2. THREE DOTS
+   ---------------------------------------------------------------------------
+   MARKUP:  <span class="dots"><i></i><i></i><i></i></span>
+
+   For short waits. The three dots rise in sequence rather than fading, so the
+   movement stays legible at small sizes where a fade reads as flicker.
+   ========================================================================= */
+.dots {
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.dots i {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+  animation: dot-lift 1.1s ease-in-out infinite;
+}
+.dots i:nth-child(2) { animation-delay: .16s; }
+.dots i:nth-child(3) { animation-delay: .32s; }
+
+@keyframes dot-lift {
+  0%, 70%, 100% { transform: translateY(0);    opacity: .45; }
+  35%           { transform: translateY(-5px); opacity: 1; }
+}
+
+/* Muted variant, for use on a white sheet or beside quiet text. */
+.dots.quiet i { background: var(--muted); }
+.dots.sheet-dots i { background: var(--sheet-muted); }
+
+/* Centred block version, for a panel that has no shape worth faking. */
+.dots-block {
+  display: flex; justify-content: center; align-items: center;
+  padding: 48px 0;
+}
+
+
+/* ============================================================================
+   3. BUTTON WORKING STATE
+   ---------------------------------------------------------------------------
+   MARKUP: add .working to the button while its request is in flight.
+       <button class="btn-primary working">Repost</button>
+
+   The label stays put and the dots sit over it, so the button keeps its width
+   and the row doesn't reflow. Disable it too — a second tap while the first
+   is still going is how duplicates happen.
+   ========================================================================= */
+.working {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+}
+.working::after {
+  content: "";
+  position: absolute; top: 50%; left: 50%;
+  width: 16px; height: 16px; margin: -8px 0 0 -8px;
+  border: 2px solid rgba(0,0,0,.25);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: sp .7s linear infinite;
+}
+/* On a dark button the ring flips to light. */
+.working.on-dark::after {
+  border-color: rgba(255,255,255,.35);
+  border-top-color: transparent;
+}
+
+
+/* ============================================================================
+   4. COLD START
+   ---------------------------------------------------------------------------
+   MARKUP:
+     <div class="splash">
+       <div class="splash-mark"> …your logo, or a monogram… </div>
+       <span class="dots"><i></i><i></i><i></i></span>
+     </div>
+
+   Shown once, on first paint, while the session is checked. Remove it as soon
+   as the first screen can render — this is a doorway, not a room. If the app
+   is ready in 200ms the person should never see it, so fade it in slightly
+   late rather than flashing it at everyone.
+   ========================================================================= */
+.splash {
+  position: absolute; inset: 0; z-index: 60;
+  background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 26px;
+  /* Held back 250ms so a fast start shows nothing at all. */
+  animation: splash-in .3s ease .25s both;
+}
+@keyframes splash-in { from { opacity: 0 } to { opacity: 1 } }
+
+.splash-mark {
+  width: 84px; height: 84px; border-radius: 24px;
+  background: var(--accent); color: #111;
+  display: grid; place-items: center;
+  font-family: var(--display); font-weight: 700; font-size: 38px;
+  animation: mark-breathe 2.4s ease-in-out infinite;
+}
+/* A slow breath, not a bounce. The app is waiting, not celebrating. */
+@keyframes mark-breathe {
+  0%, 100% { transform: scale(1);    }
+  50%      { transform: scale(1.05); }
+}
+
+.splash-mark img { width: 100%; height: 100%; object-fit: contain; }
+
+/* Leaving: fade the whole thing, don't slide it. */
+.splash.leaving { animation: fadeout .28s ease forwards; }
+
+
+/* ============================================================================
+   5. WHAT THE APP SAYS AFTER REPOST AND SHARE
+   ---------------------------------------------------------------------------
+   The backend already returns what these need:
+       POST /api/videos/:id/repost  -> the new video, or 409 "You already
+                                       reposted this"
+       POST /api/videos/:id/share   -> { count, url }
+
+   COPY RULES, and why:
+
+     An action keeps its name through the whole flow. The button says
+     "Repost", so the confirmation says "Reposted" — not "Success", not
+     "Done". Matching words are how someone learns they pressed the right
+     thing.
+
+     Say WHERE it went. "Reposted" alone leaves the person wondering where to
+     look. "Reposted to your profile" answers it in three extra words.
+
+     Share does not "share" anything by itself — it hands back a link. So the
+     honest label for the copy action is "Link copied", and for sending to a
+     person it is "Sent to grace_films". Name what actually happened.
+
+     Failures say what to do next, and never apologise. "Couldn't repost —
+     check your connection and try again" beats "Something went wrong".
+
+   USE THESE STRINGS:
+
+       repost ok        Reposted to your profile
+       repost dupe      You already reposted this
+       repost fail      Couldn't repost — check your connection
+       copy link        Link copied
+       send to person   Sent to {name}
+       send fail        Couldn't send — check your connection
+
+   An undo is better than a confirmation where it is cheap to offer, and
+   repost is cheap to undo. See .toast-action below.
+   ========================================================================= */
+
+/* Toast with an inline action, e.g. "Reposted to your profile   Undo". */
+.toast-action {
+  display: flex; align-items: center; gap: 14px;
+  padding: 11px 12px 11px 16px;
+}
+.toast-action .msg { font-size: 13px; font-weight: 500; }
+.toast-action button {
+  font-size: 13px; font-weight: 700; color: var(--badge);
+  background: none; border: none; padding: 2px 4px; flex-shrink: 0;
+}
+
+/* A toast that reports a failure sits a little longer and carries a mark, so
+   it isn't mistaken for a success at a glance. */
+.toast.bad {
+  background: #2A1416; color: #FFD9DD;
+  box-shadow: 0 0 0 1px rgba(217,31,66,.5);
+}
+
+/* The rail button flashes when its action lands, so the confirmation appears
+   at the control that was pressed as well as in the toast. */
+@keyframes rail-pop {
+  0%   { transform: scale(1);    }
+  40%  { transform: scale(1.28); }
+  100% { transform: scale(1);    }
+}
+.rail button.did svg { animation: rail-pop .34s ease; }
+
+/* Repost, once it is yours, stays marked — the state is the receipt. */
+.rail .rep.on svg { color: var(--accent); stroke: var(--accent); }
+.rail .rep.on .n  { color: var(--accent); }

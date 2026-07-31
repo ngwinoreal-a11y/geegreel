@@ -216,6 +216,10 @@
      the dark chat header, wrong on the white inbox list. Scoped fix, not a
      change to their file. */
   .msgs-page .has-dot .dot { box-shadow: 0 0 0 2.5px #fff; }
+  /* design-4.css only flips its skeleton to the light pair inside .sheet;
+     the inbox is white but isn't a .sheet, so it needs the same flip. */
+  .msgs-page .sk { background: var(--sk-sheet); }
+  .msgs-page .sk::after { background: linear-gradient(90deg, transparent 0%, var(--sk-sheet-lift) 50%, transparent 100%); }
   .thread-name { margin: 0; font-size: 15px; font-weight: 600; color: #111; }
   .thread-preview { margin: 2px 0 0; font-size: 13px; color: #8A8A8E; }
   .thread-row.unread .thread-preview { color: #111; font-weight: 600; }
@@ -395,9 +399,19 @@
 </style>
 <link rel="stylesheet" href="/design-2.css">
 <link rel="stylesheet" href="/design-3.css">
+<link rel="stylesheet" href="/design-4.css">
 </head>
 <body>
-<div id="app"></div>
+<div id="app">
+  <!-- First paint only — render()'s innerHTML wipe clears this the moment
+       the real first screen is ready, so it never lingers past its job. -->
+  <div class="splash" id="splash">
+    <div class="splash-mark">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M5 3l14 9-14 9V3z"/></svg>
+    </div>
+    <span class="dots"><i></i><i></i><i></i></span>
+  </div>
+</div>
 
 <script type="module">
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
@@ -634,11 +648,19 @@ function slide(v) {
 
   el.querySelector(".rep").addEventListener("click", async (e) => {
     e.stopPropagation();
+    const btn = e.currentTarget;
+    if (btn.classList.contains("working") || btn.classList.contains("on")) return;
+    btn.classList.add("working", "on-dark");
     try {
       await api(`/videos/${v.id}/repost`, { method: "POST" });
       toast("Reposted to your profile");
-      e.currentTarget.querySelector(".n").textContent = fmt(v.counts.reposts + 1);
-    } catch (err) { toast(err.message); }
+      btn.querySelector(".n").textContent = fmt(v.counts.reposts + 1);
+      btn.classList.add("on", "did");
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.classList.remove("working", "on-dark");
+    }
   });
 
   el.querySelector(".shr").addEventListener("click", async (e) => {
@@ -821,19 +843,21 @@ function openMoreOptions(v, slideEl) {
       <div class="send-row">
         <div class="av">${avatarInner(t.with)}</div>
         <span class="send-name">${esc(t.with.displayName || t.with.username)}</span>
-        <button class="send-btn" data-u="${esc(t.with.username)}">Send</button>
+        <button class="send-btn" data-u="${esc(t.with.username)}" data-name="${esc(t.with.displayName || t.with.username)}">Send</button>
       </div>`).join("") : `<p class="empty" style="padding:24px">No conversations yet.</p>`;
 
     list.querySelectorAll(".send-btn").forEach(btn => btn.onclick = async () => {
-      btn.disabled = true;
+      btn.classList.add("working");
       try {
         const p = await api(`/users/${encodeURIComponent(btn.dataset.u)}`);
         await api("/messages", { method: "POST", body: { recipientId: p.user.id, videoId: v.id } });
+        btn.classList.remove("working");
         btn.textContent = "Sent";
         btn.classList.add("sent");
-      } catch (e) {
-        toast(e.message);
-        btn.disabled = false;
+        toast(`Sent to ${btn.dataset.name}`);
+      } catch {
+        btn.classList.remove("working");
+        toast("Couldn't send — check your connection");
       }
     });
   }).catch(() => {
@@ -1091,7 +1115,14 @@ async function loadFeed(reset = true) {
   if (reset) { state.videos = []; state.cursor = null; }
 
   const wrap = document.querySelector(".feed");
-  if (reset && wrap) wrap.innerHTML = `<div class="spin"></div>`;
+  if (reset && wrap) wrap.innerHTML = `
+    <div class="sk-feed">
+      <div class="sk sk-video"></div>
+      <div class="sk-author">
+        <i class="sk sk-av"></i>
+        <i class="sk sk-line short" style="width:120px"></i>
+      </div>
+    </div>`;
 
   try {
     const qs = new URLSearchParams({ tab: state.feedTab, limit: "15" });
@@ -1926,7 +1957,14 @@ function settingsPage() {
 // Shows your own profile, or someone else's when state.viewUser is set.
 // The two differ in the header action and the buttons under the stats.
 function profilePage() {
-  const el = $(`<div class="page"><div class="spin"></div></div>`);
+  const el = $(`<div class="page">
+    <div style="display:flex;flex-direction:column;align-items:center;padding-top:20px;margin-bottom:20px">
+      <i class="sk sk-av lg" style="margin-bottom:12px"></i>
+      <i class="sk sk-line short" style="width:100px;margin-bottom:8px"></i>
+      <i class="sk sk-line tiny"></i>
+    </div>
+    <div class="grid">${Array(6).fill('<i class="sk sk-cell"></i>').join("")}</div>
+  </div>`);
   const username = state.viewUser || store.user.username;
   const isMe = !state.viewUser || state.viewUser === store.user.username;
 
@@ -2334,8 +2372,17 @@ function searchPage() {
   return el;
 }
 
+const skRow = () => `
+  <div class="sk-row">
+    <i class="sk sk-av"></i>
+    <div class="sk-lines">
+      <i class="sk sk-line short"></i>
+      <i class="sk sk-line tiny"></i>
+    </div>
+  </div>`;
+
 function messagesPage() {
-  const el = $(`<div class="page msgs-page" style="padding-top:62px"><div class="spin" style="border-color:#eee;border-top-color:#000"></div></div>`);
+  const el = $(`<div class="page msgs-page" style="padding-top:62px">${skRow().repeat(6)}</div>`);
   api("/messages").then(r => {
     el.innerHTML = `
       <div style="margin-bottom:14px">
@@ -3358,7 +3405,7 @@ async function openVideoById(id) {
 }
 
 function notificationsPage() {
-  const el = $(`<div class="page"><div class="spin"></div></div>`);
+  const el = $(`<div class="page">${skRow().repeat(6)}</div>`);
 
   // Bold the actor's name, plain text for the rest — matches design-2.css's
   // <p><b>name</b> did the thing</p> shape.
