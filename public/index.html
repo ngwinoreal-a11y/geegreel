@@ -67,6 +67,10 @@
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     scroll-snap-stop: always;
+    /* Every other screen (.page) eases in with this same fade-up; the feed
+       and messages/home surface skip .page and were snapping in instantly —
+       the "jump" switching tabs into it. */
+    animation: pagein var(--settle);
   }
   .slide {
     height: 100%;
@@ -400,6 +404,14 @@
 <link rel="stylesheet" href="/design-2.css">
 <link rel="stylesheet" href="/design-3.css">
 <link rel="stylesheet" href="/design-4.css">
+<style>
+  /* design-4.css's --sk-base (#1C1C1C) on this app's pure #000 page is too
+     close in value — on a real screen it reads as "nothing loaded" rather
+     than a skeleton, which is exactly the "blank feed" complaint. A style
+     block placed after the design files (same specificity as their :root,
+     later in source) is what actually wins here — editing their file isn't. */
+  :root { --sk-base: #302F35; --sk-lift: #46454C; }
+</style>
 </head>
 <body>
 <div id="app">
@@ -805,7 +817,7 @@ function openMoreOptions(v, slideEl) {
     try {
       await api(`/videos/${v.id}/repost`, { method: "POST" });
       toast("Reposted to your profile");
-      const cnt = slideEl.querySelector(".rep .n");
+      const cnt = slideEl?.querySelector(".rep .n");
       if (cnt) cnt.textContent = fmt(v.counts.reposts + 1);
     } catch (err) { toast(err.message); }
   };
@@ -817,7 +829,7 @@ function openMoreOptions(v, slideEl) {
     if (shareUrl) return shareUrl;
     const r = await api(`/videos/${v.id}/share`, { method: "POST" });
     shareUrl = r.url;
-    const cnt = slideEl.querySelector(".shr .n");
+    const cnt = slideEl?.querySelector(".shr .n");
     if (cnt) cnt.textContent = fmt(r.count);
     return shareUrl;
   };
@@ -884,8 +896,8 @@ function openSpeedSheet(v, slideEl) {
   sheet.querySelector(".x").onclick = close;
   sheet.querySelectorAll(".speed-opt").forEach(b => b.onclick = () => {
     const rate = parseFloat(b.dataset.r);
-    slideEl.dataset.rate = rate;
-    const video = slideEl.querySelector("video");
+    if (slideEl) slideEl.dataset.rate = rate;
+    const video = slideEl?.querySelector("video");
     if (video) video.playbackRate = rate;
     close();
   });
@@ -1033,7 +1045,10 @@ function openComments(v, slideEl) {
 
   const render = (roots, total) => {
     title.textContent = total === 1 ? "1 comment" : `${fmt(total)} comments`;
-    slideEl.querySelector(".cmt .n").textContent = fmt(total);
+    // slideEl can be gone by the time this resolves — the sheet stayed open
+    // across a tab switch, or the slide scrolled far enough to get recycled.
+    const cmtCount = slideEl?.querySelector(".cmt .n");
+    if (cmtCount) cmtCount.textContent = fmt(total);
 
     if (!roots.length) {
       body.innerHTML = `<p class="empty" style="color:#8A8A8E">No comments yet. Say something.</p>`;
@@ -2491,7 +2506,7 @@ function openGifts(v, slideEl) {
           flyGift(r.gift.emoji);
 
           // Reflect the new total on the rail without a reload.
-          const el = slideEl.querySelector(".gift .n");
+          const el = slideEl?.querySelector(".gift .n");
           if (el) el.textContent = fmt(r.videoGifts.coins);
           v.giftCoins = r.videoGifts.coins;
 
