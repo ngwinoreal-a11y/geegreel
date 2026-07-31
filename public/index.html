@@ -2385,6 +2385,396 @@ const skRow = () => `
     </div>
   </div>`;
 
+// ---------- Home: status ring + friends ----------
+
+function homePage() {
+  const el = $(`
+    <div class="page" style="padding-top:62px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <h2 style="margin:0">Home</h2>
+        <button id="friendsBtn" style="width:36px;height:36px;border-radius:50%;background:var(--surface);border:1px solid var(--border);display:grid;place-items:center">${I.userplus}</button>
+      </div>
+      <div id="statusRing" style="display:flex;gap:14px;overflow-x:auto;padding-bottom:6px;margin-bottom:20px">${skRow()}</div>
+      <div id="statusList"></div>
+    </div>
+  `);
+
+  el.querySelector("#friendsBtn").onclick = () => { state.page = "friends-hub"; render(); };
+
+  const load = async () => {
+    try {
+      const r = await api("/statuses");
+
+      const ring = el.querySelector("#statusRing");
+      ring.innerHTML = r.groups.map(g => `
+        <button class="status-circle tap-sm" data-uid="${esc(g.userId)}" style="display:flex;flex-direction:column;align-items:center;gap:5px;flex-shrink:0;width:64px">
+          <div style="width:60px;height:60px;border-radius:50%;padding:2.5px;background:${
+            g.statuses.length ? (g.allViewed ? "var(--border)" : "linear-gradient(135deg,#F5A623,#FF3040)") : "var(--border)"
+          }">
+            <div style="width:100%;height:100%;border-radius:50%;overflow:hidden;background:var(--raised);border:2px solid #000;display:grid;place-items:center;position:relative">
+              ${avatarInner(g)}
+              ${g.isOwn ? `<div style="position:absolute;bottom:-2px;right:-2px;width:19px;height:19px;border-radius:50%;background:#fff;color:#000;display:grid;place-items:center;border:2px solid #000">${I.plus}</div>` : ""}
+            </div>
+          </div>
+          <span style="font-size:11px;color:var(--muted);max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.isOwn ? "Your status" : esc(g.displayName || g.username)}</span>
+        </button>`).join("");
+
+      ring.querySelectorAll(".status-circle").forEach(b => b.onclick = () => {
+        const g = r.groups.find(x => x.userId === b.dataset.uid);
+        if (g.isOwn && !g.statuses.length) { openStatusComposer(); return; }
+        openStatusViewer(r.groups, r.groups.indexOf(g));
+      });
+
+      const list = el.querySelector("#statusList");
+      const withStatuses = r.groups.filter(g => g.statuses.length);
+      list.innerHTML = withStatuses.length ? `
+        <p class="sect" style="margin-top:0">Recent updates</p>
+        ${withStatuses.map(g => `
+          <div class="row tap status-row-item" data-uid="${esc(g.userId)}">
+            <div class="av">${avatarInner(g)}</div>
+            <div style="flex:1;min-width:0">
+              <p style="margin:0;font-size:14px;font-weight:600">${g.isOwn ? "You" : esc(g.displayName || g.username)}</p>
+              <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">${ago(g.statuses[g.statuses.length - 1].createdAt)}${g.statuses.length > 1 ? ` · ${g.statuses.length} updates` : ""}</p>
+            </div>
+          </div>`).join("")}
+      ` : `<p class="empty">No status updates yet. Tap + to add one.</p>`;
+
+      list.querySelectorAll(".status-row-item").forEach(row => row.onclick = () => {
+        const g = r.groups.find(x => x.userId === row.dataset.uid);
+        openStatusViewer(r.groups, r.groups.indexOf(g));
+      });
+    } catch (e) {
+      el.querySelector("#statusRing").innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+    }
+  };
+  load();
+
+  return el;
+}
+
+function openStatusComposer() {
+  const sheet = $(`
+    <div class="sheet" style="height:auto;max-height:82%;display:flex;flex-direction:column">
+      <div class="sheet-head"><span class="title">Add status</span><button class="x">${I.x}</button></div>
+      <div class="sheet-body" style="padding:16px">
+        <div style="display:flex;gap:10px;margin-bottom:16px">
+          <button class="comp-type" data-t="text" style="flex:1;padding:12px 0;border-radius:10px;border:1px solid #EDEDED;font-size:13px;font-weight:600">Text</button>
+          <button class="comp-type" data-t="image" style="flex:1;padding:12px 0;border-radius:10px;border:1px solid #EDEDED;font-size:13px;font-weight:600">Photo</button>
+          <button class="comp-type" data-t="video" style="flex:1;padding:12px 0;border-radius:10px;border:1px solid #EDEDED;font-size:13px;font-weight:600">Video</button>
+        </div>
+        <div id="compArea"></div>
+      </div>
+      <div style="padding:12px 16px;border-top:1px solid #EDEDED">
+        <button class="btn-primary" id="postStatus" style="background:#111;color:#fff">Post status</button>
+      </div>
+    </div>
+  `);
+  const close = mountSheet(sheet);
+  sheet.querySelector(".x").onclick = close;
+
+  let type = "text";
+  let file = null;
+  const bgColors = ["#F5A623", "#FF3040", "#1877F2", "#25D366", "#8B5CF6", "#111827"];
+  let bgColor = bgColors[0];
+
+  const paintTypeButtons = () => {
+    sheet.querySelectorAll(".comp-type").forEach(b => {
+      const on = b.dataset.t === type;
+      b.style.background = on ? "#111" : "none";
+      b.style.color = on ? "#fff" : "#111";
+      b.style.borderColor = on ? "#111" : "#EDEDED";
+    });
+  };
+
+  const drawArea = () => {
+    const area = sheet.querySelector("#compArea");
+    if (type === "text") {
+      area.innerHTML = `
+        <div style="aspect-ratio:9/16;max-height:280px;border-radius:14px;background:${bgColor};display:flex;align-items:center;justify-content:center;padding:20px;margin-bottom:14px">
+          <textarea id="statusText" placeholder="Type a status..." maxlength="200" style="background:none;border:none;outline:none;color:#fff;font-size:20px;font-weight:600;text-align:center;resize:none;width:100%;height:100%"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:center">
+          ${bgColors.map(c => `<button class="bg-opt" data-c="${c}" style="width:28px;height:28px;border-radius:50%;background:${c};border:2px solid ${c === bgColor ? "#fff" : "transparent"};box-shadow:0 0 0 1px #EDEDED"></button>`).join("")}
+        </div>`;
+      area.querySelectorAll(".bg-opt").forEach(b => b.onclick = () => {
+        bgColor = b.dataset.c;
+        const text = area.querySelector("#statusText").value;
+        drawArea();
+        area.querySelector("#statusText").value = text;
+      });
+    } else {
+      area.innerHTML = `
+        <input type="file" id="statusFile" accept="${type === "image" ? "image/*" : "video/*"}" hidden>
+        <button id="pickFile" style="width:100%;aspect-ratio:9/16;max-height:280px;border-radius:14px;border:2px dashed #D8D8DA;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#8A8A8E;margin-bottom:14px;background:#F6F6F7">
+          ${I.video}
+          <span style="font-size:13px">Choose ${type === "image" ? "a photo" : "a video"}</span>
+        </button>
+        <textarea id="statusCaption" placeholder="Add a caption (optional)" maxlength="200" style="width:100%;background:#F1F1F2;border:none;border-radius:10px;padding:12px;color:#111;font-size:14px;resize:none;outline:none"></textarea>
+      `;
+      const fileInput = area.querySelector("#statusFile");
+      const pickBtn = area.querySelector("#pickFile");
+      pickBtn.onclick = () => fileInput.click();
+      fileInput.onchange = () => {
+        file = fileInput.files[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        pickBtn.style.cssText += "padding:0;border:none;overflow:hidden";
+        pickBtn.innerHTML = type === "image"
+          ? `<img src="${url}" style="width:100%;height:100%;object-fit:cover">`
+          : `<video src="${url}" style="width:100%;height:100%;object-fit:cover" muted></video>`;
+      };
+    }
+  };
+
+  sheet.querySelectorAll(".comp-type").forEach(b => b.onclick = () => {
+    type = b.dataset.t;
+    file = null;
+    paintTypeButtons();
+    drawArea();
+  });
+  type = "text"; paintTypeButtons(); drawArea();
+
+  sheet.querySelector("#postStatus").onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    const fd = new FormData();
+    fd.append("contentType", type);
+    if (type === "text") {
+      const text = sheet.querySelector("#statusText")?.value.trim();
+      if (!text) return toast("Write something first");
+      fd.append("content", text);
+      fd.append("bgColor", bgColor);
+    } else {
+      if (!file) return toast(`Choose a ${type === "image" ? "photo" : "video"}`);
+      fd.append("media", file);
+      const cap = sheet.querySelector("#statusCaption")?.value.trim();
+      if (cap) fd.append("content", cap);
+    }
+    btn.classList.add("working");
+    try {
+      await api("/statuses", { method: "POST", body: fd });
+      toast("Status posted");
+      close();
+      if (state.tab === "home") render();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.classList.remove("working");
+    }
+  };
+}
+
+// Full-screen status viewer: progress bars per update, tap left/right to
+// step, auto-advances photos/text after a fixed hold and videos on `ended`.
+function openStatusViewer(groups, startGroupIdx) {
+  const playable = groups.filter(g => g.statuses.length);
+  if (!playable.length) return;
+  let gi = Math.max(0, playable.findIndex(g => g.userId === groups[startGroupIdx].userId));
+  let si = 0;
+  const HOLD_MS = 5000;
+
+  const el = $(`<div style="position:absolute;inset:0;z-index:40;background:#000"></div>`);
+  app.appendChild(el);
+  let timer = null;
+
+  const close = () => { clearTimeout(timer); el.remove(); };
+
+  const draw = () => {
+    clearTimeout(timer);
+    const g = playable[gi];
+    const s = g.statuses[si];
+
+    el.innerHTML = `
+      <div style="position:absolute;top:10px;left:12px;right:12px;z-index:2;display:flex;gap:4px">
+        ${g.statuses.map((_, i) => `<div style="flex:1;height:2.5px;background:rgba(255,255,255,.3);border-radius:2px;overflow:hidden"><i class="bar" data-i="${i}" style="display:block;height:100%;width:${i < si ? "100" : "0"}%;background:#fff"></i></div>`).join("")}
+      </div>
+      <div style="position:absolute;top:24px;left:12px;right:12px;z-index:2;display:flex;align-items:center;gap:8px">
+        <div class="av" style="width:32px;height:32px">${avatarInner(g)}</div>
+        <span style="color:#fff;font-size:13px;font-weight:600;flex:1">${g.isOwn ? "You" : esc(g.displayName || g.username)}</span>
+        <span style="color:rgba(255,255,255,.7);font-size:11px">${ago(s.createdAt)}</span>
+        ${g.isOwn ? `<button id="svDelete" style="color:#fff">${I.flagIcon}</button>` : ""}
+        <button id="svClose" style="color:#fff;margin-left:2px">${I.x}</button>
+      </div>
+      <div id="svMedia" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden"></div>
+      <div style="position:absolute;bottom:22px;left:12px;right:12px;z-index:2;display:flex;align-items:center;justify-content:space-between">
+        <span style="color:rgba(255,255,255,.7);font-size:12px">${g.isOwn ? `${fmt(s.viewCount)} views` : ""}</span>
+        <button id="svLike" style="display:flex;align-items:center;gap:5px;color:${s.liked ? "#FF3040" : "#fff"}">${I.heart}<span style="font-size:12px">${s.liked ? "Liked" : "Like"}</span></button>
+      </div>
+      <div id="svPrev" style="position:absolute;top:60px;bottom:60px;left:0;width:30%;z-index:1"></div>
+      <div id="svNext" style="position:absolute;top:60px;bottom:60px;right:0;width:30%;z-index:1"></div>
+    `;
+
+    const media = el.querySelector("#svMedia");
+    const caption = s.content && s.contentType !== "text"
+      ? `<p style="position:absolute;bottom:70px;left:16px;right:16px;color:#fff;font-size:14px;text-align:center;background:rgba(0,0,0,.45);border-radius:8px;padding:8px">${esc(s.content)}</p>` : "";
+
+    if (s.contentType === "text") {
+      media.style.background = s.bgColor || "#222";
+      media.innerHTML = `<p style="color:#fff;font-size:22px;font-weight:700;text-align:center;padding:30px;line-height:1.4">${esc(s.content || "")}</p>`;
+      animateBar(HOLD_MS);
+      timer = setTimeout(next, HOLD_MS);
+    } else if (s.contentType === "image") {
+      media.innerHTML = `<img src="${s.mediaUrl}" style="width:100%;height:100%;object-fit:contain">${caption}`;
+      animateBar(HOLD_MS);
+      timer = setTimeout(next, HOLD_MS);
+    } else {
+      media.innerHTML = `<video src="${s.mediaUrl}" style="width:100%;height:100%;object-fit:contain" autoplay playsinline></video>${caption}`;
+      const video = media.querySelector("video");
+      video.onended = next;
+      video.ontimeupdate = () => {
+        const bar = el.querySelector(`.bar[data-i="${si}"]`);
+        if (bar && video.duration) bar.style.width = `${(video.currentTime / video.duration) * 100}%`;
+      };
+    }
+
+    if (!s.viewed) {
+      s.viewed = true;
+      api(`/statuses/${s.id}/view`, { method: "POST" }).catch(() => {});
+    }
+
+    el.querySelector("#svClose").onclick = close;
+    el.querySelector("#svPrev").onclick = prev;
+    el.querySelector("#svNext").onclick = next;
+    el.querySelector("#svLike").onclick = async () => {
+      const was = s.liked;
+      s.liked = !was;
+      draw();
+      try { await api(`/statuses/${s.id}/like`, { method: was ? "DELETE" : "POST" }); }
+      catch { s.liked = was; draw(); }
+    };
+    if (g.isOwn) {
+      el.querySelector("#svDelete").onclick = async () => {
+        if (!confirm("Delete this status?")) return;
+        clearTimeout(timer);
+        await api(`/statuses/${s.id}`, { method: "DELETE" }).catch(() => {});
+        g.statuses.splice(si, 1);
+        if (!g.statuses.length) {
+          playable.splice(gi, 1);
+          if (!playable.length) { close(); return; }
+          if (gi >= playable.length) gi = playable.length - 1;
+          si = 0;
+        } else if (si >= g.statuses.length) {
+          si = g.statuses.length - 1;
+        }
+        draw();
+      };
+    }
+  };
+
+  const animateBar = (duration) => {
+    const bar = el.querySelector(`.bar[data-i="${si}"]`);
+    if (!bar) return;
+    bar.style.transition = `width ${duration}ms linear`;
+    requestAnimationFrame(() => { bar.style.width = "100%"; });
+  };
+
+  function next() {
+    const g = playable[gi];
+    if (si < g.statuses.length - 1) { si++; draw(); }
+    else if (gi < playable.length - 1) { gi++; si = 0; draw(); }
+    else close();
+  }
+  function prev() {
+    if (si > 0) { si--; draw(); }
+    else if (gi > 0) { gi--; si = playable[gi].statuses.length - 1; draw(); }
+  }
+
+  draw();
+}
+
+function friendsHubPage() {
+  const el = $(`
+    <div class="page">
+      <div class="pagehead"><button id="back">${I.back}</button><h2>Friends</h2></div>
+      <div id="fContent">${skRow().repeat(4)}</div>
+    </div>
+  `);
+  el.querySelector("#back").onclick = () => history.back();
+
+  const load = async () => {
+    const body = el.querySelector("#fContent");
+    try {
+      const r = await api("/friendships");
+      body.innerHTML = `
+        ${r.pendingReceived.length ? `
+          <p class="sect" style="margin-top:0">Requests</p>
+          ${r.pendingReceived.map(f => `
+            <div class="row">
+              <div class="av">${avatarInner(f.otherProfile)}</div>
+              <div style="flex:1;min-width:0">
+                <p style="margin:0;font-size:14px;font-weight:600">${esc(f.otherProfile.displayName || f.otherProfile.username)}</p>
+              </div>
+              <div class="req-actions">
+                <button class="btn-accept" data-id="${f.id}" data-a="accept">Confirm</button>
+                <button class="btn-decline" data-id="${f.id}" data-a="decline">Delete</button>
+              </div>
+            </div>`).join("")}
+        ` : ""}
+        <p class="sect" style="margin-top:${r.pendingReceived.length ? "22px" : "0"}">Friends (${r.friends.length})</p>
+        ${r.friends.length ? r.friends.map(f => `
+          <div class="row tap friend-row" data-user="${esc(f.otherProfile.username)}">
+            <div class="av">${avatarInner(f.otherProfile)}</div>
+            <div style="flex:1;min-width:0">
+              <p style="margin:0;font-size:14px;font-weight:600">${esc(f.otherProfile.displayName || f.otherProfile.username)}</p>
+              <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">@${esc(f.otherProfile.username)}</p>
+            </div>
+            <button class="btn-decline" data-id="${f.id}" data-a="remove">Remove</button>
+          </div>`).join("") : `<p class="empty">No friends yet. Search below to add some.</p>`}
+
+        <p class="sect">Add a friend</p>
+        <div class="field"><input id="fSearch" placeholder="Search by username"></div>
+        <div id="fResults"></div>
+      `;
+
+      body.querySelectorAll('[data-a="accept"]').forEach(b => b.onclick = async () => {
+        try { await api(`/friendships/${b.dataset.id}/accept`, { method: "POST" }); load(); }
+        catch (e) { toast(e.message); }
+      });
+      body.querySelectorAll('[data-a="decline"], [data-a="remove"]').forEach(b => b.onclick = async () => {
+        try { await api(`/friendships/${b.dataset.id}`, { method: "DELETE" }); load(); }
+        catch (e) { toast(e.message); }
+      });
+      body.querySelectorAll(".friend-row").forEach(row => row.onclick = (e) => {
+        if (e.target.closest("button")) return;
+        state.viewUser = row.dataset.user;
+        state.page = "profile";
+        render();
+      });
+
+      let t;
+      body.querySelector("#fSearch").addEventListener("input", (e) => {
+        clearTimeout(t);
+        const q = e.target.value.trim();
+        const results = body.querySelector("#fResults");
+        if (!q) { results.innerHTML = ""; return; }
+        t = setTimeout(async () => {
+          try {
+            const sr = await api(`/search?q=${encodeURIComponent(q)}`);
+            results.innerHTML = sr.accounts.map(u => `
+              <div class="row">
+                <div class="av">${avatarInner(u)}</div>
+                <div style="flex:1;min-width:0">
+                  <p style="margin:0;font-size:14px;font-weight:600">${esc(u.displayName || u.username)}</p>
+                </div>
+                <button class="add-friend-btn" data-id="${u.id}" style="background:#fff;color:#000;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600">Add</button>
+              </div>`).join("");
+            results.querySelectorAll(".add-friend-btn").forEach(b => b.onclick = async () => {
+              b.disabled = true;
+              try {
+                await api("/friendships", { method: "POST", body: { friendId: b.dataset.id } });
+                b.textContent = "Sent";
+              } catch (e) { toast(e.message); b.disabled = false; }
+            });
+          } catch (e) { results.innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
+        }, 300);
+      });
+    } catch (e) {
+      body.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+    }
+  };
+  load();
+  return el;
+}
+
 function messagesPage() {
   const el = $(`<div class="page msgs-page" style="padding-top:62px">${skRow().repeat(6)}</div>`);
   api("/messages").then(r => {
@@ -3338,6 +3728,7 @@ function renderInner() {
   if (state.page === "wallet-history") { app.appendChild(walletHistoryPage()); return; }
   if (state.page === "search") { app.appendChild(searchPage()); attachNav(app, "search"); return; }
   if (state.page === "notifications") { app.appendChild(notificationsPage()); return; }
+  if (state.page === "friends-hub") { app.appendChild(friendsHubPage()); return; }
 
   const isMsg = state.tab === "messages";
 
@@ -3358,6 +3749,8 @@ function renderInner() {
 
   if (isMsg) {
     app.appendChild(messagesPage());
+  } else if (state.tab === "home") {
+    app.appendChild(homePage());
   } else {
     app.appendChild($(`
       <div class="tabs">
@@ -3466,32 +3859,42 @@ function notificationsPage() {
 
 function attachNav(container, active) {
   const cur = active || state.tab;
+  const tabIdx = { messages: 0, home: 1, feed: 2 }[cur] ?? 2;
   const isMsg = cur === "messages";
 
   // Alarm-app style: one dark pill holding the tabs, with a lighter dark
   // rounded highlight sliding behind the active tab, whose icon and label sit
-  // in amber. The round action button keeps its job: post on the feed, add a
-  // friend in messages.
+  // in amber. The round action button's job follows whichever tab is active.
+  const chipLeft = ["5px", "33.333%", "66.666%"][tabIdx];
+  const fabAction = isMsg ? "friends" : cur === "home" ? "status-composer" : "upload";
+  const fabIcon = isMsg ? I.userplus : cur === "home" ? I.plus : I.plus;
+  const fabLabel = isMsg ? "Add friend" : cur === "home" ? "Add status" : "Post";
+
   const nav = $(`
     <div class="nav">
       <div class="navpill">
-        <div class="chip" style="left:${isMsg ? "5px" : "50%"}"></div>
+        <div class="chip" style="left:${chipLeft}; width:calc(33.333% - 5px)"></div>
         <div class="navrow">
           <button class="${isMsg ? "on" : ""}" data-tab="messages">
             <span style="position:relative;display:inline-flex">${I.mail}${state.unreadMessages ? `<span class="badge">${state.unreadMessages > 9 ? "9+" : state.unreadMessages}</span>` : ""}</span>
             <span>Messages</span>
           </button>
-          <button class="${!isMsg ? "on" : ""}" data-tab="feed">${I.video}<span>Feed</span></button>
+          <button class="${cur === "home" ? "on" : ""}" data-tab="home">${I.home}<span>Home</span></button>
+          <button class="${cur === "feed" ? "on" : ""}" data-tab="feed">${I.video}<span>Feed</span></button>
         </div>
       </div>
-      <button class="fab" id="fab" aria-label="${isMsg ? "Add friend" : "Post"}">${isMsg ? I.userplus : I.plus}</button>
+      <button class="fab" id="fab" aria-label="${fabLabel}">${fabIcon}</button>
     </div>`);
   container.appendChild(nav);
 
-  nav.querySelector("#fab").onclick = () => { state.page = isMsg ? "friends" : "upload"; render(); };
+  nav.querySelector("#fab").onclick = () => {
+    if (fabAction === "status-composer") { openStatusComposer(); return; }
+    state.page = fabAction;
+    render();
+  };
   nav.querySelectorAll("button[data-tab]").forEach(b => b.onclick = () => {
     state.tab = b.dataset.tab;
-    state.page = null; // both tabs render on the home surface
+    state.page = null; // all three tabs render on the home surface
     render();
   });
 }

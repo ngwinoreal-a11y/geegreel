@@ -850,6 +850,225 @@ async function handle(request, env, ctx) {
     return json({ videos, nextCursor });
   }
 
+  // ----- statuses (24h, WhatsApp-style) -----
+  if (path === "/api/statuses" && method === "GET") {
+    requireUser(user);
+    const { results } = await env.DB.prepare(`
+      SELECT s.id, s.user_id, s.content_type, s.content, s.media_key, s.bg_color,
+             s.view_count, s.created_at, s.expires_at,
+             u.username, u.display_name, u.avatar_key,
+             EXISTS(SELECT 1 FROM status_likes l WHERE l.status_id = s.id AND l.user_id = ?) AS liked,
+             EXISTS(SELECT 1 FROM status_views v WHERE v.status_id = s.id AND v.viewer_id = ?) AS viewed
+      FROM statuses s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.expires_at > ? AND (s.user_id = ? OR s.user_id IN (
+        SELECT followee_id FROM follows WHERE follower_id = ? AND status = 'accepted'
+      ))
+      ORDER BY s.created_at ASC
+    `).bind(user.id, user.id, now(), user.id, user.id).all();
+
+    const groups = new Map();
+    for (const r of results) {
+      if (!groups.has(r.user_id)) {
+        groups.set(r.user_id, {
+          userId: r.user_id, username: r.username, displayName: r.display_name,
+          avatarUrl: r.avatar_key ? `/api/media/${r.avatar_key}` : null,
+          isOwn: r.user_id === user.id, allViewed: true, statuses: [],
+        });
+      }
+      const g = groups.get(r.user_id);
+      if (!r.viewed) g.allViewed = false;
+      g.statuses.push({
+        id: r.id, contentType: r.content_type, content: r.content,
+        mediaUrl: r.media_key ? `/api/media/${r.media_key}` : null,
+        bgColor: r.bg_color, viewCount: r.view_count,
+        createdAt: r.created_at, expiresAt: r.expires_at,
+        liked: !!r.liked, viewed: !!r.viewed,
+      });
+    }
+
+    // Own group always shows (even empty, as the "add status" ring slot),
+    // then everyone else newest-active first.
+    if (!groups.has(user.id)) {
+      groups.set(user.id, {
+        userId: user.id, username: user.username, displayName: user.display_name,
+        avatarUrl: user.avatar_key ? `/api/media/${user.avatar_key}` : null,
+        isOwn: true, allViewed: true, statuses: [],
+      });
+    }
+    const list = Array.from(groups.values()).sort((a, b) => {
+      if (a.isOwn) return -1;
+      if (b.isOwn) return 1;
+      return b.statuses[b.statuses.length - 1].createdAt - a.statuses[a.statuses.length - 1].createdAt;
+    });
+
+    return json({ groups: list });
+  }
+
+  if (path === "/api/statuses" && method === "POST") {
+    requireUser(user);
+    const form = await request.formData();
+    const contentType = form.get("contentType");
+    if (!["text", "image", "video"].includes(contentType)) {
+      return err("contentType must be text, image or video");
+    }
+
+    const content = (form.get("content") || "").toString().trim().slice(0, 500);
+    if (contentType === "text" && !content) return err("Write something first");
+
+    let mediaKey = null;
+    if (contentType !== "text") {
+      const file = form.get("media");
+      if (!file || typeof file === "string") return err("A photo or video file is required");
+      const ext = (file.name?.split(".").pop() || (contentType === "video" ? "mp4" : "jpg")).toLowerCase();
+      mediaKey = `statuses/${user.id}/${uid()}.${ext}`;
+      await env.MEDIA.put(mediaKey, file.stream(), { httpMetadata: { contentType: file.type } });
+    }
+
+    // A light daily cap — enough room for real use, cheap insurance against spam.
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const c = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM statuses WHERE user_id = ? AND created_at >= ?"
+    ).bind(user.id, todayStart.getTime()).first();
+    if (c.n >= 20) return err("You've reached today's status limit", 429);
+
+    const id = uid();
+    const createdAt = now();
+    await env.DB.prepare(`
+      INSERT INTO statuses (id, user_id, content_type, content, media_key, bg_color, view_count, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).bind(
+      id, user.id, contentType, content || null, mediaKey,
+      (form.get("bgColor") || "").toString().slice(0, 20) || null,
+      createdAt, createdAt + 24 * 3600 * 1000
+    ).run();
+
+    return json({
+      status: {
+        id, contentType, content: content || null,
+        mediaUrl: mediaKey ? `/api/media/${mediaKey}` : null,
+        bgColor: form.get("bgColor") || null, viewCount: 0,
+        createdAt, expiresAt: createdAt + 24 * 3600 * 1000,
+        liked: false, viewed: true,
+      },
+    }, 201);
+  }
+
+  const statusViewMatch = /^\/api\/statuses\/([\w-]+)\/view$/.exec(path);
+  if (statusViewMatch && method === "POST") {
+    requireUser(user);
+    const ins = await env.DB.prepare(
+      "INSERT OR IGNORE INTO status_views (status_id, viewer_id, viewed_at) VALUES (?, ?, ?)"
+    ).bind(statusViewMatch[1], user.id, now()).run();
+    if (ins.meta.changes) {
+      await env.DB.prepare("UPDATE statuses SET view_count = view_count + 1 WHERE id = ?")
+        .bind(statusViewMatch[1]).run();
+    }
+    return json({ ok: true });
+  }
+
+  const statusLikeMatch = /^\/api\/statuses\/([\w-]+)\/like$/.exec(path);
+  if (statusLikeMatch && (method === "POST" || method === "DELETE")) {
+    requireUser(user);
+    if (method === "POST") {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO status_likes (status_id, user_id, created_at) VALUES (?, ?, ?)"
+      ).bind(statusLikeMatch[1], user.id, now()).run();
+    } else {
+      await env.DB.prepare("DELETE FROM status_likes WHERE status_id = ? AND user_id = ?")
+        .bind(statusLikeMatch[1], user.id).run();
+    }
+    const c = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM status_likes WHERE status_id = ?"
+    ).bind(statusLikeMatch[1]).first();
+    return json({ liked: method === "POST", count: c.n });
+  }
+
+  const statusMatch = /^\/api\/statuses\/([\w-]+)$/.exec(path);
+  if (statusMatch && method === "DELETE") {
+    requireUser(user);
+    const st = await env.DB.prepare("SELECT user_id, media_key FROM statuses WHERE id = ?")
+      .bind(statusMatch[1]).first();
+    if (!st) return err("Not found", 404);
+    if (st.user_id !== user.id) return err("Not your status", 403);
+    if (st.media_key) await env.MEDIA.delete(st.media_key).catch(() => {});
+    await env.DB.prepare("DELETE FROM statuses WHERE id = ?").bind(statusMatch[1]).run();
+    return json({ ok: true });
+  }
+
+  // ----- friendships (mutual — separate from the one-way follow graph) -----
+  if (path === "/api/friendships" && method === "GET") {
+    requireUser(user);
+    const { results } = await env.DB.prepare(`
+      SELECT f.id, f.user_id, f.friend_id, f.status, f.created_at,
+             ou.id AS other_id, ou.username AS other_username,
+             ou.display_name AS other_display_name, ou.avatar_key AS other_avatar_key
+      FROM friendships f
+      JOIN users ou ON ou.id = CASE WHEN f.user_id = ? THEN f.friend_id ELSE f.user_id END
+      WHERE f.user_id = ? OR f.friend_id = ?
+      ORDER BY f.created_at DESC
+    `).bind(user.id, user.id, user.id).all();
+
+    const friends = [], pendingReceived = [], pendingSent = [];
+    for (const f of results) {
+      const item = {
+        id: f.id, createdAt: f.created_at,
+        otherProfile: {
+          id: f.other_id, username: f.other_username, displayName: f.other_display_name,
+          avatarUrl: f.other_avatar_key ? `/api/media/${f.other_avatar_key}` : null,
+        },
+      };
+      if (f.status === "accepted") friends.push(item);
+      else if (f.user_id === user.id) pendingSent.push(item);
+      else pendingReceived.push(item);
+    }
+    return json({ friends, pendingReceived, pendingSent });
+  }
+
+  if (path === "/api/friendships" && method === "POST") {
+    requireUser(user);
+    const { friendId } = await request.json();
+    if (!friendId || friendId === user.id) return err("Invalid friend");
+
+    // The other person already sent a request — accept it instead of
+    // creating a second, mirrored one.
+    const reverse = await env.DB.prepare(
+      "SELECT id FROM friendships WHERE user_id = ? AND friend_id = ? AND status = 'pending'"
+    ).bind(friendId, user.id).first();
+    if (reverse) {
+      await env.DB.prepare("UPDATE friendships SET status = 'accepted' WHERE id = ?").bind(reverse.id).run();
+      return json({ ok: true, status: "accepted" });
+    }
+
+    const existing = await env.DB.prepare(
+      "SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?"
+    ).bind(user.id, friendId).first();
+    if (existing) return err("Request already sent", 409);
+
+    await env.DB.prepare(
+      "INSERT INTO friendships (id, user_id, friend_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)"
+    ).bind(uid(), user.id, friendId, now()).run();
+    return json({ ok: true, status: "pending" }, 201);
+  }
+
+  const friendAcceptMatch = /^\/api\/friendships\/([\w-]+)\/accept$/.exec(path);
+  if (friendAcceptMatch && method === "POST") {
+    requireUser(user);
+    const f = await env.DB.prepare("SELECT * FROM friendships WHERE id = ?").bind(friendAcceptMatch[1]).first();
+    if (!f || f.friend_id !== user.id) return err("Not found", 404);
+    await env.DB.prepare("UPDATE friendships SET status = 'accepted' WHERE id = ?").bind(friendAcceptMatch[1]).run();
+    return json({ ok: true });
+  }
+
+  const friendshipMatch = /^\/api\/friendships\/([\w-]+)$/.exec(path);
+  if (friendshipMatch && method === "DELETE") {
+    requireUser(user);
+    const f = await env.DB.prepare("SELECT * FROM friendships WHERE id = ?").bind(friendshipMatch[1]).first();
+    if (!f || (f.user_id !== user.id && f.friend_id !== user.id)) return err("Not found", 404);
+    await env.DB.prepare("DELETE FROM friendships WHERE id = ?").bind(friendshipMatch[1]).run();
+    return json({ ok: true });
+  }
+
   // ----- ads: public view/click tracking -----
   const adViewMatch = /^\/api\/ads\/([\w-]+)\/view$/.exec(path);
   if (adViewMatch && method === "POST") {
