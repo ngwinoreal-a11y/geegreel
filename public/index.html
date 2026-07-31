@@ -3610,8 +3610,15 @@ document.addEventListener("visibilitychange", () => {
   }
   render();
 
+  // A shared video's link is /v/:id (see POST /videos/:id/share) — nothing
+  // read that path before now, so opening a shared link just showed the
+  // ordinary feed instead of the video someone actually sent.
+  const pathVideoMatch = /^\/v\/([\w-]+)$/.exec(location.pathname);
   const deepLinkParams = new URLSearchParams(location.search);
-  if (store.token && handleDeepLink(deepLinkParams)) {
+  if (store.token && pathVideoMatch) {
+    openVideoById(pathVideoMatch[1]);
+    history.replaceState(snapshotState(), "", "/");
+  } else if (store.token && handleDeepLink(deepLinkParams)) {
     // Keep whatever entry render() just tracked — only the URL's query
     // string needs clearing, not the navigation snapshot that entry holds.
     history.replaceState(snapshotState(), "", location.pathname);
