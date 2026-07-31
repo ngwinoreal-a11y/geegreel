@@ -1114,11 +1114,15 @@ async function loadFeed(reset = true) {
   state.loading = true;
   if (reset) { state.videos = []; state.cursor = null; }
 
+  // Sized and positioned exactly like a real .slide (not design-4.css's
+  // generic position:absolute version) so nothing shifts when the real
+  // first video swaps in — a skeleton in a different box than its content
+  // is the "jump" that made this look broken rather than loading.
   const wrap = document.querySelector(".feed");
   if (reset && wrap) wrap.innerHTML = `
-    <div class="sk-feed">
-      <div class="sk sk-video"></div>
-      <div class="sk-author">
+    <div class="slide">
+      <i class="sk sk-video" style="position:absolute;inset:0;border-radius:0"></i>
+      <div class="overlay" style="display:flex;align-items:center;gap:10px">
         <i class="sk sk-av"></i>
         <i class="sk sk-line short" style="width:120px"></i>
       </div>
