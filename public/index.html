@@ -1276,7 +1276,7 @@ function uploadPage() {
   // Leaving the screen must release the camera, or the light stays on.
   el.addEventListener("screen-exit", stop);
 
-  const goBack = () => { stop(); state.page = null; render(); };
+  const goBack = () => { stop(); history.back(); };
 
   // ---------- step 2: describe and publish ----------
   const postStep = () => {
@@ -1592,7 +1592,7 @@ function friendsPage() {
       <div class="field"><input id="q" placeholder="Search by username" autocapitalize="none"></div>
       <div id="list"><div class="spin"></div></div>
     </div>`);
-  el.querySelector("#back").onclick = () => { state.page = null; render(); };
+  el.querySelector("#back").onclick = () => history.back();
   const list = el.querySelector("#list");
 
   const rowFor = (u, following) => {
@@ -1772,7 +1772,7 @@ function settingsPage() {
       <p style="font-size:12px;color:var(--muted);margin:0">Version 1.0.0</p>
     `;
 
-    el.querySelector("#back").onclick = () => { state.page = null; render(); };
+    el.querySelector("#back").onclick = () => history.back();
 
     // --- avatar ---
     el.querySelector("#monet").onclick = () => { state.page = "monetization"; render(); };
@@ -1989,33 +1989,58 @@ function profilePage() {
         </div>
       `}
 
-      <div class="grid">
-        ${r.videos.map((v, i) => `
-          <div class="cell tap-cell" data-i="${i}">
-            ${v.thumbUrl ? `<img src="${v.thumbUrl}">` : `<video src="${v.videoUrl}#t=0.1" muted playsinline preload="metadata"></video>`}
-            <span style="position:absolute;bottom:5px;left:5px;font-family:var(--mono);font-size:10px;text-shadow:0 1px 4px #000">${fmt(v.views)}</span>
-          </div>`).join("")}
-      </div>
-      ${r.locked
-        ? `<p class="empty">🔒 This account is private. Follow to see their videos.</p>`
-        : (!r.videos.length ? `<p class="empty">No videos yet.</p>` : "")}
+      <!-- Own videos and reposts split into separate tabs — mixed together,
+           a repost reads as something this person filmed, which it isn't. -->
+      ${r.videos.some(v => v.repostOf) ? `
+        <div class="list-tabs" id="gridTabs">
+          <button class="on" data-t="videos">Videos<span class="n">${r.videos.filter(v => !v.repostOf).length}</span></button>
+          <button data-t="reposts">Reposts<span class="n">${r.videos.filter(v => v.repostOf).length}</span></button>
+        </div>` : ""}
+      <div class="grid" id="grid"></div>
+      <p class="empty" id="gridEmpty" style="display:none"></p>
     `;
 
-    el.querySelector("#back").onclick = () => {
-      state.viewUser = null;
-      state.page = null;
-      render();
-    };
+    el.querySelector("#back").onclick = () => history.back();
+
+    const ownVideos = r.videos.filter(v => !v.repostOf);
+    const repostVideos = r.videos.filter(v => v.repostOf);
+    const gridEl = el.querySelector("#grid");
+    const emptyEl = el.querySelector("#gridEmpty");
 
     // A grid of thumbnails that can't be played is just wallpaper. Tapping one
-    // opens that person's videos as a feed, starting where you tapped.
-    el.querySelectorAll(".cell[data-i]").forEach(cell => {
-      cell.onclick = () => {
-        state.userVideos = r.videos;
-        state.startAt = parseInt(cell.dataset.i);
-        state.page = "userfeed";
-        render();
-      };
+    // opens that person's videos as a feed (within the tab it was tapped
+    // from), starting where you tapped.
+    const drawGrid = (list) => {
+      gridEl.innerHTML = list.map((v, i) => `
+        <div class="cell tap-cell" data-i="${i}">
+          ${v.thumbUrl ? `<img src="${v.thumbUrl}">` : `<video src="${v.videoUrl}#t=0.1" muted playsinline preload="metadata"></video>`}
+          ${v.repostOf ? `<span style="position:absolute;top:5px;right:5px;background:rgba(0,0,0,.6);border-radius:4px;padding:2px 4px;display:flex">${I.repost}</span>` : ""}
+          <span style="position:absolute;bottom:5px;left:5px;font-family:var(--mono);font-size:10px;text-shadow:0 1px 4px #000">${fmt(v.views)}</span>
+        </div>`).join("");
+
+      if (r.locked) {
+        emptyEl.style.display = ""; emptyEl.textContent = "🔒 This account is private. Follow to see their videos.";
+      } else if (!list.length) {
+        emptyEl.style.display = ""; emptyEl.textContent = list === repostVideos ? "No reposts yet." : "No videos yet.";
+      } else {
+        emptyEl.style.display = "none";
+      }
+
+      gridEl.querySelectorAll(".cell[data-i]").forEach(cell => {
+        cell.onclick = () => {
+          state.userVideos = list;
+          state.startAt = parseInt(cell.dataset.i);
+          state.page = "userfeed";
+          render();
+        };
+      });
+    };
+    drawGrid(ownVideos);
+
+    el.querySelectorAll('#gridTabs button').forEach(b => b.onclick = () => {
+      el.querySelectorAll('#gridTabs button').forEach(x => x.classList.remove("on"));
+      b.classList.add("on");
+      drawGrid(b.dataset.t === "reposts" ? repostVideos : ownVideos);
     });
 
     el.querySelector("#wallet")?.addEventListener("click", () => { state.page = "wallet"; render(); });
@@ -2075,8 +2100,7 @@ function userFeedPage() {
   el.querySelector("#back").onclick = () => {
     state.userVideos = [];
     state.startAt = 0;
-    state.page = "profile";
-    render();
+    history.back();
   };
 
   // Jump to the tapped video before the observer starts, so it doesn't
@@ -2120,8 +2144,7 @@ function followListPage() {
 
     el.querySelector("#back").onclick = () => {
       state.followList = null;
-      state.page = "profile";
-      render();
+      history.back();
     };
 
     // Tapping a row (but not the follow button) opens that person's profile.
@@ -2198,9 +2221,7 @@ function chatPage() {
   el.querySelector("#back").onclick = () => {
     vv?.removeEventListener("resize", onViewport);
     vv?.removeEventListener("scroll", onViewport);
-    state.chatWith = null;
-    state.page = state.viewUser ? "profile" : null;
-    render();
+    history.back();
   };
 
   // Read receipt: a single check once it's sent, a second (blue) once the
@@ -2276,7 +2297,7 @@ function searchPage() {
       </div>
       <div id="res"></div>
     </div>`);
-  el.querySelector("#back").onclick = () => { state.page = null; render(); };
+  el.querySelector("#back").onclick = () => history.back();
   const res = el.querySelector("#res");
 
   let t;
@@ -2562,7 +2583,7 @@ function walletPage() {
       </p>
     `;
 
-    el.querySelector("#back").onclick = () => { state.page = null; render(); };
+    el.querySelector("#back").onclick = () => history.back();
     el.querySelector("#hist").onclick = () => { state.page = "wallet-history"; render(); };
     el.querySelector("#gomonet")?.addEventListener("click", () => { state.page = "monetization"; render(); });
 
@@ -2615,7 +2636,7 @@ function walletHistoryPage() {
           </div>`;
       }).join("") : `<p class="empty">Nothing yet.</p>`}
     `;
-    el.querySelector("#back").onclick = () => { state.page = "wallet"; render(); };
+    el.querySelector("#back").onclick = () => history.back();
   }).catch(e => { el.innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
   return el;
 }
@@ -2721,7 +2742,7 @@ function monetizationPage() {
       </p>
     `;
 
-    el.querySelector("#back").onclick = () => { state.page = null; render(); };
+    el.querySelector("#back").onclick = () => history.back();
     el.querySelector("#earnings")?.addEventListener("click", () => { state.page = "earnings"; render(); });
 
     let pm = "mobile_money";
@@ -2773,7 +2794,7 @@ function earningsPage() {
         </div>`).join("")
         : `<p class="empty">No earnings yet.</p>`}
     `;
-    el.querySelector("#back").onclick = () => { state.page = "monetization"; render(); };
+    el.querySelector("#back").onclick = () => history.back();
   }).catch(e => { el.innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
   return el;
 }
@@ -2799,7 +2820,7 @@ function adminPage() {
     <div id="body">${inner}</div>`;
 
   const wire = () => {
-    el.querySelector("#back").onclick = () => { state.page = null; render(); };
+    el.querySelector("#back").onclick = () => history.back();
     el.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => {
       tab = b.dataset.tab;
       load();
@@ -3185,7 +3206,54 @@ function adminPage() {
 }
 
 // ---------- shell ----------
+// Every navigation in this app is "mutate state, call render()" — dozens of
+// call sites, none of which know about browser history. Rather than teach
+// each one, render() itself snapshots the navigational part of `state` after
+// every draw and records it, so the phone's own back button/gesture walks
+// back through the app's screens one at a time before finally leaving it —
+// instead of the whole app just closing on the first back press.
+let restoringFromHistory = false;
+let hasPushedInitial = false;
+let lastHistoryKey = null;
+
+const snapshotState = () => ({
+  page: state.page, tab: state.tab, feedTab: state.feedTab,
+  viewUser: state.viewUser,
+  chatWith: state.chatWith
+    ? { id: state.chatWith.id, username: state.chatWith.username,
+        displayName: state.chatWith.displayName, avatarUrl: state.chatWith.avatarUrl }
+    : null,
+  followList: state.followList,
+});
+
+function trackHistory() {
+  if (restoringFromHistory) return;
+  const snap = snapshotState();
+  const key = JSON.stringify(snap);
+  if (key === lastHistoryKey) return; // re-render of the same screen, not a navigation
+  lastHistoryKey = key;
+  // The very first draw replaces the entry the browser already created for
+  // this URL rather than adding a new one — otherwise one "back" press from
+  // a fresh load would just land on an identical duplicate of itself.
+  if (!hasPushedInitial) { history.replaceState(snap, ""); hasPushedInitial = true; }
+  else history.pushState(snap, "");
+}
+
+window.addEventListener("popstate", (e) => {
+  restoringFromHistory = true;
+  const snap = e.state || { page: null, tab: "feed", feedTab: "foryou", viewUser: null, chatWith: null, followList: null };
+  lastHistoryKey = JSON.stringify(snap);
+  Object.assign(state, snap);
+  render();
+  restoringFromHistory = false;
+});
+
 function render() {
+  renderInner();
+  trackHistory();
+}
+
+function renderInner() {
   // Wiping innerHTML drops the node without any teardown, so any live camera
   // would keep the device light on. Release tracks before clearing.
   app.querySelectorAll("video").forEach(v => {
@@ -3320,7 +3388,7 @@ function notificationsPage() {
         : `<div class="empty"><div class="empty-icon">${I.bell}</div>Nothing yet.<p class="empty-sub">Likes, comments and follows will show up here.</p></div>`}
     `;
 
-    el.querySelector("#back").onclick = () => { state.page = null; render(); };
+    el.querySelector("#back").onclick = () => history.back();
 
     el.querySelectorAll(".notif").forEach(row => {
       row.onclick = () => {
@@ -3497,7 +3565,9 @@ document.addEventListener("visibilitychange", () => {
 
   const deepLinkParams = new URLSearchParams(location.search);
   if (store.token && handleDeepLink(deepLinkParams)) {
-    history.replaceState(null, "", location.pathname);
+    // Keep whatever entry render() just tracked — only the URL's query
+    // string needs clearing, not the navigation snapshot that entry holds.
+    history.replaceState(snapshotState(), "", location.pathname);
   }
 
   if (store.token) {
