@@ -932,14 +932,24 @@ function openComments(v, slideEl) {
   slideEl.classList.add("commenting");
 
   // On mobile, position:fixed elements don't follow the soft keyboard — the
-  // input would end up hidden behind it. Track the visual viewport and slide
-  // the whole sheet up by exactly the keyboard's height, same trick apps use
-  // for a keyboard-docked input bar.
+  // input would end up hidden behind it. Sliding the whole sheet up by the
+  // keyboard's height (a transform) was the first attempt, but that drags the
+  // header up and off the top of the screen once the keyboard is tall enough.
+  // Shrinking the sheet's height while pulling its bottom up by the same
+  // amount keeps the top — and the header — exactly where it was; only the
+  // comment list gets shorter (and scrolls), same as any keyboard-docked
+  // input bar should behave.
   const vv = window.visualViewport;
   const onViewport = () => {
     if (!vv) return;
     const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-    sheet.style.transform = kb > 40 ? `translateY(-${kb}px)` : "";
+    if (kb > 40) {
+      sheet.style.bottom = `${kb}px`;
+      sheet.style.height = `calc(68% - ${kb}px)`;
+    } else {
+      sheet.style.bottom = "";
+      sheet.style.height = "";
+    }
   };
   vv?.addEventListener("resize", onViewport);
   vv?.addEventListener("scroll", onViewport);
@@ -2171,7 +2181,23 @@ function chatPage() {
   const thread = el.querySelector("#thread");
   const input = el.querySelector("#msg");
 
+  // Same keyboard problem as the comment sheet: the header sits sticky at
+  // the top of this flex column, so as long as the column's own height
+  // shrinks to match the visual viewport, flexbox keeps the header fixed in
+  // place on its own — only the (flex:1) thread area gives up space, and the
+  // input bar's sticky bottom ends up sitting right above the keyboard.
+  const vv = window.visualViewport;
+  const onViewport = () => {
+    if (!vv) return;
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    el.style.height = kb > 40 ? `${vv.height}px` : "";
+  };
+  vv?.addEventListener("resize", onViewport);
+  vv?.addEventListener("scroll", onViewport);
+
   el.querySelector("#back").onclick = () => {
+    vv?.removeEventListener("resize", onViewport);
+    vv?.removeEventListener("scroll", onViewport);
     state.chatWith = null;
     state.page = state.viewUser ? "profile" : null;
     render();
