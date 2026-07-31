@@ -996,6 +996,127 @@ async function handle(request, env, ctx) {
     return json({ ok: true });
   }
 
+  // ----- posts (Facebook-style feed on Home, separate from the video feed) -----
+  if (path === "/api/posts" && method === "GET") {
+    requireUser(user);
+    const cursor = url.searchParams.get("cursor");
+    let sql = `
+      SELECT p.id, p.user_id, p.content, p.media_key, p.media_type, p.created_at,
+             u.username, u.display_name, u.avatar_key,
+             (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS like_count,
+             (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id) AS comment_count,
+             EXISTS(SELECT 1 FROM post_likes l WHERE l.post_id = p.id AND l.user_id = ?) AS liked,
+             EXISTS(SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.followee_id = p.user_id AND f.status = 'accepted') AS following
+      FROM posts p JOIN users u ON u.id = p.user_id
+      WHERE p.user_id = ? OR p.user_id IN (
+        SELECT followee_id FROM follows WHERE follower_id = ? AND status = 'accepted'
+      )
+    `;
+    const binds = [user.id, user.id, user.id, user.id];
+    if (cursor) { sql += " AND p.created_at < ?"; binds.push(parseInt(cursor)); }
+    sql += " ORDER BY p.created_at DESC LIMIT 15";
+
+    const { results } = await env.DB.prepare(sql).bind(...binds).all();
+    const posts = results.map(p => ({
+      id: p.id, content: p.content,
+      mediaUrl: p.media_key ? `/api/media/${p.media_key}` : null,
+      mediaType: p.media_type, createdAt: p.created_at,
+      user: {
+        id: p.user_id, username: p.username, displayName: p.display_name,
+        avatarUrl: p.avatar_key ? `/api/media/${p.avatar_key}` : null,
+      },
+      counts: { likes: p.like_count, comments: p.comment_count },
+      liked: !!p.liked, following: !!p.following, isSelf: p.user_id === user.id,
+    }));
+    return json({
+      posts,
+      nextCursor: posts.length === 15 ? String(results[results.length - 1].created_at) : null,
+    });
+  }
+
+  if (path === "/api/posts" && method === "POST") {
+    requireUser(user);
+    const form = await request.formData();
+    const content = (form.get("content") || "").toString().trim().slice(0, 2000);
+    const file = form.get("media");
+
+    let mediaKey = null, mediaType = null;
+    if (file && typeof file !== "string") {
+      mediaType = /^video\//.test(file.type) ? "video" : /^image\//.test(file.type) ? "image" : null;
+      if (!mediaType) return err("File must be an image or a video");
+      const ext = (file.name?.split(".").pop() || (mediaType === "video" ? "mp4" : "jpg")).toLowerCase();
+      mediaKey = `posts/${user.id}/${uid()}.${ext}`;
+      await env.MEDIA.put(mediaKey, file.stream(), { httpMetadata: { contentType: file.type } });
+    }
+    if (!content && !mediaKey) return err("Write something or attach a photo/video");
+
+    const id = uid();
+    await env.DB.prepare(
+      "INSERT INTO posts (id, user_id, content, media_key, media_type, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(id, user.id, content || null, mediaKey, mediaType, now()).run();
+
+    return json({ ok: true, id }, 201);
+  }
+
+  const postLikeMatch = /^\/api\/posts\/([\w-]+)\/like$/.exec(path);
+  if (postLikeMatch && (method === "POST" || method === "DELETE")) {
+    requireUser(user);
+    if (method === "POST") {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO post_likes (post_id, user_id, created_at) VALUES (?, ?, ?)"
+      ).bind(postLikeMatch[1], user.id, now()).run();
+    } else {
+      await env.DB.prepare("DELETE FROM post_likes WHERE post_id = ? AND user_id = ?")
+        .bind(postLikeMatch[1], user.id).run();
+    }
+    const c = await env.DB.prepare("SELECT COUNT(*) AS n FROM post_likes WHERE post_id = ?")
+      .bind(postLikeMatch[1]).first();
+    return json({ liked: method === "POST", count: c.n });
+  }
+
+  const postCommentsMatch = /^\/api\/posts\/([\w-]+)\/comments$/.exec(path);
+  if (postCommentsMatch && method === "GET") {
+    const { results } = await env.DB.prepare(`
+      SELECT c.id, c.body, c.created_at, u.username, u.display_name, u.avatar_key
+      FROM post_comments c JOIN users u ON u.id = c.user_id
+      WHERE c.post_id = ? ORDER BY c.created_at ASC LIMIT 300
+    `).bind(postCommentsMatch[1]).all();
+    return json({
+      comments: results.map(c => ({
+        id: c.id, body: c.body, createdAt: c.created_at,
+        user: {
+          username: c.username, displayName: c.display_name,
+          avatarUrl: c.avatar_key ? `/api/media/${c.avatar_key}` : null,
+        },
+      })),
+    });
+  }
+
+  if (postCommentsMatch && method === "POST") {
+    requireUser(user);
+    const { body } = await request.json();
+    if (!body?.trim()) return err("Write something first");
+    const id = uid();
+    await env.DB.prepare(
+      "INSERT INTO post_comments (id, post_id, user_id, body, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).bind(id, postCommentsMatch[1], user.id, body.trim(), now()).run();
+    const c = await env.DB.prepare("SELECT COUNT(*) AS n FROM post_comments WHERE post_id = ?")
+      .bind(postCommentsMatch[1]).first();
+    return json({ ok: true, count: c.n }, 201);
+  }
+
+  const postMatch = /^\/api\/posts\/([\w-]+)$/.exec(path);
+  if (postMatch && method === "DELETE") {
+    requireUser(user);
+    const p = await env.DB.prepare("SELECT user_id, media_key FROM posts WHERE id = ?")
+      .bind(postMatch[1]).first();
+    if (!p) return err("Not found", 404);
+    if (p.user_id !== user.id) return err("Not your post", 403);
+    if (p.media_key) await env.MEDIA.delete(p.media_key).catch(() => {});
+    await env.DB.prepare("DELETE FROM posts WHERE id = ?").bind(postMatch[1]).run();
+    return json({ ok: true });
+  }
+
   // ----- friendships (mutual — separate from the one-way follow graph) -----
   if (path === "/api/friendships" && method === "GET") {
     requireUser(user);

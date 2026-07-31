@@ -441,6 +441,10 @@ const I = {
   speedIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="14" r="8"/><path d="M12 14l3-3"/><path d="M9 2h6"/></svg>`,
   flagIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22V3"/></svg>`,
   heartOffIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L9.5 18"/><path d="M3 3l18 18"/></svg>`,
+  heartSm: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21.2l7.8-7.7 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>`,
+  commentSm: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 8.4-9 8.5 8.5 0 0 1 8.6 8.5z"/></svg>`,
+  shareSm: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>`,
+  imgIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>`,
   home: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>`,
   bell: `<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
   user: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>`,
@@ -2394,17 +2398,23 @@ function homePage() {
         <h2 style="margin:0">Home</h2>
         <button id="friendsBtn" style="width:36px;height:36px;border-radius:50%;background:var(--surface);border:1px solid var(--border);display:grid;place-items:center">${I.userplus}</button>
       </div>
-      <div id="statusRing" style="display:flex;gap:14px;overflow-x:auto;padding-bottom:6px;margin-bottom:20px">${skRow()}</div>
-      <div id="statusList"></div>
+      <div id="statusRing" style="display:flex;gap:14px;overflow-x:auto;padding-bottom:6px;margin-bottom:16px">${skRow()}</div>
+
+      <button id="composePrompt" style="width:100%;display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:10px 16px;margin-bottom:18px;text-align:left">
+        <div class="av" style="width:32px;height:32px">${avatarInner(store.user)}</div>
+        <span style="color:var(--muted);font-size:14px">What's on your mind?</span>
+      </button>
+
+      <div id="postFeed">${skRow().repeat(3)}</div>
     </div>
   `);
 
   el.querySelector("#friendsBtn").onclick = () => { state.page = "friends-hub"; render(); };
+  el.querySelector("#composePrompt").onclick = () => openPostComposer(() => loadPosts());
 
-  const load = async () => {
+  const loadRing = async () => {
     try {
       const r = await api("/statuses");
-
       const ring = el.querySelector("#statusRing");
       ring.innerHTML = r.groups.map(g => `
         <button class="status-circle tap-sm" data-uid="${esc(g.userId)}" style="display:flex;flex-direction:column;align-items:center;gap:5px;flex-shrink:0;width:64px">
@@ -2424,32 +2434,214 @@ function homePage() {
         if (g.isOwn && !g.statuses.length) { openStatusComposer(); return; }
         openStatusViewer(r.groups, r.groups.indexOf(g));
       });
-
-      const list = el.querySelector("#statusList");
-      const withStatuses = r.groups.filter(g => g.statuses.length);
-      list.innerHTML = withStatuses.length ? `
-        <p class="sect" style="margin-top:0">Recent updates</p>
-        ${withStatuses.map(g => `
-          <div class="row tap status-row-item" data-uid="${esc(g.userId)}">
-            <div class="av">${avatarInner(g)}</div>
-            <div style="flex:1;min-width:0">
-              <p style="margin:0;font-size:14px;font-weight:600">${g.isOwn ? "You" : esc(g.displayName || g.username)}</p>
-              <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">${ago(g.statuses[g.statuses.length - 1].createdAt)}${g.statuses.length > 1 ? ` · ${g.statuses.length} updates` : ""}</p>
-            </div>
-          </div>`).join("")}
-      ` : `<p class="empty">No status updates yet. Tap + to add one.</p>`;
-
-      list.querySelectorAll(".status-row-item").forEach(row => row.onclick = () => {
-        const g = r.groups.find(x => x.userId === row.dataset.uid);
-        openStatusViewer(r.groups, r.groups.indexOf(g));
-      });
     } catch (e) {
       el.querySelector("#statusRing").innerHTML = `<p class="empty">${esc(e.message)}</p>`;
     }
   };
-  load();
+
+  // Facebook-style card feed: avatar/name/time, text, optional media,
+  // counts, then Like / Comment / Share as one bordered row — the shape
+  // people expect a "post" to have, distinct from the TikTok-style video feed.
+  const postCard = (p) => `
+    <div class="post-card" data-id="${p.id}" style="border-bottom:8px solid var(--surface);padding:16px 0 10px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;padding:0 2px">
+        <div class="av tap-sm post-user" data-user="${esc(p.user.username)}" style="width:40px;height:40px">${avatarInner(p.user)}</div>
+        <div style="flex:1;min-width:0">
+          <p class="tap-sm post-user" data-user="${esc(p.user.username)}" style="margin:0;font-size:14px;font-weight:600">${esc(p.user.displayName || p.user.username)}</p>
+          <p style="margin:1px 0 0;font-size:11px;color:var(--muted)">${ago(p.createdAt)}</p>
+        </div>
+        ${p.isSelf
+          ? `<button class="post-del" data-id="${p.id}" style="color:var(--muted)">${I.x}</button>`
+          : (!p.following ? `<button class="post-follow" data-uid="${p.user.id}" style="border:none;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;background:#fff;color:#000">+ Follow</button>` : "")}
+      </div>
+      ${p.content ? `<p style="margin:0 0 10px;padding:0 2px;font-size:14px;line-height:1.4;white-space:pre-wrap;word-break:break-word">${esc(p.content)}</p>` : ""}
+      ${p.mediaUrl ? (p.mediaType === "video"
+        ? `<video src="${p.mediaUrl}" controls playsinline style="width:100%;max-height:420px;background:#000;display:block"></video>`
+        : `<img src="${p.mediaUrl}" style="width:100%;max-height:420px;object-fit:cover;display:block">`) : ""}
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 2px 8px;font-size:12px;color:var(--muted)">
+        <span>${p.counts.likes ? `${fmt(p.counts.likes)} likes` : ""}</span>
+        <span>${p.counts.comments ? `${fmt(p.counts.comments)} comments` : ""}</span>
+      </div>
+      <div style="display:flex;border-top:1px solid var(--border)">
+        <button class="post-like ${p.liked ? "liked" : ""}" data-id="${p.id}" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 0;color:${p.liked ? "#FF3040" : "var(--muted)"}">${I.heartSm}<span style="font-size:13px;font-weight:600">Like</span></button>
+        <button class="post-comment" data-id="${p.id}" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 0;color:var(--muted)">${I.commentSm}<span style="font-size:13px;font-weight:600">Comment</span></button>
+        <button class="post-share" data-id="${p.id}" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 0;color:var(--muted)">${I.shareSm}<span style="font-size:13px;font-weight:600">Share</span></button>
+      </div>
+    </div>`;
+
+  const wirePostCard = (card, p) => {
+    card.querySelectorAll(".post-user").forEach(x => x.onclick = () => {
+      state.viewUser = x.dataset.user; state.page = "profile"; render();
+    });
+    card.querySelector(".post-follow")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try { await api(`/users/${btn.dataset.uid}/follow`, { method: "POST" }); btn.remove(); }
+      catch (err) { toast(err.message); btn.disabled = false; }
+    });
+    card.querySelector(".post-del")?.addEventListener("click", async () => {
+      if (!confirm("Delete this post?")) return;
+      try { await api(`/posts/${p.id}`, { method: "DELETE" }); card.remove(); }
+      catch (e) { toast(e.message); }
+    });
+    card.querySelector(".post-like").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      const on = btn.classList.contains("liked");
+      btn.classList.toggle("liked");
+      btn.style.color = on ? "var(--muted)" : "#FF3040";
+      try {
+        const r = await api(`/posts/${p.id}/like`, { method: on ? "DELETE" : "POST" });
+        const countEl = card.querySelector("div[style*='space-between'] span");
+        if (countEl) countEl.textContent = r.count ? `${fmt(r.count)} likes` : "";
+      } catch (err) {
+        btn.classList.toggle("liked");
+        btn.style.color = on ? "#FF3040" : "var(--muted)";
+        toast(err.message);
+      }
+    });
+    card.querySelector(".post-comment").addEventListener("click", () => openPostComments(p));
+    card.querySelector(".post-share").addEventListener("click", async () => {
+      const text = p.content || "Check out this post";
+      if (navigator.share) await navigator.share({ text }).catch(() => {});
+      else { await navigator.clipboard.writeText(text); toast("Copied"); }
+    });
+  };
+
+  const loadPosts = async () => {
+    const feed = el.querySelector("#postFeed");
+    try {
+      const r = await api("/posts");
+      feed.innerHTML = "";
+      if (!r.posts.length) {
+        feed.innerHTML = `<p class="empty">No posts yet. Be the first to share something.</p>`;
+        return;
+      }
+      r.posts.forEach(p => {
+        const card = $(postCard(p));
+        feed.appendChild(card);
+        wirePostCard(card, p);
+      });
+    } catch (e) {
+      feed.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+    }
+  };
+
+  loadRing();
+  loadPosts();
 
   return el;
+}
+
+function openPostComposer(onDone) {
+  const sheet = $(`
+    <div class="sheet" style="height:auto;max-height:82%;display:flex;flex-direction:column">
+      <div class="sheet-head"><span class="title">Create post</span><button class="x">${I.x}</button></div>
+      <div class="sheet-body" style="padding:16px">
+        <textarea id="postText" placeholder="What's on your mind?" maxlength="2000" rows="4"
+          style="width:100%;background:none;border:none;outline:none;color:#111;font-size:16px;resize:none;margin-bottom:12px"></textarea>
+        <div id="postMediaPreview"></div>
+        <input type="file" id="postFile" accept="image/*,video/*" hidden>
+        <button id="postAddMedia" style="display:flex;align-items:center;gap:8px;color:#111;font-size:13px;font-weight:600;padding:10px 0;border-top:1px solid #EDEDED;width:100%">
+          ${I.imgIcon} Add photo/video
+        </button>
+      </div>
+      <div style="padding:12px 16px;border-top:1px solid #EDEDED">
+        <button class="btn-primary" id="postSubmit" style="background:#111;color:#fff">Post</button>
+      </div>
+    </div>
+  `);
+  const close = mountSheet(sheet);
+  sheet.querySelector(".x").onclick = close;
+
+  let file = null;
+  const fileInput = sheet.querySelector("#postFile");
+  sheet.querySelector("#postAddMedia").onclick = () => fileInput.click();
+  fileInput.onchange = () => {
+    file = fileInput.files[0];
+    const prev = sheet.querySelector("#postMediaPreview");
+    if (!file) { prev.innerHTML = ""; return; }
+    const url = URL.createObjectURL(file);
+    const isVideo = file.type.startsWith("video/");
+    prev.innerHTML = `
+      <div style="position:relative;margin-bottom:12px">
+        ${isVideo ? `<video src="${url}" style="width:100%;max-height:260px;border-radius:10px;background:#000" muted></video>`
+                   : `<img src="${url}" style="width:100%;max-height:260px;border-radius:10px;object-fit:cover">`}
+        <button id="postRemoveMedia" style="position:absolute;top:8px;right:8px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;display:grid;place-items:center">${I.x}</button>
+      </div>`;
+    prev.querySelector("#postRemoveMedia").onclick = () => { file = null; fileInput.value = ""; prev.innerHTML = ""; };
+  };
+
+  sheet.querySelector("#postSubmit").onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    const content = sheet.querySelector("#postText").value.trim();
+    if (!content && !file) return toast("Write something or attach a photo/video");
+    const fd = new FormData();
+    if (content) fd.append("content", content);
+    if (file) fd.append("media", file);
+    btn.classList.add("working");
+    try {
+      await api("/posts", { method: "POST", body: fd });
+      toast("Posted");
+      close();
+      onDone?.();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.classList.remove("working");
+    }
+  };
+}
+
+function openPostComments(post) {
+  const sheet = $(`
+    <div class="sheet">
+      <div class="sheet-head"><span class="title">Comments</span><button class="x">${I.x}</button></div>
+      <div class="sheet-body" id="pcBody"><div class="spin" style="border-color:#eee;border-top-color:#000"></div></div>
+      <div class="sheet-foot">
+        <input id="pcInput" placeholder="Write a comment..." maxlength="500">
+        <button class="send" id="pcSend" disabled>Post</button>
+      </div>
+    </div>
+  `);
+  const close = mountSheet(sheet);
+  sheet.querySelector(".x").onclick = close;
+
+  const body = sheet.querySelector("#pcBody");
+  const input = sheet.querySelector("#pcInput");
+  const send = sheet.querySelector("#pcSend");
+  input.addEventListener("input", () => { send.disabled = !input.value.trim(); });
+
+  const load = async () => {
+    try {
+      const r = await api(`/posts/${post.id}/comments`);
+      sheet.querySelector(".title").textContent = r.comments.length === 1 ? "1 comment" : `${fmt(r.comments.length)} comments`;
+      body.innerHTML = r.comments.length ? r.comments.map(c => `
+        <div class="cmt-row">
+          <div class="cav">${c.user.avatarUrl ? `<img src="${c.user.avatarUrl}" alt="">` : esc((c.user.username || "?")[0].toUpperCase())}</div>
+          <div style="flex:1;min-width:0">
+            <p class="cmt-name">${esc(c.user.displayName || c.user.username)}</p>
+            <p class="cmt-body">${esc(c.body)}</p>
+            <div class="cmt-meta"><span>${ago(c.createdAt)}</span></div>
+          </div>
+        </div>`).join("") : `<p class="empty" style="color:#8A8A8E">No comments yet. Say something.</p>`;
+    } catch (e) {
+      body.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+    }
+  };
+  load();
+
+  const post_ = async () => {
+    const text = input.value.trim();
+    if (!text) return;
+    send.disabled = true;
+    try {
+      await api(`/posts/${post.id}/comments`, { method: "POST", body: { body: text } });
+      input.value = "";
+      await load();
+    } catch (e) { toast(e.message); } finally { send.disabled = !input.value.trim(); }
+  };
+  send.onclick = post_;
+  input.addEventListener("keydown", e => e.key === "Enter" && post_());
 }
 
 function openStatusComposer() {
