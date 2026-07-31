@@ -1,0 +1,355 @@
+/* ============================================================================
+   design-3.css — THE REST OF THE SCREENSHOTS
+   ============================================================================
+
+   FOR CLAUDE CODE:
+
+   design-2.css covered the top bar, notifications, badges, presence, read
+   receipts and ads. This file covers what was still missing from the
+   reference screenshots:
+
+     H. More-options sheet ("•••")     — Save video, Speed, Report, etc.
+     I. Share row, Repost, Send-to-friend list
+     J. Comment sheet extras           — replies expander, reaction column,
+                                         rich composer with quick emoji
+     K. Chat date separators
+     L. List sub-labels and dismiss
+
+   HOW TO APPLY:
+     Save at public/design-3.css and link it AFTER design-2.css:
+        <link rel="stylesheet" href="/design-3.css">
+
+   ---------------------------------------------------------------------------
+   WHAT THE BACKEND ALREADY SUPPORTS (checked against the deployed Worker)
+
+     Comment replies      comments come back with a nested `replies` array,
+                          so the "View N replies" expander works today.
+     Comment reactions    each comment carries `likes`, `dislikes` and
+                          `myReaction` — the heart column works today.
+     Share                POST /api/videos/:id/share returns a count and url.
+     Report               POST /api/reports exists.
+     Send to a friend     POST /api/messages accepts `videoId`, so sending a
+                          video into a chat works today.
+     Date separators      messages carry `createdAt`; grouping by day is
+                          client-side, no backend needed.
+     Save video / Speed / Data saver — all client-side, no backend needed.
+
+   WHAT NEEDS BACKEND WORK FIRST (styles are here, but they'll sit unused)
+
+     "Follows you" label  the follow-list endpoint returns whether *I* follow
+                          *them*, but not the reverse. It needs a second
+                          EXISTS check returning e.g. `followsYou`.
+     "Not interested"     there is no endpoint for this yet.
+     Message reactions    there is no table for reactions on messages.
+
+   Don't invent endpoints for those three — either add them deliberately or
+   leave those controls out until they exist. A button that does nothing is
+   worse than a missing one.
+   ========================================================================= */
+
+
+/* ============================================================================
+   NEW TOKENS
+   ========================================================================= */
+:root {
+  --sheet-bg:      #fff;
+  --sheet-line:    #EDEDED;
+  --sheet-ink:     #111;
+  --sheet-muted:   #6E6E73;   /* 5.07:1 on white */
+  --sheet-fill:    #F1F1F2;   /* icon circles, input, Send button */
+  --repost-gold:   #F5C518;
+  --send:          #FE2C55;   /* the send arrow — an icon, so 3:1 applies */
+}
+
+
+/* ============================================================================
+   H. MORE-OPTIONS SHEET  ("•••" on a video)
+   ---------------------------------------------------------------------------
+   A grid of actions rather than another scrolling list: five across, wrapping
+   to a second row. At a glance you can see everything available, which a list
+   never gives you.
+
+   MARKUP:
+     <div class="sheet opt-sheet">
+       <div class="opt-grid">
+         <button class="opt"><i class="opt-ic">…icon…</i><span>Save video</span></button>
+         …
+       </div>
+       …share row, repost row, friends list…
+     </div>
+
+   Only include actions that actually do something — see the backend notes at
+   the top of this file.
+   ========================================================================= */
+.opt-sheet {
+  height: auto;
+  max-height: 88%;
+  background: var(--sheet-bg);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.opt-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 18px 8px;
+  padding: 22px 14px 18px;
+}
+
+.opt {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  background: none; border: none;
+}
+.opt-ic {
+  width: 50px; height: 50px; border-radius: 50%;
+  background: var(--sheet-fill); color: var(--sheet-ink);
+  display: grid; place-items: center;
+}
+.opt span {
+  font-size: 11px; line-height: 1.25; text-align: center;
+  color: var(--sheet-ink); max-width: 62px;
+}
+
+/* Report is the one destructive action here, so it is the one that gets
+   colour. Everything else stays neutral. */
+.opt.danger .opt-ic { color: #C4162E; }
+.opt.danger span    { color: #C4162E; }
+
+/* A toggled option (Data saver on/off) shows its state in the label rather
+   than changing the icon, so the row keeps its rhythm. */
+.opt .state { display: block; font-size: 10px; color: var(--sheet-muted); }
+
+
+/* ============================================================================
+   I. SHARE ROW, REPOST, SEND TO A FRIEND
+   ---------------------------------------------------------------------------
+   MARKUP:
+     <div class="share-row">
+       <span class="share-label">Share with</span>
+       <div class="share-apps"> …app buttons… </div>
+     </div>
+     <button class="repost-row">
+       <i class="repost-ic">…</i><span>Repost</span><i class="chev">›</i>
+     </button>
+     <div class="send-row">
+       <div class="av">…</div><span class="send-name">ruganzu</span>
+       <button class="send-btn">Send</button>
+     </div>
+   ========================================================================= */
+.share-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--sheet-line);
+}
+.share-label {
+  font-size: 15px; font-weight: 600; color: var(--sheet-ink);
+  flex-shrink: 0;
+}
+.share-apps {
+  display: flex; align-items: center; gap: 10px;
+  margin-left: auto; overflow-x: auto;
+}
+.share-apps button {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center; flex-shrink: 0;
+}
+
+.repost-row {
+  width: 100%;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--sheet-line);
+  background: none; border-left: none; border-right: none; border-bottom: none;
+}
+/* Gold needs a DARK glyph. A white arrow on this gold reads at 1.6:1 — all
+   but invisible; the dark one reaches 10.7:1. */
+.repost-ic {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--repost-gold); color: #1A1A1A;
+  display: grid; place-items: center; flex-shrink: 0;
+}
+.repost-row span {
+  flex: 1; text-align: left;
+  font-size: 15px; font-weight: 600; color: var(--sheet-ink);
+}
+.chev { color: var(--sheet-muted); font-size: 18px; }
+
+.send-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px;
+}
+.send-row .av {
+  width: 42px; height: 42px; border-radius: 50%;
+  background: #E4E4E6; border: none; flex-shrink: 0;
+  display: grid; place-items: center; overflow: hidden;
+  font-family: var(--display); font-weight: 700; color: #55555A;
+}
+.send-name {
+  flex: 1; min-width: 0;
+  font-size: 15px; color: var(--sheet-ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.send-btn {
+  background: var(--sheet-fill); color: var(--sheet-ink);
+  border: none; border-radius: 6px;
+  padding: 8px 20px; font-size: 14px; font-weight: 600;
+  flex-shrink: 0;
+}
+/* Once sent, the button states the outcome rather than staying clickable. */
+.send-btn.sent { background: none; color: var(--sheet-muted); }
+
+
+/* ============================================================================
+   J. COMMENT SHEET EXTRAS
+   ---------------------------------------------------------------------------
+   Three additions: the replies expander, the reaction column on the right,
+   and a composer that can attach more than text.
+
+   MARKUP for the expander, placed after a comment's own row:
+     <button class="show-replies">
+       <i class="line"></i> View 2 replies <i class="chev">⌄</i>
+     </button>
+
+   The short rule before the label is what separates a reply thread from a new
+   comment at a glance — without it the indent alone is easy to miss.
+   ========================================================================= */
+.show-replies {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 16px 10px 62px;
+  background: none; border: none;
+  font-size: 12px; font-weight: 600; color: var(--sheet-muted);
+}
+.show-replies .line {
+  width: 22px; height: 1px; background: #D8D8DA; flex-shrink: 0;
+}
+
+/* Reaction column, right of each comment. The count sits under the heart so
+   the column stays narrow. */
+.cmt-react .heart.on svg { fill: #C4162E; stroke: #C4162E; }
+.cmt-react .heart.on     { color: #C4162E; }
+
+/* A comment can contain an image (the reference app allows this). Cap it so
+   one picture can't dominate the thread. */
+.cmt-img {
+  display: block; margin-top: 6px;
+  max-width: 140px; max-height: 160px;
+  border-radius: 8px; object-fit: cover;
+}
+
+/* Composer: text field plus attach controls, then a row of quick emoji. */
+.cmt-compose {
+  border-top: 1px solid var(--sheet-line);
+  background: var(--sheet-bg);
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0));
+}
+.cmt-compose .line1 {
+  display: flex; align-items: center; gap: 10px;
+}
+.cmt-compose input {
+  flex: 1; min-width: 0;
+  background: var(--sheet-fill); border: none; border-radius: 20px;
+  padding: 11px 16px; font-size: 14px; color: var(--sheet-ink); outline: none;
+}
+.cmt-compose input::placeholder { color: var(--sheet-muted); }
+
+.cmt-tools { display: flex; align-items: center; gap: 16px; padding: 10px 4px 2px; }
+.cmt-tools button { color: var(--sheet-ink); display: flex; }
+
+/* The send button only lights up once there is something to send. */
+.cmt-send {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--send); color: #fff;
+  display: grid; place-items: center; flex-shrink: 0;
+  opacity: .35; transition: opacity .2s;
+}
+.cmt-send.ready { opacity: 1; }
+
+/* Quick emoji row. Tapping one appends it to the field. */
+.emoji-row {
+  display: flex; gap: 4px; overflow-x: auto;
+  padding: 8px 2px 2px;
+}
+.emoji-row button {
+  font-size: 26px; line-height: 1; padding: 2px 6px; flex-shrink: 0;
+}
+
+
+/* ============================================================================
+   K. CHAT DATE SEPARATORS
+   ---------------------------------------------------------------------------
+   Group messages by calendar day and insert one of these between groups.
+   Without them a long thread reads as one undated block.
+
+   MARKUP:  <div class="day-sep"><span>Monday 6:27 am</span></div>
+
+   Label the recent days in words — Today, Yesterday, then the weekday name,
+   and only fall back to a date once the day name stops being useful.
+   ========================================================================= */
+.day-sep {
+  display: flex; align-items: center; gap: 12px;
+  margin: 16px 0 10px;
+}
+.day-sep::before, .day-sep::after {
+  content: ""; flex: 1; height: 1px; background: var(--border);
+}
+.day-sep span {
+  font-size: 12px; color: var(--muted); white-space: nowrap;
+}
+
+/* "Seen" under the last outgoing message, when the whole thread is read. */
+.seen-tag {
+  text-align: right;
+  font-size: 11px; color: var(--muted);
+  margin: 2px 2px 8px;
+}
+
+
+/* ============================================================================
+   L. LIST SUB-LABELS AND DISMISS
+   ---------------------------------------------------------------------------
+   MARKUP inside a .row:
+     <div style="flex:1">
+       <p class="row-name">Igihozo</p>
+       <p class="row-sub">Follows you</p>
+     </div>
+     <button class="row-x" aria-label="Dismiss">×</button>
+
+   The sub-label is the reason this person is in the list. It earns its place
+   only when it says something true and specific — "Follows you" is useful,
+   "Suggested for you" is filler. See the backend note at the top: the
+   follow-list endpoint does not return the reverse-follow flag yet, so
+   "Follows you" needs that field added before it can be shown honestly.
+   ========================================================================= */
+.row-name {
+  margin: 0; font-size: 14px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.row-sub {
+  margin: 2px 0 0; font-size: 12px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Dismiss sits after the action button and stays quiet — it is the escape
+   hatch, not an invitation. */
+.row-x {
+  width: 32px; height: 32px; border-radius: 50%;
+  display: grid; place-items: center; flex-shrink: 0;
+  color: var(--muted); background: none; border: none;
+}
+.row-x:active { background: rgba(255,255,255,.08); }
+
+/* Segmented list header (Following · Followers · Friends). Scrolls sideways
+   when the labels outgrow the width instead of squeezing them. */
+.list-tabs {
+  display: flex; gap: 22px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+.list-tabs button {
+  padding: 10px 0 10px;
+  font-size: 15px; font-weight: 600; color: var(--muted);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap; flex-shrink: 0;
+}
+.list-tabs button.on { color: var(--text); border-bottom-color: var(--text); }
+.list-tabs .n { font-weight: 400; opacity: .7; margin-left: 4px; }

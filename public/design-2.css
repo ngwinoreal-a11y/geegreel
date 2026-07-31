@@ -1,0 +1,343 @@
+/* ============================================================================
+   design-2.css — TOP BAR FIX + DESIGN FOR THE NEW FEATURES
+   ============================================================================
+
+   FOR CLAUDE CODE:
+
+   I read the deployed Worker on Cloudflare, so this file is written against
+   the real API shapes rather than guesses. It covers:
+
+     A. The feed top bar (fixes a measured overlap bug)
+     B. Notifications          — /api/notifications
+     C. Unread badges          — /api/notifications/unread-count,
+                                 /api/messages/unread-count
+     D. Online status          — `online` on threads and on the chat header
+     E. Read receipts          — `read` on outgoing messages
+     F. Sponsored posts        — `isAd` items injected into the feed
+     G. Friend requests + empty states
+
+   HOW TO APPLY:
+     1. Save at:  public/design-2.css
+     2. Link it in public/index.html AFTER the existing stylesheet, so these
+        rules win:
+
+            <link rel="stylesheet" href="/design-2.css">
+
+     3. Section A needs no markup changes.
+        Sections B–G need the class names below on the matching elements.
+        Each block says exactly which API field it displays, so wiring should
+        be mechanical. Add classes; don't restructure working markup.
+
+   THREE CONTRAST BUGS THIS FIXES (measured, not taste):
+     - The unread badge red (#FE2C55) with white numerals sits at 3.68:1.
+       Small numerals need 4.5:1. Corrected to #D91F42 (4.97:1) — same red
+       family, now legible.
+     - The blue ✓✓ read tick on a white bubble sits at 2.71:1. Icons need
+       3:1. Corrected to #2F7FD4 (4.11:1).
+     - The grey ✓ sent tick sits at 2.80:1. Corrected to #7A7A7E (4.27:1).
+   ========================================================================= */
+
+
+/* ============================================================================
+   NEW TOKENS
+   ========================================================================= */
+:root {
+  --badge:        #D91F42;   /* unread counts — legible with white numerals */
+  --online:       #3AD35A;   /* presence dot */
+  --tick-sent:    #7A7A7E;   /* one tick: delivered */
+  --tick-read:    #2F7FD4;   /* two ticks: read */
+  --unread-tint:  #141416;   /* row background for anything unread */
+  --sponsor:      #C9A227;   /* the "Sponsored" label */
+}
+
+
+/* ============================================================================
+   A. FEED TOP BAR
+   ---------------------------------------------------------------------------
+   The bug: the avatar row runs 16px..62px, and the tabs were positioned at
+   top:56px — so they started 6px BEFORE the row above them finished. That
+   collision is why "For you" looks jammed against the icons.
+
+   The fix: two clean rows. Avatar and icons share row one; the tabs get row
+   two with 14px of real clearance. Three icons and two tabs stop competing
+   for the same horizontal space.
+   ========================================================================= */
+.topbar {
+  padding: 14px 16px 0;
+  align-items: flex-start;
+}
+
+.me-btn {
+  width: 44px; height: 44px;
+  /* A hairline keeps the avatar readable when the video behind it is pale. */
+  box-shadow: 0 0 0 1px rgba(0,0,0,.18), 0 2px 10px rgba(0,0,0,.35);
+}
+
+/* The utility icons read as ONE calm control, not three bright buttons.
+   Switching feeds is the frequent action and settings is the rare one, so the
+   tabs should stay the loudest thing on this screen. */
+.chrome-pill {
+  gap: 2px;
+  background: rgba(28,28,30,.72);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border-radius: 22px;
+  padding: 5px 7px;
+  box-shadow: 0 2px 14px rgba(0,0,0,.3);
+}
+.chrome-pill button {
+  width: 32px; height: 32px;
+  color: #fff;
+  position: relative;   /* anchors the notification badge */
+}
+.chrome-pill button:active { transform: scale(.88); opacity: .7; }
+
+/* Row two: 72px clears the 58px bottom edge of the row above. */
+.tabs { top: 72px; gap: 30px; }
+.tabs button {
+  font-size: 16px;
+  padding-bottom: 7px;
+  letter-spacing: -.01em;
+  text-shadow: 0 1px 10px rgba(0,0,0,.6);
+}
+.tabs button.on { border-bottom-width: 2px; }
+
+
+/* ============================================================================
+   B. NOTIFICATIONS       GET /api/notifications
+   ---------------------------------------------------------------------------
+   Each item returns: type (like|comment|reply|follow|gift), actor {username,
+   displayName, avatarUrl}, videoThumb, read, createdAt.
+
+   MARKUP SHAPE:
+     <div class="notif unread">           <- add .unread when read === false
+       <div class="notif-av"> avatar </div>
+       <div class="notif-text">
+         <p><b>Display name</b> liked your video</p>
+         <span class="notif-time">2h</span>
+       </div>
+       <img class="notif-thumb" src="{videoThumb}">   <- omit for follows
+     </div>
+
+   The thumbnail on the right is what makes a notification list scannable:
+   you recognise which of your videos it's about before reading a word. Follow
+   notifications have no video, so they simply omit it.
+   ========================================================================= */
+.notif {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background .2s;
+}
+.notif:active { background: rgba(255,255,255,.06); }
+
+/* Unread rows carry a quiet tint rather than a dot — the whole row is the
+   signal, so nothing extra has to be explained. */
+.notif.unread { background: var(--unread-tint); }
+
+.notif-av {
+  width: 46px; height: 46px; border-radius: 50%;
+  background: var(--raised); border: 1px solid var(--border);
+  display: grid; place-items: center; overflow: hidden; flex-shrink: 0;
+  font-family: var(--display); font-weight: 700; font-size: 17px; color: #fff;
+}
+.notif-av img { width: 100%; height: 100%; object-fit: cover; }
+
+.notif-text { flex: 1; min-width: 0; }
+.notif-text p {
+  margin: 0; font-size: 14px; line-height: 1.35; color: var(--text);
+}
+.notif-text b { font-weight: 600; }
+.notif-time {
+  display: block; margin-top: 3px;
+  font-size: 12px; color: var(--muted);
+}
+
+.notif-thumb {
+  width: 44px; height: 56px; border-radius: 6px; object-fit: cover;
+  background: var(--raised); flex-shrink: 0;
+}
+
+/* Section heading inside the list ("New", "Earlier"). */
+.notif-head {
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px;
+  padding: 18px 16px 6px;
+}
+
+
+/* ============================================================================
+   C. UNREAD BADGES
+        GET /api/notifications/unread-count   -> the bell in the top bar
+        GET /api/messages/unread-count        -> the Messages tab in the nav
+        thread.unreadCount                    -> each inbox row
+   ---------------------------------------------------------------------------
+   MARKUP: put <span class="badge">3</span> inside the button or row it counts
+   for. The parent needs position: relative (already set above for
+   .chrome-pill button; .navrow button already has it).
+
+   Show nothing at zero — a badge reading "0" is noise. Cap the display at 99+
+   so a long number can't stretch the pill.
+   ========================================================================= */
+.badge {
+  position: absolute; top: -2px; right: -2px;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 9px;
+  background: var(--badge); color: #fff;
+  font-family: var(--sans); font-size: 11px; font-weight: 700;
+  line-height: 18px; text-align: center;
+  /* A ring in the surrounding colour keeps the badge crisp against whatever
+     it overlaps. */
+  box-shadow: 0 0 0 2px var(--nav-bg);
+  pointer-events: none;
+}
+
+/* On the translucent top-bar pill the ring should match that pill instead. */
+.chrome-pill .badge { box-shadow: 0 0 0 2px rgba(28,28,30,.9); }
+
+/* A bare dot, for "something new" with no useful number. */
+.badge.dot {
+  min-width: 10px; width: 10px; height: 10px; padding: 0; border-radius: 50%;
+}
+
+/* Inbox row count sits inline at the end of the row, not floating. */
+.row .badge {
+  position: static;
+  box-shadow: none;
+  flex-shrink: 0;
+}
+
+
+/* ============================================================================
+   D. ONLINE STATUS       `online` on threads and on the chat header
+   ---------------------------------------------------------------------------
+   The API marks someone online when they pinged within the last 2 minutes.
+
+   MARKUP:
+     inbox avatar ->  <div class="av has-dot"> … <i class="dot"></i> </div>
+     chat header  ->  <span class="online-tag"><i></i>Online</span>
+
+   The dot needs a ring in the background colour, otherwise it reads as part
+   of the photo rather than as a status.
+   ========================================================================= */
+.has-dot { position: relative; overflow: visible; }
+.has-dot .dot {
+  position: absolute; right: 0; bottom: 0;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--online);
+  box-shadow: 0 0 0 2.5px var(--bg);
+}
+
+.online-tag {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--online);
+}
+.online-tag i {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--online);
+}
+
+/* When they're offline, say when they were last around in quiet grey rather
+   than showing nothing — absence of a label reads as a bug. */
+.last-seen { font-size: 12px; color: var(--muted); }
+
+
+/* ============================================================================
+   E. READ RECEIPTS       `read` on outgoing messages
+   ---------------------------------------------------------------------------
+   MARKUP, inside an outgoing bubble, after the timestamp:
+       <span class="ticks">✓</span>        sent, not read
+       <span class="ticks read">✓✓</span>  read
+
+   Only outgoing messages get ticks. The previous blue was too light to read
+   on a white bubble (2.71:1); this one clears the icon threshold.
+   ========================================================================= */
+.ticks {
+  font-size: 11px; margin-left: 5px;
+  color: var(--tick-sent);
+  letter-spacing: -2px;   /* pulls the two ticks into one mark */
+  white-space: nowrap;
+}
+.ticks.read { color: var(--tick-read); }
+
+
+/* ============================================================================
+   F. SPONSORED POSTS     feed items where isAd === true
+   ---------------------------------------------------------------------------
+   Returns: sponsorName, caption, ctaText, linkUrl, mediaUrl, adType.
+
+   An ad has to be labelled, plainly, in the same place every time. The label
+   is the honest part of the design; hiding it would be the dishonest one.
+   Everything else matches an ordinary post so the feed doesn't lurch.
+
+   MARKUP:
+     <div class="slide">
+       … media …
+       <div class="overlay">
+         <span class="sponsor-tag">Sponsored</span>
+         <p class="author-name">{sponsorName}</p>
+         <p class="caption">{caption}</p>
+         <a class="cta" href="{linkUrl}" target="_blank" rel="noopener">
+           {ctaText} →
+         </a>
+       </div>
+     </div>
+   ========================================================================= */
+.sponsor-tag {
+  display: inline-block; margin-bottom: 6px;
+  padding: 3px 8px; border-radius: 4px;
+  background: rgba(0,0,0,.55);
+  color: var(--sponsor);
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .6px;
+}
+
+.cta {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 10px; padding: 10px 18px;
+  border-radius: 8px;
+  background: #fff; color: #000;
+  font-size: 14px; font-weight: 600; text-decoration: none;
+  transition: transform .18s cubic-bezier(.34,1.56,.64,1);
+}
+.cta:active { transform: scale(.94); }
+
+
+/* ============================================================================
+   G. FRIEND REQUESTS AND EMPTY STATES
+        GET /api/friends/requests    GET /api/friends/suggested
+   ---------------------------------------------------------------------------
+   MARKUP for a request row:
+     <div class="row">
+       <div class="av"> … </div>
+       <div style="flex:1"> name / @handle </div>
+       <div class="req-actions">
+         <button class="btn-accept">Confirm</button>
+         <button class="btn-decline">Delete</button>
+       </div>
+     </div>
+
+   Confirm is the affirmative action so it carries the solid fill; Delete
+   stays quiet. Both are the same height so the pair reads as one control.
+   ========================================================================= */
+.req-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.btn-accept, .btn-decline {
+  border: none; border-radius: 8px;
+  padding: 8px 16px; font-size: 13px; font-weight: 600;
+}
+.btn-accept  { background: #fff; color: #000; }
+.btn-decline { background: rgba(255,255,255,.14); color: var(--text); }
+
+/* An empty screen is an invitation to act, so it gets a line of direction
+   rather than a dead end. Pair .empty with .empty-sub for the second line. */
+.empty { padding: 72px 24px 40px; }
+.empty-icon {
+  margin: 0 auto 14px;
+  width: 56px; height: 56px; border-radius: 50%;
+  background: var(--surface); border: 1px solid var(--border);
+  display: grid; place-items: center; color: var(--muted);
+}
+.empty-sub {
+  margin: 6px 0 0;
+  font-size: 13px; color: var(--faint); text-align: center; line-height: 1.45;
+}
