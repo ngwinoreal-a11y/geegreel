@@ -387,7 +387,7 @@ const privateUser = u => ({
 const FEED_SQL = `
   SELECT
     v.id, v.caption, v.song, v.r2_key, v.thumb_key, v.width, v.height,
-    v.duration, v.views, v.created_at, v.repost_of,
+    v.duration, v.views, v.created_at, v.repost_of, v.sound_id,
     u.id AS user_id, u.username, u.display_name, u.avatar_key,
     ru.username AS repost_of_username,
     (SELECT COUNT(*) FROM likes    l WHERE l.video_id = v.id) AS like_count,
@@ -414,6 +414,7 @@ const shapeVideo = r => ({
   id: r.id,
   caption: r.caption,
   song: r.song,
+  soundId: r.sound_id || null,
   videoUrl: `/api/media/${r.r2_key}`,
   thumbUrl: r.thumb_key ? `/api/media/${r.thumb_key}` : null,
   width: r.width,
@@ -753,12 +754,31 @@ async function handle(request, env, ctx) {
     }
     if (user.avatar_key) await env.MEDIA.delete(user.avatar_key).catch(() => {});
 
+    // Sounds this account originated go with it — the r2 object backing
+    // their audio was just deleted above. Other people's videos pointing at
+    // one are unhooked rather than left referencing a sound that 404s.
+    // Sounds this account only reused (didn't own) get their count corrected
+    // the same way a single-video delete does, so it doesn't drift upward
+    // and strand the real owner.
+    const ownedSounds = await env.DB.prepare("SELECT id FROM sounds WHERE author_user_id = ?").bind(user.id).all();
+    const reusedSounds = await env.DB.prepare(
+      "SELECT DISTINCT sound_id FROM videos WHERE user_id = ? AND sound_id IS NOT NULL"
+    ).bind(user.id).all();
+    const ownedSoundIds = new Set(ownedSounds.results.map(s => s.id));
+
     await env.DB.batch([
       env.DB.prepare("DELETE FROM likes WHERE user_id = ?").bind(user.id),
       env.DB.prepare("DELETE FROM comments WHERE user_id = ?").bind(user.id),
       env.DB.prepare("DELETE FROM shares WHERE user_id = ?").bind(user.id),
       env.DB.prepare("DELETE FROM follows WHERE follower_id = ? OR followee_id = ?").bind(user.id, user.id),
       env.DB.prepare("DELETE FROM messages WHERE sender_id = ? OR recipient_id = ?").bind(user.id, user.id),
+      ...ownedSoundIds.size
+        ? [...ownedSoundIds].map(id => env.DB.prepare("UPDATE videos SET sound_id = NULL WHERE sound_id = ?").bind(id))
+        : [],
+      ...ownedSoundIds.size ? [env.DB.prepare("DELETE FROM sounds WHERE author_user_id = ?").bind(user.id)] : [],
+      ...reusedSounds.results
+        .filter(s => !ownedSoundIds.has(s.sound_id))
+        .map(s => env.DB.prepare("UPDATE sounds SET uses = MAX(0, uses - 1) WHERE id = ?").bind(s.sound_id)),
       env.DB.prepare("DELETE FROM videos WHERE user_id = ?").bind(user.id),
       env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(user.id),
       env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id),
@@ -1038,9 +1058,22 @@ async function handle(request, env, ctx) {
       });
     }
 
+    // A video either USES an existing shareable sound (soundId, picked from
+    // that sound's page) or may become a new shareable sound itself
+    // (soundShareable, an opt-in checkbox at post time — default off, since
+    // handing someone's audio to everyone by default is a rights question,
+    // not just a technical one). It can't be both.
+    const useSoundId = form.get("soundId") || null;
+    let soundId = null;
+    if (useSoundId) {
+      const sound = await env.DB.prepare("SELECT id FROM sounds WHERE id = ?").bind(useSoundId).first();
+      if (!sound) return err("That sound isn't available anymore");
+      soundId = sound.id;
+    }
+
     await env.DB.prepare(`
-      INSERT INTO videos (id, user_id, r2_key, thumb_key, caption, song, width, height, duration, visibility, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO videos (id, user_id, r2_key, thumb_key, caption, song, width, height, duration, visibility, sound_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id, user.id, key, thumbKey,
       form.get("caption") || "",
@@ -1049,8 +1082,20 @@ async function handle(request, env, ctx) {
       parseInt(form.get("height")) || null,
       duration,
       visibility,
+      soundId,
       now()
     ).run();
+
+    if (useSoundId) {
+      await env.DB.prepare("UPDATE sounds SET uses = uses + 1 WHERE id = ?").bind(useSoundId).run();
+    } else if (form.get("soundShareable") === "1") {
+      const newSoundId = uid();
+      await env.DB.prepare(`
+        INSERT INTO sounds (id, title, author_user_id, source_video_id, r2_key, uses, created_at)
+        VALUES (?, ?, ?, ?, ?, 0, ?)
+      `).bind(newSoundId, form.get("song") || `Original sound - ${user.username}`, user.id, id, key, now()).run();
+      await env.DB.prepare("UPDATE videos SET sound_id = ? WHERE id = ?").bind(newSoundId, id).run();
+    }
 
     const row = await env.DB.prepare(FEED_SQL + " WHERE v.id = ?").bind(user.id, user.id, id).first();
     return json({ video: shapeVideo(row) }, 201);
@@ -1071,6 +1116,32 @@ async function handle(request, env, ctx) {
     if (!v) return err("Video not found", 404);
     if (v.user_id !== user.id) return err("That isn't your video", 403);
 
+    // This video's audio may be the r2 object other people's videos point at
+    // as their sound. Deleting it here would 404 that audio for everyone
+    // already using it, silently — refuse instead. If nobody has used it yet,
+    // the sound row is deleted along with the video instead of turning into
+    // a dead link that still shows up in sound search.
+    //
+    // The gate below counts live from `videos`, not from `sounds.uses` —
+    // `uses` is only a display counter incremented on reuse, and if it were
+    // ever trusted here without also being decremented when a REUSING video
+    // is deleted (handled further down), it would drift upward forever and
+    // permanently lock the original owner out of deleting their own video.
+    let orphanedSoundId = null;
+    if (v.sound_id) {
+      const sound = await env.DB.prepare("SELECT source_video_id FROM sounds WHERE id = ?")
+        .bind(v.sound_id).first();
+      if (sound && sound.source_video_id === v.id) {
+        const stillUsed = await env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM videos WHERE sound_id = ? AND id != ?"
+        ).bind(v.sound_id, v.id).first();
+        if (stillUsed.n > 0) {
+          return err("Other people's videos use this video's sound — can't delete it while that's true", 409);
+        }
+        orphanedSoundId = v.sound_id;
+      }
+    }
+
     await env.MEDIA.delete(v.r2_key);
     if (v.thumb_key) await env.MEDIA.delete(v.thumb_key);
     await env.DB.batch([
@@ -1078,6 +1149,14 @@ async function handle(request, env, ctx) {
       env.DB.prepare("DELETE FROM comments WHERE video_id = ?").bind(v.id),
       env.DB.prepare("DELETE FROM shares WHERE video_id = ?").bind(v.id),
       env.DB.prepare("DELETE FROM videos WHERE id = ?").bind(v.id),
+      ...(orphanedSoundId
+        ? [env.DB.prepare("DELETE FROM sounds WHERE id = ?").bind(orphanedSoundId)]
+        // This video only used the sound, didn't own it — its own reuse
+        // count needs to come back down so the owner's video isn't
+        // permanently stuck once this one's gone.
+        : v.sound_id
+          ? [env.DB.prepare("UPDATE sounds SET uses = MAX(0, uses - 1) WHERE id = ?").bind(v.sound_id)]
+          : []),
     ]);
     return json({ ok: true });
   }
@@ -1302,14 +1381,88 @@ async function handle(request, env, ctx) {
   const shareMatch = /^\/api\/videos\/([\w-]+)\/share$/.exec(path);
   if (shareMatch && method === "POST") {
     requireUser(user);
+    const shareId = uid();
     await env.DB.prepare(
       "INSERT INTO shares (id, video_id, user_id, created_at) VALUES (?, ?, ?, ?)"
-    ).bind(uid(), shareMatch[1], user.id, now()).run();
+    ).bind(shareId, shareMatch[1], user.id, now()).run();
 
     const c = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM shares WHERE video_id = ?"
     ).bind(shareMatch[1]).first();
-    return json({ count: c.n, url: `${url.origin}/v/${shareMatch[1]}` });
+    // ?s= is this specific share event, not just the video — it's how the
+    // person who opens the link finds out who sent it to them.
+    return json({ count: c.n, url: `${url.origin}/v/${shareMatch[1]}?s=${shareId}` });
+  }
+
+  // Resolves a share link's ?s= token to who actually sent it, so the
+  // recipient sees "Shared by @username" instead of a bare video.
+  const shareLookupMatch = /^\/api\/shares\/([\w-]+)$/.exec(path);
+  if (shareLookupMatch && method === "GET") {
+    const row = await env.DB.prepare(`
+      SELECT s.video_id, u.id AS user_id, u.username, u.display_name, u.avatar_key
+      FROM shares s JOIN users u ON u.id = s.user_id
+      WHERE s.id = ?
+    `).bind(shareLookupMatch[1]).first();
+    if (!row) return err("Share link not found", 404);
+    return json({
+      videoId: row.video_id,
+      sharedBy: {
+        id: row.user_id, username: row.username, displayName: row.display_name,
+        avatarUrl: row.avatar_key ? `/api/media/${row.avatar_key}` : null,
+      },
+    });
+  }
+
+  // ----- sounds -----
+  // GET /api/sounds/search must come before /api/sounds/:id or "search"
+  // would be parsed as an id.
+  if (path === "/api/sounds/search" && method === "GET") {
+    const q = (url.searchParams.get("q") || "").trim();
+    if (!q) return json({ sounds: [] });
+    const { results } = await env.DB.prepare(`
+      SELECT snd.id, snd.title, snd.uses, snd.r2_key,
+             u.username AS author_username, u.display_name AS author_display_name
+      FROM sounds snd JOIN users u ON u.id = snd.author_user_id
+      WHERE snd.title LIKE ? OR u.username LIKE ?
+      ORDER BY snd.uses DESC LIMIT 30
+    `).bind(`%${q}%`, `%${q}%`).all();
+    return json({
+      sounds: results.map(s => ({
+        id: s.id, title: s.title, uses: s.uses,
+        author: { username: s.author_username, displayName: s.author_display_name },
+      })),
+    });
+  }
+
+  const soundMatch = /^\/api\/sounds\/([\w-]+)$/.exec(path);
+  if (soundMatch && method === "GET") {
+    const sound = await env.DB.prepare(`
+      SELECT snd.id, snd.title, snd.uses, snd.created_at, snd.r2_key, snd.source_video_id,
+             u.id AS author_id, u.username AS author_username, u.display_name AS author_display_name,
+             u.avatar_key AS author_avatar_key
+      FROM sounds snd JOIN users u ON u.id = snd.author_user_id
+      WHERE snd.id = ?
+    `).bind(soundMatch[1]).first();
+    if (!sound) return err("Sound not found", 404);
+
+    const { results } = await env.DB.prepare(
+      FEED_SQL + " WHERE v.sound_id = ? ORDER BY v.created_at DESC LIMIT 60"
+    ).bind(user?.id || "", user?.id || "", sound.id).all();
+
+    return json({
+      sound: {
+        id: sound.id,
+        title: sound.title,
+        uses: sound.uses,
+        audioUrl: `/api/media/${sound.r2_key}`,
+        author: {
+          id: sound.author_id, username: sound.author_username,
+          displayName: sound.author_display_name,
+          avatarUrl: sound.author_avatar_key ? `/api/media/${sound.author_avatar_key}` : null,
+        },
+      },
+      videos: results.map(shapeVideo),
+    });
   }
 
   // ----- repost -----

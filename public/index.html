@@ -90,6 +90,13 @@
      so the sound row and the scrubber visually collided. Lifting the
      overlay clears the scrub bar entirely. */
   .overlay { bottom: 118px; }
+
+  /* design-5.css's .sound-disc sits at bottom:88px, right in the scrub bar's
+     own band (84-106px) and under it in stacking order (.scrub has an
+     explicit z-index, the disc doesn't) — the same collision as above, this
+     time on the right edge. Raised to clear it, roughly where the rail's
+     own bottom edge (132px) leaves room. */
+  .sound-disc { bottom: 146px; }
 </style>
 </head>
 <body>
@@ -112,7 +119,7 @@ const app = document.getElementById("app");
 const I = {
   heart: `<svg width="29" height="29" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21.2l7.8-7.7 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>`,
   comment: `<svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 8.4-9 8.5 8.5 0 0 1 8.6 8.5z"/></svg>`,
-  repost: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h12l-3-3M20 16H8l3 3"/></svg>`,
+  repost: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
   share: `<svg width="25" height="25" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M2 21 22 12 2 3l0 7 13 2-13 2z"/></svg>`,
   search: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>`,
   gear: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H7a1.7 1.7 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V7a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>`,
@@ -215,7 +222,14 @@ let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: nu
               viewUser: null, chatWith: null, followList: null, unreadCount: 0,
               // Kept apart from `videos` so opening a profile feed doesn't
               // wipe the main feed you'll scroll back into.
-              userVideos: [], startAt: 0 };
+              userVideos: [], startAt: 0,
+              // Set only when a video was opened via a ?s= share link, so
+              // userFeedPage can show who sent it. Cleared once shown.
+              sharedBy: null,
+              // A sound picked on a sound page's "Use this sound", carried
+              // into the upload flow. Cleared after posting or leaving upload.
+              selectedSound: null,
+              soundId: null };
 
 // ---------- feed ----------
 function slide(v) {
@@ -234,7 +248,9 @@ function slide(v) {
         </div>
         ${v.repostOf ? `<p style="color:#bbb;font-size:12px;margin:0 0 4px">reposted @${esc(v.repostOf.username)}</p>` : ""}
         <p class="caption">${esc(v.caption || "")}</p>
-        <p class="sound"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${v.user.username}`)}</span></p>
+        ${v.soundId
+          ? `<button class="sound is-link" data-sound="${v.soundId}"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${v.user.username}`)}</span></button>`
+          : `<p class="sound"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${v.user.username}`)}</span></p>`}
       </div>
       <div class="rail">
         <button class="like ${v.liked ? "liked" : ""}">${I.heart}<span class="n">${fmt(v.counts.likes)}</span></button>
@@ -245,6 +261,7 @@ function slide(v) {
         ${mine ? "" : `<button class="gift">${I.gift}<span class="n">${fmt(v.giftCoins || 0)}</span></button>`}
       </div>
       <i class="pause-glyph"></i>
+      ${v.soundId ? `<button class="sound-disc" data-sound="${v.soundId}">${v.thumbUrl ? `<img src="${v.thumbUrl}" alt="">` : "♪"}</button>` : ""}
       <div class="scrub" data-video="${v.id}">
         <i class="scrub-fill"></i>
         <i class="scrub-knob"></i>
@@ -459,6 +476,15 @@ function slide(v) {
     e.stopPropagation();
     if (!store.token) return toast("Log in to send gifts");
     openGifts(v, el);
+  });
+
+  el.querySelectorAll("[data-sound]").forEach(t => {
+    t.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.page = "sound";
+      state.soundId = t.dataset.sound;
+      render();
+    });
   });
 
   return el;
@@ -1067,6 +1093,15 @@ function uploadPage() {
   // Two steps: "camera" (record or pick) then "post" (describe and publish).
   const el = $(`<div class="page" style="padding:0;background:#000"></div>`);
 
+  // Consumed once — carried from a sound page's "Use this sound", stays
+  // active across Retake within this same visit, cleared on post or exit.
+  let sound = state.selectedSound;
+  state.selectedSound = null;
+  if (sound && !canCaptureSound()) {
+    sound = null;
+    toast("This browser can't record with a picked sound — recording with your mic instead");
+  }
+
   let stream = null;
   let recorder = null;
   let chunks = [];
@@ -1075,11 +1110,13 @@ function uploadPage() {
   let ticker = null;
   let startedAt = 0;
   let captured = null;       // { blob, url, duration }
+  let soundEl = null;        // hidden <audio> playing `sound`, only while recording with one
 
   const stop = () => {
     if (recorder && recorder.state !== "inactive") recorder.stop();
     stream?.getTracks().forEach(t => t.stop());
     stream = null;
+    soundEl?.pause();
     clearInterval(ticker);
   };
 
@@ -1117,6 +1154,18 @@ function uploadPage() {
         <button data-v="private">Only me</button>
       </div>
 
+      ${sound ? `
+        <p style="font-size:13px;color:var(--muted);margin-top:16px">🎵 Using sound: ${esc(sound.title)}</p>
+      ` : `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px">
+          <div>
+            <p style="margin:0;font-size:14px">Allow others to use this sound</p>
+            <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">Off by default — your call, not ours</p>
+          </div>
+          <div class="switch" id="soundShareable"><i></i></div>
+        </div>
+      `}
+
       <div style="display:flex;gap:10px;margin-top:24px">
         <button id="retake" style="flex:1;border:1px solid var(--border);border-radius:10px;padding:14px 0;color:var(--muted);font-size:14px;font-weight:600">
           Retake
@@ -1143,6 +1192,10 @@ function uploadPage() {
       vis.querySelectorAll("button").forEach(x => x.classList.remove("on"));
       b.classList.add("on");
       visibility = b.dataset.v;
+    });
+
+    el.querySelector("#soundShareable")?.addEventListener("click", (e) => {
+      e.currentTarget.classList.toggle("on");
     });
 
     // First frame becomes the poster, so the feed isn't blank before playback.
@@ -1176,6 +1229,8 @@ function uploadPage() {
         fd.append("video", captured.blob, "video.webm");
         fd.append("caption", el.querySelector("#caption").value.trim());
         fd.append("visibility", visibility);
+        if (sound) fd.append("soundId", sound.id);
+        else fd.append("soundShareable", el.querySelector("#soundShareable")?.classList.contains("on") ? "1" : "0");
         if (captured.duration) fd.append("duration", captured.duration);
         if (thumb) {
           fd.append("thumbnail", thumb.blob, "thumb.jpg");
@@ -1247,6 +1302,16 @@ function uploadPage() {
           0:00
         </div>
 
+        ${sound ? `
+          <div id="soundStrip" style="position:absolute;bottom:148px;left:50%;transform:translateX(-50%);
+            background:rgba(0,0,0,.55);border-radius:20px;padding:6px 8px 6px 14px;display:flex;align-items:center;gap:8px;
+            z-index:2;max-width:80%;white-space:nowrap">
+            <span style="color:#fff;font-size:12px;overflow:hidden;text-overflow:ellipsis">🎵 ${esc(sound.title)}</span>
+            <button id="clearSound" style="width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,.2);color:#fff;
+              font-size:14px;line-height:1;display:grid;place-items:center;flex-shrink:0">×</button>
+          </div>
+        ` : ""}
+
         <div style="position:absolute;bottom:0;left:0;right:0;padding-bottom:22px;z-index:2">
           <div id="modes" style="display:flex;justify-content:center;gap:18px;margin-bottom:16px">
             ${[["10m", 600], ["60s", 60], ["15s", 15]].map(([l, s]) =>
@@ -1283,6 +1348,24 @@ function uploadPage() {
     el.querySelector("#gallery").onclick = () => file.click();
     el.querySelector("#pickInstead").onclick = () => file.click();
 
+    // Preloaded here (rather than lazily when recording starts) so its audio
+    // track is actually decoding data by the time captureStream() is called
+    // — call captureStream() before the element has anything to give and it
+    // can hand back a track with nothing on it.
+    if (sound) {
+      soundEl = new Audio(sound.audioUrl);
+      soundEl.loop = true;
+      soundEl.preload = "auto";
+      soundEl.load();
+    }
+    el.querySelector("#clearSound")?.addEventListener("click", () => {
+      soundEl?.pause();
+      soundEl = null;
+      sound = null;
+      el.querySelector("#soundStrip")?.remove();
+      start();
+    });
+
     el.querySelectorAll(".mode").forEach(b => b.onclick = () => {
       el.querySelectorAll(".mode").forEach(x => {
         x.classList.remove("on");
@@ -1299,6 +1382,15 @@ function uploadPage() {
     file.onchange = () => {
       const f = file.files[0];
       if (!f) return;
+      // A gallery file already has its own audio track — the chosen sound
+      // only ever gets mixed into a live camera recording, so carrying it
+      // over here would tag this video with a sound it doesn't actually have.
+      if (sound) {
+        soundEl?.pause();
+        soundEl = null;
+        sound = null;
+        toast("Picked from gallery — that clip keeps its own sound");
+      }
       const url = URL.createObjectURL(f);
       const probe = document.createElement("video");
       probe.src = url; probe.muted = true;
@@ -1328,7 +1420,10 @@ function uploadPage() {
         stream?.getTracks().forEach(t => t.stop());
         stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: facing, width: { ideal: 1080 }, height: { ideal: 1920 } },
-          audio: true,
+          // A chosen sound replaces the mic entirely, same as TikTok — the
+          // recording's audio track comes from beginRecording()'s captureStream
+          // of `sound`, not the room.
+          audio: !sound,
         });
         cam.srcObject = stream;
         // Selfie view is mirrored, as every camera app does
@@ -1354,12 +1449,27 @@ function uploadPage() {
       // Pick a container the browser actually supports
       const types = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
       const mime = types.find(t => MediaRecorder.isTypeSupported(t)) || "";
-      recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+
+      // With a sound selected, the recorded stream is the camera's video
+      // track plus the sound's own audio track (captured off the preloaded
+      // <audio>), not the camera stream's audio — there isn't one, since
+      // start() requested audio:false in that case.
+      let recordStream = stream;
+      if (sound && soundEl) {
+        soundEl.currentTime = 0;
+        soundEl.play().catch(() => {});
+        const capture = soundEl.captureStream || soundEl.mozCaptureStream;
+        const soundStream = capture.call(soundEl);
+        recordStream = new MediaStream([...stream.getVideoTracks(), ...soundStream.getAudioTracks()]);
+      }
+
+      recorder = new MediaRecorder(recordStream, mime ? { mimeType: mime } : undefined);
 
       recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
       recorder.onstop = () => {
         clearInterval(ticker);
         timer.style.display = "none";
+        soundEl?.pause();
         const blob = new Blob(chunks, { type: chunks[0]?.type || "video/webm" });
         const duration = (Date.now() - startedAt) / 1000;
         if (blob.size < 1000) { toast("That clip was too short"); return; }
@@ -1901,12 +2011,24 @@ function profilePage() {
 // The feed you land in after tapping a thumbnail on someone's profile.
 // Same slides as the main feed — no second video player to keep in sync.
 function userFeedPage() {
+  // Consumed once: if this page is left and reopened some other way (e.g.
+  // tapping a profile video), the attribution from the last share link
+  // shouldn't reappear.
+  const sharedBy = state.sharedBy;
+  state.sharedBy = null;
+
   const el = $(`
     <div class="page" style="padding:0;background:#000">
       <button id="back" style="position:absolute;top:16px;left:16px;z-index:6;width:36px;height:36px;
         border-radius:50%;background:rgba(0,0,0,.45);color:#fff;display:grid;place-items:center">
         ${I.back}
       </button>
+      ${sharedBy ? `
+        <div style="position:absolute;top:16px;left:60px;right:16px;z-index:6;display:flex;align-items:center;gap:8px;
+          background:rgba(0,0,0,.45);border-radius:20px;padding:6px 12px 6px 6px;width:fit-content">
+          <div class="av" style="width:24px;height:24px;background:var(--raised);font-size:11px">${avatarInner(sharedBy)}</div>
+          <span style="color:#fff;font-size:12px">Shared by <b>${esc(sharedBy.displayName || sharedBy.username)}</b></span>
+        </div>` : ""}
       <div class="feed" id="uf"></div>
     </div>
   `);
@@ -1926,6 +2048,67 @@ function userFeedPage() {
     const target = feed.children[state.startAt || 0];
     if (target) feed.scrollTop = target.offsetTop;
     observePlayback();
+  });
+
+  return el;
+}
+
+// True only when the browser can turn a playing <audio>/<video> element into
+// a MediaStream — what lets "Use this sound" replace the mic with the
+// chosen track while recording. Missing on some browsers (older iOS Safari).
+const canCaptureSound = () => {
+  const a = document.createElement("audio");
+  return typeof a.captureStream === "function" || typeof a.mozCaptureStream === "function";
+};
+
+function soundPage() {
+  const id = state.soundId;
+  const el = $(`<div class="page" style="padding:0"><div class="spin"></div></div>`);
+  if (!id) { state.page = null; render(); return el; }
+
+  api(`/sounds/${id}`).then(r => {
+    const { sound, videos } = r;
+    el.style.padding = "16px 20px 100px";
+    el.innerHTML = `
+      <div class="pagehead"><button id="back">${I.back}</button><h2>Sound</h2></div>
+      <div class="sound-head">
+        <div class="sound-cover">${videos[0]?.thumbUrl ? `<img src="${videos[0].thumbUrl}" alt="">` : "♪"}</div>
+        <div class="sound-meta">
+          <p class="sound-title">${esc(sound.title)}</p>
+          <p class="sound-author">${esc(sound.author.displayName || sound.author.username)}</p>
+          <p class="sound-uses">${fmt(sound.uses + 1)} video${sound.uses ? "s" : ""}</p>
+        </div>
+      </div>
+      ${store.token ? `
+        <button class="btn-primary use-sound" ${canCaptureSound() ? "" : "disabled"}>Use this sound</button>
+        ${canCaptureSound() ? "" : `<p style="font-size:12px;color:var(--muted);margin:-14px 0 20px">
+          This browser can't record with a picked sound yet — try Chrome or Firefox.</p>`}
+      ` : ""}
+      <div class="grid">${videos.map((v, i) => `
+        <div class="cell tap-cell" data-i="${i}">
+          ${v.thumbUrl ? `<img src="${v.thumbUrl}">` : `<video src="${v.videoUrl}#t=0.1" muted playsinline preload="metadata"></video>`}
+        </div>`).join("")}</div>
+      ${!videos.length ? `<p class="empty">Only the original video uses this sound so far.</p>` : ""}
+    `;
+
+    el.querySelector("#back").onclick = () => history.back();
+    el.querySelector(".use-sound")?.addEventListener("click", () => {
+      state.selectedSound = { id: sound.id, title: sound.title, audioUrl: sound.audioUrl };
+      state.page = "upload";
+      render();
+    });
+    el.querySelectorAll(".cell[data-i]").forEach(cell => {
+      cell.onclick = () => {
+        state.userVideos = videos;
+        state.startAt = parseInt(cell.dataset.i);
+        state.page = "userfeed";
+        render();
+      };
+    });
+  }).catch(e => {
+    el.style.padding = "16px 20px 100px";
+    el.innerHTML = `<div class="pagehead"><button id="back">${I.back}</button><h2>Sound</h2></div><p class="empty">${esc(e.message)}</p>`;
+    el.querySelector("#back").onclick = () => history.back();
   });
 
   return el;
@@ -3105,6 +3288,7 @@ function renderInner() {
   if (state.page === "follow-list") { app.appendChild(followListPage()); return; }
   if (state.page === "wallet") { app.appendChild(walletPage()); return; }
   if (state.page === "wallet-history") { app.appendChild(walletHistoryPage()); return; }
+  if (state.page === "sound") { app.appendChild(soundPage()); return; }
   if (state.page === "search") { app.appendChild(searchPage()); attachNav(app, "search"); return; }
   if (state.page === "notifications") { app.appendChild(notificationsPage()); return; }
 
@@ -3165,11 +3349,20 @@ function renderInner() {
 // else's profile still lights "Me" off).
 // Fetches one video by id and opens it as a standalone single-slide feed —
 // what a notification tap and a push-notification deep link both land on.
-async function openVideoById(id) {
+// shareId, when present, is the ?s= token from a share link — resolved
+// separately so a bad/expired token can't stop the video itself from opening.
+async function openVideoById(id, shareId) {
   try {
     const r = await api(`/videos/${id}`);
     state.userVideos = [r.video];
     state.startAt = 0;
+    state.sharedBy = null;
+    if (shareId) {
+      try {
+        const s = await api(`/shares/${shareId}`);
+        if (s.videoId === id) state.sharedBy = s.sharedBy;
+      } catch {}
+    }
     state.page = "userfeed";
     render();
   } catch {
@@ -3389,7 +3582,7 @@ document.addEventListener("visibilitychange", () => {
   const pathVideoMatch = /^\/v\/([\w-]+)$/.exec(location.pathname);
   const deepLinkParams = new URLSearchParams(location.search);
   if (store.token && pathVideoMatch) {
-    openVideoById(pathVideoMatch[1]);
+    openVideoById(pathVideoMatch[1], deepLinkParams.get("s"));
     history.replaceState(snapshotState(), "", "/");
   } else if (store.token && handleDeepLink(deepLinkParams)) {
     // Keep whatever entry render() just tracked — only the URL's query
