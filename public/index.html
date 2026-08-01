@@ -72,6 +72,24 @@
   }
   .speed-opt .dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #D8D8DA; }
   .speed-opt .dot.on { border-color: #FF3040; background: #FF3040; }
+
+  /* design.css set the liked heart to a plain white fill; this app wants the
+     classic red so "liked" reads at a glance instead of blending into the
+     outlined state. */
+  .liked svg { fill: #FF3040; stroke: #FF3040; }
+
+  /* Mobile browsers treat a fast second tap as a zoom gesture by default,
+     which can eat the second tap before our own double-tap timer ever sees
+     it — the heart-burst then silently never fires. Turning that native
+     gesture off on the slide is what makes the double-tap reliable. */
+  .slide { touch-action: manipulation; }
+
+  /* Adding the sound row (design-5.css section D) gave the overlay a third
+     line, but .overlay's bottom offset (88px) was set for two lines — its
+     bottom edge landed inside the scrub bar's own band (bottom 84-106px),
+     so the sound row and the scrubber visually collided. Lifting the
+     overlay clears the scrub bar entirely. */
+  .overlay { bottom: 118px; }
 </style>
 </head>
 <body>
@@ -412,9 +430,16 @@ function slide(v) {
 
   el.querySelector(".shr").addEventListener("click", async (e) => {
     e.stopPropagation();
+    // e.currentTarget goes null the instant this handler's synchronous part
+    // returns (a Promise, since it's async) — the DOM clears it right after
+    // dispatch. Reading it after the `await` below is exactly the crash from
+    // the screenshot: share always threw here before ever reaching
+    // navigator.share/clipboard, so nothing after this line ever ran.
+    const btn = e.currentTarget;
     try {
       const r = await api(`/videos/${v.id}/share`, { method: "POST" });
-      e.currentTarget.querySelector(".n").textContent = fmt(r.count);
+      const cnt = btn?.querySelector(".n");
+      if (cnt) cnt.textContent = fmt(r.count);
       if (navigator.share) await navigator.share({ url: r.url, title: v.caption || "Video" });
       else { await navigator.clipboard.writeText(r.url); toast("Link copied"); }
     } catch (err) { if (err.name !== "AbortError") toast(err.message); }
