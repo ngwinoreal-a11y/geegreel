@@ -1,0 +1,428 @@
+/* ============================================================================
+   design-5.css — SCRUBBER, RAIL ICONS, SOUND ATTRIBUTION, REMAINING DIVIDERS
+   ============================================================================
+
+   FOR CLAUDE CODE:
+
+   Save at public/design-5.css and link it after design-4.css. This replaces
+   the earlier separate design-5.css and design-6.css — use this single file
+   instead of both.
+
+   I read the deployed Worker before writing the scrubber/rail/sound sections
+   below, so those backend notes are checked, not guessed.
+
+   ---------------------------------------------------------------------------
+   CONTENTS
+     FIRST  A crash to fix before any of this
+     A.     Video progress bar (scrubber)
+     B.     Pause glyph
+     C.     Chunkier rail icons
+     D.     Sound row (label-only today; tappable state needs backend first)
+     E.     Sound page (design only — backend required before shipping)
+     F.     Chat date separators — no flanking lines, label only
+     G.     Settings rows — no divider line, wider padding instead
+   ---------------------------------------------------------------------------
+
+   FIRST: A CRASH TO FIX BEFORE ANY OF THIS
+
+   The screenshots show this over the video, twice:
+
+       Cannot read properties of null (reading 'querySelector')
+
+   Something is calling .querySelector on an element that isn't there. It is
+   almost certainly a handler that reaches for a node from a different screen
+   — most likely the rail or author row running after a re-render replaced
+   them, or a sheet handler firing after the sheet closed.
+
+   That is a real crash, not a cosmetic issue: whatever code came after that
+   line never ran. Fix it first, or the scrubber below will sit inside a
+   broken render path. Guard the lookups:
+
+       const el = root?.querySelector(".rail");
+       if (!el) return;
+
+   and cancel any timer or listener when the element it targets goes away.
+
+   ---------------------------------------------------------------------------
+   WHAT THE BACKEND ALREADY SUPPORTS
+
+     Scrubber, pause, speed   pure client work on the <video> element. No
+                              backend needed. Build freely.
+     Sound LABEL              videos.song is a text column, defaulted at
+                              upload to "Original sound - {username}".
+
+   WHAT DOES NOT EXIST YET (be honest about this)
+
+     A sound LIBRARY. There is no sounds table, no endpoint to list or search
+     sounds, and no link from a sound back to the videos using it. Right now
+     "Original sound - name" is only a caption — text on a row. Nothing is
+     stored that another person could attach to their own upload.
+
+     So the sound row below has two states, and only the first is real today:
+
+       (a) LABEL ONLY      — show the text. Works now.
+       (b) TAPPABLE SOUND  — opens a sound page, "Use this sound" adds it to
+                             an upload. Needs the backend in section E first.
+
+     Ship (a) now. Do not make the row look tappable until (b) exists — a row
+     that looks like a link and does nothing is a small lie repeated on every
+     video.
+   ========================================================================= */
+
+/* ============================================================================
+   TOKENS
+   ========================================================================= */
+:root {
+  --scrub-track: rgba(255,255,255,.28);
+  --scrub-fill:  #fff;
+  --scrub-h:     2.5px;    /* resting height */
+  --scrub-h-lg:  5px;      /* while being dragged */
+}
+
+
+/* ============================================================================
+   A. VIDEO PROGRESS BAR
+   ---------------------------------------------------------------------------
+   MARKUP, inside each .slide:
+
+     <div class="scrub" data-video="{id}">
+       <i class="scrub-fill"></i>
+       <i class="scrub-knob"></i>
+     </div>
+
+   BEHAVIOUR (JS, since CSS can't do it):
+     - set  .scrub-fill { width: (currentTime / duration * 100)% }  on
+       timeupdate. Use requestAnimationFrame, not a 60fps interval.
+     - pointerdown on .scrub  -> add .dragging, pause the video, and start
+       tracking. pointermove -> seek. pointerup -> resume if it was playing.
+     - the touch target is 22px tall even though the line is 2.5px; a 2.5px
+       target is unhittable with a thumb. That is what .scrub's padding is
+       for — do not shrink it.
+     - while dragging, show the time readout (.scrub-time).
+
+   The bar sits ABOVE the nav, not under it, so a thumb reaching for the bar
+   doesn't hit a tab by mistake.
+   ========================================================================= */
+.scrub {
+  position: absolute; left: 0; right: 0; bottom: 84px; z-index: 6;
+  height: 22px;                 /* the touch target */
+  padding: 0 12px;
+  display: flex; align-items: center;
+  touch-action: none;           /* we handle the drag ourselves */
+  cursor: pointer;
+}
+
+/* The visible line. */
+.scrub::before {
+  content: "";
+  position: absolute; left: 12px; right: 12px;
+  height: var(--scrub-h);
+  border-radius: 2px;
+  background: var(--scrub-track);
+  transition: height .18s ease;
+}
+
+.scrub-fill {
+  position: relative;
+  height: var(--scrub-h);
+  border-radius: 2px;
+  background: var(--scrub-fill);
+  width: 0%;
+  transition: height .18s ease;
+  /* No width transition — it must track the video exactly, and an eased
+     width would always lag the frame. */
+}
+
+/* The knob only appears while dragging. A permanent knob on a feed is visual
+   noise on every single video. */
+.scrub-knob {
+  position: absolute;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0,0,0,.5);
+  transform: translateX(-50%) scale(0);
+  transition: transform .16s cubic-bezier(.34,1.56,.64,1);
+  pointer-events: none;
+}
+
+/* Dragging: the bar thickens so the finger has something to see under it. */
+.scrub.dragging::before,
+.scrub.dragging .scrub-fill { height: var(--scrub-h-lg); }
+.scrub.dragging .scrub-knob { transform: translateX(-50%) scale(1); }
+
+/* Time readout, shown only mid-drag, centred above the bar. */
+.scrub-time {
+  position: absolute; bottom: 26px; left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 12px; border-radius: 14px;
+  background: rgba(0,0,0,.72);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  font-family: var(--mono); font-size: 13px; color: #fff;
+  white-space: nowrap;
+  opacity: 0; transition: opacity .16s ease;
+  pointer-events: none;
+}
+.scrub.dragging .scrub-time { opacity: 1; }
+
+/* While scrubbing, dim the chrome so the frame underneath is readable. */
+.slide.scrubbing .overlay,
+.slide.scrubbing .rail { opacity: .25; transition: opacity .18s ease; }
+
+
+/* ============================================================================
+   B. PAUSE GLYPH
+   ---------------------------------------------------------------------------
+   MARKUP:  <i class="pause-glyph"></i>  inside .slide
+            toggle .on when the video is paused by a tap.
+
+   Deliberately faint. The person paused on purpose — they know it is paused,
+   and they are looking at the frame, not at an icon. A loud glyph in the
+   middle of the picture fights the thing they stopped to see.
+
+   It measures ~2.2:1 against a mid-grey frame. That is BELOW the usual icon
+   threshold, and that is the intended choice here: this is decoration
+   confirming a state the person just caused, not information they must read.
+   The state is also carried by the video actually stopping, which is the
+   unmissable signal.
+   ========================================================================= */
+.pause-glyph {
+  position: absolute; top: 50%; left: 50%;
+  width: 62px; height: 62px; margin: -31px 0 0 -31px;
+  z-index: 3;
+  display: grid; place-items: center;
+  opacity: 0; transform: scale(.82);
+  transition: opacity .18s ease, transform .18s cubic-bezier(.34,1.56,.64,1);
+  pointer-events: none;
+}
+.pause-glyph.on { opacity: 1; transform: scale(1); }
+
+/* Two bars, drawn in CSS so there is no icon to load. */
+.pause-glyph::before, .pause-glyph::after {
+  content: "";
+  position: absolute; top: 16px;
+  width: 9px; height: 30px; border-radius: 3px;
+  background: rgba(255,255,255,.55);
+  box-shadow: 0 1px 10px rgba(0,0,0,.45);
+}
+.pause-glyph::before { left: 18px; }
+.pause-glyph::after  { right: 18px; }
+
+
+/* ============================================================================
+   C. CHUNKIER RAIL ICONS
+   ---------------------------------------------------------------------------
+   The reference app's rail reads heavier than ours: thicker strokes, and the
+   share and repost marks are FILLED shapes rather than outlines.
+
+   Two parts to this:
+
+   1) STROKE WEIGHT — set on the SVGs, so it belongs in the icon markup:
+        stroke-width="2.6"  and  stroke-linejoin="round"
+      on the outline icons in the rail. Ours are around 2, which is why they
+      look thin next to the reference.
+
+   2) SOLID SHAPES — share and repost read better filled. Swap the rail's
+      share and repost SVGs for solid paths:
+
+        share  (solid arrow)
+        <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+          <path d="M2 21 22 12 2 3l0 7 13 2-13 2z"/>
+        </svg>
+
+        repost (solid two-arrow loop)
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 8h12l-3-3M20 16H8l3 3"/>
+        </svg>
+
+      Keep the ••• as three real dots, sized up — see .rail .more below.
+
+   The counts under them get the mono face and a little more weight, since a
+   number set in a text face beside a heavy icon looks accidental.
+
+   ---------------------------------------------------------------------------
+   QA CHECK — VERIFY BEFORE SHIPPING
+
+   While building a preview of this rail, the share button was the one icon
+   with no click handler wired to it — every other rail button (like, comment,
+   repost, gift) had one, share didn't. It's an easy slot to miss because the
+   button still looks complete: icon, count, filled shape, all present. Only
+   tapping it reveals nothing happens.
+
+   Confirm the deployed rail's share button actually calls
+   POST /api/videos/:id/share and then shows the "Link copied" toast from
+   section 5 of design-4.css — not just that the icon renders.
+   ========================================================================= */
+.rail button svg { stroke-width: 2.6; stroke-linejoin: round; }
+
+/* Filled marks don't want a stroke width at all. */
+.rail .shr svg, .rail .like.liked svg { stroke: none; }
+
+.rail .n {
+  font-family: var(--mono);
+  font-size: 12px; font-weight: 500;
+  text-shadow: 0 1px 6px rgba(0,0,0,.7);
+}
+
+/* The ••• is three drawn dots — chunky, evenly spaced, and a real target. */
+.rail .more {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  width: 34px; height: 34px;
+}
+.rail .more i {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0,0,0,.6);
+}
+
+/* Everything in the rail gets the same drop shadow so it survives a bright
+   frame without a scrim behind it. */
+.rail button svg { filter: drop-shadow(0 1px 6px rgba(0,0,0,.55)); }
+
+
+/* ============================================================================
+   D. SOUND ROW
+   ---------------------------------------------------------------------------
+   STATE (a) — LABEL ONLY. Use this now.
+     <p class="sound"><i class="sound-note">♪</i>
+        <span class="sound-name">Original sound · khing_bassey</span></p>
+
+   Not a button, no chevron, no disc — because tapping it does nothing yet.
+
+   STATE (b) — TAPPABLE. Only once section C's backend exists.
+     <button class="sound is-link"> … <i class="sound-disc"></i> </button>
+
+   The marquee: only scroll the text if it actually overflows. Measure it and
+   add .scrolls. Text that slides for no reason is motion tax on every video.
+   ========================================================================= */
+.sound {
+  display: flex; align-items: center; gap: 7px;
+  margin: 6px 0 0; padding: 0;
+  max-width: 100%; min-width: 0;
+  font-size: 13px; color: #fff;
+  text-shadow: 0 1px 8px rgba(0,0,0,.7);
+  background: none; border: none;
+}
+.sound-note { flex-shrink: 0; font-size: 12px; opacity: .9; }
+
+.sound-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Only when the JS has measured an overflow. */
+.sound.scrolls .sound-name {
+  text-overflow: clip;
+  animation: marquee 12s linear infinite;
+}
+@keyframes marquee {
+  0%, 12%   { transform: translateX(0); }
+  88%, 100% { transform: translateX(calc(-100% + 180px)); }
+}
+
+/* State (b) only: the spinning disc that means "this sound is a place you
+   can go". Never show it in state (a). */
+.sound.is-link { cursor: pointer; }
+.sound-disc {
+  position: absolute; right: 12px; bottom: 88px;
+  width: 46px; height: 46px; border-radius: 50%;
+  background: linear-gradient(145deg,#2a2a2e,#111);
+  border: 3px solid rgba(255,255,255,.14);
+  display: grid; place-items: center;
+  animation: spin-disc 7s linear infinite;
+  overflow: hidden;
+}
+.sound-disc img { width: 100%; height: 100%; object-fit: cover; }
+@keyframes spin-disc { to { transform: rotate(360deg); } }
+
+/* Paused video, paused disc — they are the same thing. */
+.slide.paused .sound-disc { animation-play-state: paused; }
+
+
+/* ============================================================================
+   E. SOUND PAGE — design for state (b)
+   ---------------------------------------------------------------------------
+   BACKEND REQUIRED FIRST. What it needs, minimally:
+
+     sounds table        id, title, author_user_id, r2_key (the audio),
+                         original_video_id, created_at, uses INTEGER
+     videos.sound_id     a real foreign key, alongside the existing text
+     GET  /api/sounds/:id        -> the sound + its videos
+     GET  /api/sounds/search?q=  -> browse when picking one
+     POST /api/videos            -> accept sound_id on upload
+
+   And one decision that is not technical: taking the audio off someone's
+   video and handing it to everyone is a rights question. The safe version is
+   to let a creator opt in — a "let others use this sound" switch at upload,
+   default off. Do not enable reuse silently for every video ever posted.
+
+   MARKUP:
+     <div class="sound-head">
+       <div class="sound-cover"> … </div>
+       <div class="sound-meta">
+         <p class="sound-title">Original sound</p>
+         <p class="sound-author">khing_bassey</p>
+         <p class="sound-uses">1.2K videos</p>
+       </div>
+     </div>
+     <button class="btn-primary use-sound">Use this sound</button>
+   ========================================================================= */
+.sound-head { display: flex; gap: 14px; padding: 4px 0 18px; }
+.sound-cover {
+  width: 88px; height: 88px; border-radius: 10px;
+  background: var(--raised); flex-shrink: 0;
+  display: grid; place-items: center; overflow: hidden;
+}
+.sound-cover img { width: 100%; height: 100%; object-fit: cover; }
+
+.sound-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.sound-title  { margin: 0; font-family: var(--display); font-weight: 700; font-size: 17px; }
+.sound-author { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.sound-uses   { margin: 6px 0 0; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+.use-sound { margin-bottom: 20px; }
+
+
+/* ============================================================================
+   F. CHAT DATE SEPARATOR
+   ---------------------------------------------------------------------------
+   design-3.css drew a line on each side of the day label:
+
+       .day-sep::before, .day-sep::after { content:""; flex:1; height:1px; … }
+
+   Remove those lines; keep the label centred with the same vertical rhythm,
+   so "Monday" still reads as a break between days — just without the ruled
+   line either side of it.
+   ========================================================================= */
+.day-sep::before, .day-sep::after {
+  content: none;
+}
+.day-sep {
+  justify-content: center;
+  margin: 20px 0 12px;   /* a bit more room now that a line isn't doing the
+                            separating — the gap has to carry it alone */
+}
+
+
+/* ============================================================================
+   G. SETTINGS ROWS
+   ---------------------------------------------------------------------------
+   Two spots in Settings currently end in a bottom border: the Private-account
+   row (label + sub-label on the left, a toggle switch on the right), and each
+   row in the account list below it — Wallet, Log out, Delete account (icon +
+   label + chevron, full width).
+
+   I don't have the real class names for these two rows from the live
+   markup, so rather than guess and risk a selector that matches nothing:
+   find the border-bottom on those two row types in the settings page and
+   remove it, then add the padding back below so the rows keep visible
+   rhythm without a line doing the separating. If they don't already share a
+   class, give them one — e.g. .settings-row — so this fix (and any future
+   one) targets both with a single rule instead of two separate edits.
+
+   Once that class is in place:
+   ========================================================================= */
+.settings-row {
+  border-bottom: none;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}

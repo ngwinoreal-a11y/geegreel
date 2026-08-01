@@ -1,0 +1,561 @@
+/* ============================================================================
+   design.css — THE DESIGN SOURCE OF TRUTH FOR THIS APP
+   ============================================================================
+
+   FOR CLAUDE CODE / ANY DEVELOPER READING THIS:
+
+   This file owns every visual decision in the app: colour, type, spacing,
+   shape, motion, and component appearance. It is maintained separately from
+   application logic and is replaced wholesale when the design changes.
+
+   HOW TO WIRE IT UP (do this once):
+     1. Save this file at:  public/design.css
+     2. In public/index.html, DELETE the entire inline <style>...</style>
+        block in <head>, and replace it with this single line:
+
+            <link rel="stylesheet" href="/design.css">
+
+     3. Change nothing else. Every class name below already matches the
+        markup the app renders, so no HTML or JS needs to change.
+
+   RULES GOING FORWARD:
+     - Do NOT add new CSS to index.html, and do NOT add inline style=""
+       attributes for anything visual. If a new element needs styling, add a
+       class here instead. Keeping design in one file is the whole point.
+     - When a new design version of this file arrives, replace this file
+       entirely. Do not merge by hand.
+     - Logic, data, routing, and API code stay in index.html / src/index.js.
+       This file never contains behaviour.
+
+   ---------------------------------------------------------------------------
+   CONTENTS
+     1. Tokens .................. colour, type, motion values
+     2. Base .................... reset, page shell
+     3. Motion .................. press feedback, keyframes, reduced motion
+     4. Feed .................... video slides, caption, action rail, author
+     5. Chrome .................. top bar, feed tabs
+     6. Bottom nav .............. tab pill + round action button
+     7. Pages ................... page shell, headings, forms, rows
+     8. Sheets .................. comment sheet, gift sheet, backdrop
+     9. Comments ................ comment rows, replies, reactions
+    10. Profile, lists, gifts ... stats, follow buttons, gift grid, coin packs
+    11. Bits ................... toast, grid, spinner, empty states
+   ========================================================================= */
+
+
+/* ============================================================================
+   1. TOKENS
+   Change a value here and it moves everywhere it is used. Prefer editing
+   these over hard-coding a colour further down.
+   ========================================================================= */
+:root {
+  /* --- Surfaces (the app body is near-black; chrome floats white on top) --- */
+  --bg:            #000;      /* app background */
+  --surface:       #121212;   /* cards, inputs, seg buttons */
+  --raised:        #1C1C1C;   /* avatars, grid cells */
+  --border:        #2C2C2E;   /* hairlines */
+
+  /* --- Text --- */
+  --text:          #fff;
+  --muted:         #8E8E93;   /* secondary text, labels */
+  --faint:         #5C5C5E;   /* tertiary */
+
+  /* --- Floating chrome (white pills that sit over video) --- */
+  --chrome:        #fff;
+  --chip:          #F0EBE0;
+  --on-chrome:     #111;
+  --on-chrome-muted: #8A8A8E;
+
+  /* Secondary text on a WHITE sheet (comment names, timestamps, Reply).
+     #8A8A8E only reaches 3.4:1 on white, which is genuinely hard to read at
+     12–13px; this darker grey reaches 5.1:1 and still stays quiet. */
+  --on-sheet-muted: #6E6E73;
+
+  /* --- Accent: the amber used for the active nav tab ---------------------
+     Amber is light, so white or light text on it is unreadable. Anything
+     placed ON the accent uses near-black (--on-accent). Accent text on a
+     dark surface is fine as-is. */
+  --accent:        #F5A623;
+  --accent-soft:   #3A3A3C;   /* the sliding highlight behind the active tab */
+  --accent-ink:    #F5A623;   /* accent used as text/icon colour */
+  --on-accent:     #111;      /* text/icons placed on top of --accent */
+
+  /* --- Dark nav chrome (nav pill + round button) --- */
+  --nav-bg:        #1C1C1E;
+  --nav-inactive:  #9A9A9E;
+
+  /* --- Type ------------------------------------------------------------
+     display = headings and usernames; sans = everything else;
+     mono = numbers (counts, durations, money) so digits line up. */
+  --sans:    'Inter', system-ui, sans-serif;
+  --display: 'Space Grotesk', system-ui, sans-serif;
+  --mono:    'IBM Plex Mono', monospace;
+
+  /* --- Motion ----------------------------------------------------------
+     Every duration sits between .18s and .32s: fast enough to feel
+     responsive, slow enough to read as movement. */
+  --press:   .18s cubic-bezier(.34,1.56,.64,1);  /* springy, slight overshoot */
+  --settle:  .28s cubic-bezier(.22,.61,.36,1);   /* decelerating, for arrivals */
+  --slide:   .3s  cubic-bezier(.4,0,.2,1);       /* the nav highlight */
+}
+
+
+/* ============================================================================
+   2. BASE
+   ========================================================================= */
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg);
+  overscroll-behavior: none;
+}
+
+body { font-family: var(--sans); color: var(--text); }
+
+::-webkit-scrollbar { display: none; }
+
+input, textarea { font-family: inherit; }
+
+#app { position: fixed; inset: 0; overflow: hidden; }
+
+
+/* ============================================================================
+   3. MOTION
+   One system, applied globally, so the whole app feels tactile without
+   styling each control individually.
+   ========================================================================= */
+
+/* Every button springs when pressed. */
+button {
+  font-family: inherit; cursor: pointer; border: none; background: none; color: inherit;
+  transition: transform var(--press), opacity .18s ease;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+button:active { transform: scale(.9); opacity: .85; }
+
+/* Things that are tappable but aren't <button> — list rows, grid cells, a
+   username — carry one of these. Large targets press less so a full-width
+   row doesn't lurch; small targets press more. */
+.tap, .tap-sm, .tap-cell {
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: transform var(--press), opacity .15s ease;
+}
+.tap:active      { transform: scale(.97); opacity: .7; }
+.tap-cell:active { transform: scale(.94); opacity: .8; }
+.tap-sm:active   { transform: scale(.9);  opacity: .7; }
+
+/* Round controls squash a little less, so they don't look dented. */
+.fab:active, .navside:active, .me-btn:active { transform: scale(.92); }
+
+/* Shared keyframes. */
+@keyframes pop      { from { transform: scale(.6); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+@keyframes pagein   { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes up       { from { transform: translateY(100%) } to { transform: translateY(0) } }
+@keyframes down     { from { transform: translateY(0) } to { transform: translateY(100%) } }
+@keyframes fadein   { from { opacity: 0 } to { opacity: 1 } }
+@keyframes fadeout  { from { opacity: 1 } to { opacity: 0 } }
+@keyframes toastout { from { opacity: 1; transform: translate(-50%, 0) } to { opacity: 0; transform: translate(-50%, 8px) } }
+@keyframes sp       { to { transform: rotate(360deg) } }
+@keyframes fly {
+  0%   { transform: translateX(-50%) scale(.4);                    opacity: 0 }
+  25%  { transform: translateX(-50%) scale(1.25);                  opacity: 1 }
+  60%  { transform: translateX(-50%) translateY(-40px) scale(1);   opacity: 1 }
+  100% { transform: translateX(-50%) translateY(-180px) scale(.7); opacity: 0 }
+}
+
+/* Anyone who has asked their device for less animation gets a still
+   interface. This is not optional polish — motion sensitivity is real. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+
+/* ============================================================================
+   4. FEED
+   Full-screen video slides, snap-scrolled.
+   ========================================================================= */
+
+/* Snap hard and settle immediately — the browser's default smooth easing is
+   what makes a feed feel sluggish. */
+.feed {
+  height: 100%; overflow-y: scroll;
+  scroll-snap-type: y mandatory; scroll-behavior: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain; scroll-snap-stop: always;
+}
+
+.slide {
+  height: 100%; position: relative; background: #000;
+  scroll-snap-align: start; scroll-snap-stop: always;
+  contain: layout paint;
+}
+
+/* Video keeps its own aspect ratio: 9:16 fills edge to edge, other ratios
+   letterbox against black. */
+.slide video {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; background: #000;
+}
+.slide.cover video { object-fit: cover; }
+
+/* Caption sits on the video, clear of the rail and the nav. */
+.overlay {
+  position: absolute; left: 16px; right: 88px; bottom: 88px; z-index: 2;
+  text-shadow: 0 1px 8px rgba(0,0,0,.7);
+}
+.caption { font-size: 14px; line-height: 1.4; margin: 0; }
+
+/* Right-hand action rail: like, comment, repost, share, gift. */
+.rail {
+  position: absolute; right: 12px; bottom: 132px; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; gap: 20px;
+}
+.rail button { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.rail .n { font-family: var(--mono); font-size: 12px; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
+.liked svg { fill: #fff; }
+
+.avatar {
+  width: 46px; height: 46px; border-radius: 50%; background: var(--raised);
+  border: 2px solid #000; display: grid; place-items: center;
+  font-family: var(--display); font-weight: 700; font-size: 15px;
+}
+
+/* Author line: avatar, name, Follow pill. */
+.author { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+.author .aav {
+  width: 52px; height: 52px; border-radius: 50%; background: var(--raised);
+  border: 2px solid rgba(255,255,255,.95); display: grid; place-items: center;
+  font-family: var(--display); font-weight: 700; font-size: 19px; color: #fff;
+  overflow: hidden; flex-shrink: 0; cursor: pointer; padding: 0;
+}
+.author .aav img { width: 100%; height: 100%; object-fit: cover; }
+.author .aname { font-weight: 600; font-size: 15px; color: #fff; }
+.author .follow-btn {
+  border: none; border-radius: 6px; padding: 5px 14px;
+  font-size: 13px; font-weight: 600; color: #111; background: #fff; flex-shrink: 0;
+}
+.author .follow-btn.done { background: rgba(255,255,255,.18); color: rgba(255,255,255,.75); }
+
+
+/* ============================================================================
+   5. CHROME — top bar and feed tabs
+   ========================================================================= */
+.topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 16px 0; pointer-events: none;
+}
+.topbar > * { pointer-events: auto; }
+
+.me-btn {
+  width: 46px; height: 46px; border-radius: 50%; background: var(--chrome);
+  color: var(--on-chrome); font-family: var(--display); font-weight: 700; font-size: 17px;
+  overflow: hidden; padding: 0; display: grid; place-items: center;
+}
+
+/* Any avatar circle that is showing a real photo. */
+.me-btn img, .avatar img, .av img, .bigav img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.avatar, .av, .bigav { overflow: hidden; }
+
+.chrome-pill {
+  display: flex; align-items: center; gap: 2px;
+  background: var(--chrome); border-radius: 20px; padding: 3px 5px;
+}
+.chrome-pill button {
+  width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; color: var(--on-chrome);
+}
+
+/* For you / Following, over the video. */
+.tabs {
+  position: absolute; top: 56px; left: 0; right: 0; z-index: 5;
+  display: flex; justify-content: center; gap: 24px;
+}
+.tabs button {
+  font-family: var(--display); font-weight: 700; font-size: 15px;
+  color: rgba(255,255,255,.55); padding-bottom: 6px;
+  border-bottom: 2px solid transparent; text-shadow: 0 1px 6px rgba(0,0,0,.5);
+}
+.tabs button.on { color: #fff; border-bottom-color: #fff; }
+
+
+/* ============================================================================
+   6. BOTTOM NAV
+   A dark pill holding two tabs, with a lighter highlight sliding behind the
+   active one, plus a separate round button whose job follows the tab.
+   ========================================================================= */
+.nav {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 12;
+  padding: 0 14px 16px;
+  display: flex; align-items: center; gap: 12px; pointer-events: none;
+}
+.nav > * { pointer-events: auto; }
+
+.navpill {
+  position: relative; flex: 1; height: 62px; background: var(--nav-bg);
+  border-radius: 31px; padding: 5px; box-shadow: 0 4px 24px rgba(0,0,0,.35);
+}
+
+/* The highlight slides between the two halves. */
+.chip {
+  position: absolute; top: 5px; bottom: 5px; width: calc(50% - 5px);
+  background: var(--accent-soft); border-radius: 26px;
+  transition: left var(--slide), opacity .2s ease;
+}
+
+.navrow { position: relative; display: flex; height: 100%; }
+.navrow button {
+  flex: 1; height: 100%; position: relative; z-index: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; color: var(--nav-inactive); transition: color .25s;
+  background: none; border: none; cursor: pointer;
+}
+.navrow button.on { color: var(--accent-ink); }
+.navrow button svg { transition: transform .25s cubic-bezier(.34,1.56,.64,1); }
+.navrow button.on svg { transform: translateY(-1px) scale(1.1); }
+.navrow button span { font-size: 10px; font-weight: 500; }
+.navrow button.on span { font-weight: 600; }
+
+/* Round button beside the pill: post on the feed, add friend in messages. */
+.fab {
+  width: 62px; height: 62px; border-radius: 50%; background: var(--nav-bg);
+  display: grid; place-items: center; color: #fff; flex-shrink: 0;
+  box-shadow: 0 4px 24px rgba(0,0,0,.35);
+}
+.fab svg { animation: pop .28s ease; }
+
+
+/* ============================================================================
+   7. PAGES — shell, headings, forms, list rows
+   ========================================================================= */
+.page {
+  position: absolute; inset: 0; background: var(--bg); z-index: 10;
+  overflow-y: auto; padding: 16px 20px 100px;
+  animation: pagein var(--settle);
+}
+.page h2 { font-family: var(--display); font-size: 18px; margin: 0; }
+
+/* Page title row. Sticky so it stays put while the body scrolls. */
+.pagehead {
+  position: sticky; top: -16px; z-index: 3; background: var(--bg);
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 0 12px; margin-bottom: 12px;
+}
+
+.field {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
+}
+.field input {
+  background: none; border: none; outline: none;
+  color: var(--text); font-size: 14px; width: 100%;
+}
+
+.btn-primary {
+  width: 100%; background: #fff; color: #000; border-radius: 10px;
+  padding: 14px 0; font-weight: 600; font-size: 15px;
+}
+.btn-primary:disabled { opacity: .5; }
+
+/* People rows — search results, message threads, follower lists.
+   Deliberately no divider line: spacing separates them. */
+.row { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.row .av {
+  width: 44px; height: 44px; border-radius: 50%; background: var(--raised);
+  border: 1px solid var(--border); display: grid; place-items: center;
+  font-family: var(--display); font-weight: 700;
+}
+
+/* Settings controls. */
+.switch {
+  width: 44px; height: 26px; border-radius: 13px; background: var(--border);
+  position: relative; transition: background .2s; flex-shrink: 0;
+}
+.switch.on { background: #fff; }
+.switch i {
+  position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
+  border-radius: 50%; background: #666; transition: left .2s, background .2s;
+}
+.switch.on i { left: 21px; background: #000; }
+
+.seg { display: flex; gap: 6px; }
+.seg button {
+  flex: 1; padding: 8px 0; border-radius: 8px; font-size: 12px; font-weight: 600;
+  background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+}
+.seg button.on { background: #fff; color: #000; border-color: #fff; }
+
+.sect {
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .5px;
+}
+.lbl { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+
+.save-bar {
+  position: sticky; bottom: 0; background: var(--bg);
+  padding: 12px 0 0; border-top: 1px solid var(--border); margin-top: 20px;
+}
+
+.err { color: #FF6B6B; font-size: 13px; margin: 8px 0 0; }
+
+
+/* ============================================================================
+   8. SHEETS — comments and gifts slide up over the feed
+   ========================================================================= */
+.sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 68%; z-index: 20;
+  background: #fff; border-radius: 14px 14px 0 0;
+  display: flex; flex-direction: column;
+  animation: up .32s cubic-bezier(.22,.61,.36,1);
+  box-shadow: 0 -8px 40px rgba(0,0,0,.35);
+}
+
+/* Dim layer behind a sheet, so what's underneath recedes. */
+.sheet-backdrop {
+  position: absolute; inset: 0; z-index: 19;
+  background: rgba(0,0,0,.4); animation: fadein .32s ease;
+}
+
+.sheet-head {
+  padding: 14px 16px; border-bottom: 1px solid #EDEDED;
+  display: flex; justify-content: center; align-items: center; position: relative;
+}
+.sheet-head .title { font-size: 14px; font-weight: 600; color: #111; }
+.sheet-head .x { position: absolute; right: 14px; color: #111; display: flex; }
+
+.sheet-body { flex: 1; overflow-y: auto; padding: 4px 0 8px; }
+
+.sheet-foot {
+  padding: 10px 12px; border-top: 1px solid #EDEDED;
+  display: flex; gap: 8px; align-items: center; background: #fff;
+}
+.sheet-foot input {
+  flex: 1; background: #F1F1F2; border: none; border-radius: 20px;
+  padding: 11px 16px; color: #111; outline: none; font-size: 14px;
+}
+.sheet-foot input::placeholder { color: var(--on-sheet-muted); }
+.sheet-foot .send {
+  background: #111; color: #fff; border-radius: 20px;
+  padding: 0 16px; height: 38px; font-weight: 600; font-size: 13px;
+}
+.sheet-foot .send:disabled { background: #D8D8DA; color: #fff; }
+
+
+/* ============================================================================
+   9. COMMENTS
+   ========================================================================= */
+.cmt-row { display: flex; gap: 10px; padding: 10px 16px; }
+.cmt-row .cav {
+  width: 36px; height: 36px; border-radius: 50%; background: #E4E4E6; flex-shrink: 0;
+  display: grid; place-items: center; overflow: hidden;
+  font-family: var(--display); font-weight: 700; font-size: 13px; color: #55555A;
+}
+.cmt-row .cav img { width: 100%; height: 100%; object-fit: cover; }
+.cmt-name { font-size: 13px; color: var(--on-sheet-muted); margin: 0 0 2px; }
+.cmt-body { font-size: 14px; color: #111; margin: 0; line-height: 1.35; word-break: break-word; }
+
+.cmt-meta { display: flex; align-items: center; gap: 14px; margin-top: 5px; }
+.cmt-meta span, .cmt-meta button { font-size: 12px; color: var(--on-sheet-muted); }
+.cmt-meta .reply { font-weight: 600; }
+
+.cmt-react { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 2px; }
+.cmt-react button { display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--on-sheet-muted); }
+.cmt-react .cnt { font-size: 11px; color: var(--on-sheet-muted); }
+.cmt-react .on { color: #111; }
+.cmt-react .on svg { fill: #111; }
+
+/* Replies indent under their parent; threads stay one level deep. */
+.replies { padding-left: 46px; }
+.more-replies { font-size: 12px; color: var(--on-sheet-muted); font-weight: 600; padding: 4px 16px 10px 62px; }
+
+.replying {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 16px; background: #F6F6F7; font-size: 12px; color: #55555A;
+}
+
+
+/* ============================================================================
+   10. PROFILE, LISTS, GIFTS
+   These elements currently get their look from inline style="" attributes in
+   index.html. Their appearance now lives here instead.
+
+   CLAUDE CODE — when wiring this file up, remove the inline style="" from
+   these specific elements so these rules take effect (leave the class names
+   and every data-* attribute exactly as they are, JS depends on them):
+       .stat        .foll-btn        .gg        .pack
+   Everything else in index.html can be left alone.
+   ========================================================================= */
+
+/* Profile stats: Following / Followers / Likes.
+   The numbers are the point, so they are set large in the mono face; the
+   label underneath stays quiet. Following and Followers are buttons that
+   open a list; Likes is a plain total. */
+.stat {
+  text-align: center; background: none; border: none;
+  padding: 4px 8px; cursor: pointer;
+}
+.statn {
+  font-family: var(--mono); font-size: 22px; font-weight: 600;
+  color: var(--text); margin: 0;
+}
+.statl { font-size: 13px; color: var(--muted); margin: 3px 0 0; }
+
+/* Follow button inside follower / following lists. */
+.foll-btn {
+  border: none; border-radius: 8px; padding: 7px 16px;
+  font-size: 13px; font-weight: 600;
+  background: #fff; color: #000;
+}
+.foll-btn.done { background: rgba(255,255,255,.15); color: var(--text); }
+
+/* Gift sheet: a 4-up grid of gifts. */
+.gg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.gg button {
+  background: #F6F6F7; border: 1px solid #EDEDED; border-radius: 10px;
+  padding: 10px 4px; display: flex; flex-direction: column;
+  align-items: center; gap: 3px;
+}
+.gg .emoji { font-size: 24px; line-height: 1; }
+.gg .cost { font-family: var(--mono); font-size: 11px; color: var(--on-sheet-muted); }
+
+/* Coin pack row in the wallet. */
+.pack {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px; margin-bottom: 8px;
+}
+
+
+/* ============================================================================
+   11. BITS — toast, grid, spinner, empty state
+   ========================================================================= */
+.toast {
+  position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
+  background: rgba(255,255,255,.95); color: #000;
+  padding: 10px 16px; border-radius: 20px;
+  font-size: 13px; font-weight: 500; z-index: 30; animation: pop .2s ease;
+}
+
+/* Profile video grid. */
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.grid .cell {
+  aspect-ratio: 9/14; border-radius: 6px; overflow: hidden;
+  background: var(--raised); position: relative;
+}
+.grid .cell video, .grid .cell img { width: 100%; height: 100%; object-fit: cover; }
+
+.spin {
+  width: 28px; height: 28px; border: 2px solid var(--border); border-top-color: #fff;
+  border-radius: 50%; animation: sp .7s linear infinite; margin: 40px auto;
+}
+
+/* An empty screen is an invitation to act — the copy should say what to do. */
+.empty { text-align: center; color: var(--muted); font-size: 14px; padding: 60px 20px; }

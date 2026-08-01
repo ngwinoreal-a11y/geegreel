@@ -5,130 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Video App</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/design.css">
+<link rel="stylesheet" href="/design-2.css">
+<link rel="stylesheet" href="/design-3.css">
+<link rel="stylesheet" href="/design-4.css">
+<link rel="stylesheet" href="/design-5.css">
 <style>
-  :root {
-    --bg: #000; --surface: #121212; --raised: #1C1C1C; --border: #2C2C2E;
-    --text: #fff; --muted: #8E8E93; --faint: #5C5C5E;
-    --chrome: #fff; --chip: #F0EBE0; --on-chrome: #111; --on-chrome-muted: #8A8A8E;
-    --accent: #F5A623; --accent-soft: #3A3A3C; --accent-ink: #F5A623;
-    --sans: 'Inter', system-ui, sans-serif;
-    --display: 'Space Grotesk', system-ui, sans-serif;
-    --mono: 'IBM Plex Mono', monospace;
-  }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; height: 100%; background: #000; overscroll-behavior: none; }
-  body { font-family: var(--sans); color: var(--text); }
-  ::-webkit-scrollbar { display: none; }
-  button {
-    font-family: inherit; cursor: pointer; border: none; background: none; color: inherit;
-    /* Every button springs slightly when pressed. One rule, so the whole app
-       feels tactile without touching each button. The overshoot easing gives
-       a gentle bounce back rather than a flat snap. */
-    transition: transform .18s cubic-bezier(.34,1.56,.64,1), opacity .18s ease;
-    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
-  }
-  button:active { transform: scale(.9); opacity: .85; }
+  /* design-4.css's --sk-base (#1C1C1C) on this app's pure #000 page is too
+     close in value — on a real screen it reads as "nothing loaded" rather
+     than a skeleton, which is exactly the "blank feed" complaint. A style
+     block placed after the design files (same specificity as their :root,
+     later in source) is what actually wins here — editing their file isn't. */
+  :root { --sk-base: #302F35; --sk-lift: #46454C; }
 
-  /* Non-button things that are tappable — list rows, grid cells, an author
-     name — carry .tap to get the same feedback. Rows press less than buttons
-     (0.97) so a full-width row doesn't lurch; small targets press more. */
-  .tap { transition: transform .18s cubic-bezier(.34,1.56,.64,1), opacity .15s ease;
-         -webkit-tap-highlight-color: transparent; cursor: pointer; }
-  .tap:active { transform: scale(.97); opacity: .7; }
-  .tap-sm:active { transform: scale(.9); opacity: .7; }
-  .tap-sm { cursor: pointer; -webkit-tap-highlight-color: transparent;
-            transition: transform .18s cubic-bezier(.34,1.56,.64,1), opacity .15s ease; }
-  .tap-cell { transition: transform .18s cubic-bezier(.34,1.56,.64,1), opacity .15s ease;
-              -webkit-tap-highlight-color: transparent; cursor: pointer; }
-  .tap-cell:active { transform: scale(.94); opacity: .8; }
-  /* Round/icon buttons squash a touch less so they don't look dented. */
-  .fab:active, .navside:active, .me-btn:active { transform: scale(.92); }
-
-  /* Anyone who's asked their system to reduce motion gets none of it. */
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-      animation-duration: .01ms !important; animation-iteration-count: 1 !important;
-      transition-duration: .01ms !important;
-    }
-  }
-  input, textarea { font-family: inherit; }
-
-  #app { position: fixed; inset: 0; overflow: hidden; }
-
-  /* Feed: each video fills the viewport, snap-scrolled like TikTok */
-  /* Snap hard and settle immediately — the browser's default smooth easing
-     is what makes a feed feel sluggish. proximity + fast deceleration lands
-     on the next video the moment the flick ends. */
-  .feed {
-    height: 100%;
-    overflow-y: scroll;
-    scroll-snap-type: y mandatory;
-    scroll-behavior: auto;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior-y: contain;
-    scroll-snap-stop: always;
-    /* Every other screen (.page) eases in with this same fade-up; the feed
-       and messages/home surface skip .page and were snapping in instantly —
-       the "jump" switching tabs into it. */
-    animation: pagein var(--settle);
-  }
-  .slide {
-    height: 100%;
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
-    position: relative;
-    background: #000;
-    contain: layout paint;
-  }
-
-  /* The video keeps its own aspect ratio and covers the frame — 9:16 sources
-     fill edge to edge, other ratios letterbox against black, as on TikTok. */
-  .slide video {
-    position: absolute; inset: 0; width: 100%; height: 100%;
-    object-fit: contain; background: #000;
-  }
-  .slide.cover video { object-fit: cover; }
-
-  /* Caption sits ON the video, above the nav */
-  .overlay {
-    position: absolute; left: 16px; right: 88px; bottom: 88px; z-index: 2;
-    text-shadow: 0 1px 8px rgba(0,0,0,.7);
-  }
-  .caption { font-size: 14px; line-height: 1.4; margin: 0; }
-
-  .rail {
-    position: absolute; right: 12px; bottom: 132px; z-index: 2;
-    display: flex; flex-direction: column; align-items: center; gap: 20px;
-  }
-  .rail button { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-  .rail .n { font-family: var(--mono); font-size: 12px; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
-  .avatar {
-    width: 46px; height: 46px; border-radius: 50%; background: var(--raised);
-    border: 2px solid #000; display: grid; place-items: center;
-    font-family: var(--display); font-weight: 700; font-size: 15px;
-  }
-  /* Author line: avatar, name, then a Follow pill beside it */
-  .author {
-    display: flex; align-items: center; gap: 8px; margin: 0 0 6px;
-  }
-  .author .aav {
-    width: 52px; height: 52px; border-radius: 50%; background: var(--raised);
-    border: 2px solid rgba(255,255,255,.95); display: grid; place-items: center;
-    font-family: var(--display); font-weight: 700; font-size: 19px; color: #fff;
-    overflow: hidden; flex-shrink: 0; cursor: pointer; padding: 0;
-  }
-  .author .aav img { width: 100%; height: 100%; object-fit: cover; }
-  .author .aname { font-weight: 600; font-size: 15px; color: #fff; }
-  .author .follow-btn {
-    border: none; border-radius: 6px;
-    padding: 5px 14px; font-size: 13px; font-weight: 600;
-    color: #111; background: #fff; flex-shrink: 0;
-  }
-  .author .follow-btn.done { background: rgba(255,255,255,.18); color: rgba(255,255,255,.75); }
-  .liked svg { fill: #FF3040; stroke: #FF3040; }
-
-  /* Heart-burst: the big heart that pops on the video and fades, from a
-     double-tap or a like-button tap — same delight either way. */
+  /* These have no counterpart in design.css / design-2..5.css — they're this
+     app's own additions, kept here rather than invented into the design
+     files. design.css's "delete the inline block entirely" instruction would
+     have silently dropped the double-tap heart animation, the comment
+     sheet's shrink-to-clip video, ad slide sizing, the white message-inbox
+     theme, and the speed/report sub-sheets, so they're preserved as-is. */
   .heart-burst {
     position: absolute; z-index: 6; pointer-events: none;
     left: 0; top: 0; transform: translate(-50%,-50%) scale(.3); opacity: 0;
@@ -142,9 +37,6 @@
     100% { transform: translate(-50%,-50%) scale(1); opacity: 0; }
   }
 
-  /* While the comment sheet is open, the video shrinks into a small clip up
-     top instead of being hidden — the point of a comment sheet is to talk
-     about the video, not lose it. */
   .slide.commenting .overlay, .slide.commenting .rail {
     opacity: 0; pointer-events: none; transition: opacity .2s ease;
   }
@@ -156,72 +48,17 @@
     transition: all .28s cubic-bezier(.22,.61,.36,1);
   }
 
-  /* An ad slide reuses the feed's full-bleed frame; design-2.css styles
-     .sponsor-tag / .author-name / .cta inside the normal .overlay. */
   .ad-slide img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
   .ad-slide video { object-fit: cover; }
 
-  /* Top bar */
-  .topbar {
-    position: absolute; top: 0; left: 0; right: 0; z-index: 5;
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 16px 16px 0; pointer-events: none;
-  }
-  .topbar > * { pointer-events: auto; }
-  .me-btn {
-    width: 46px; height: 46px; border-radius: 50%; background: var(--chrome);
-    color: var(--on-chrome); font-family: var(--display); font-weight: 700; font-size: 17px;
-    overflow: hidden; padding: 0; display: grid; place-items: center;
-  }
-  /* Any avatar circle showing a real photo */
-  .me-btn img, .avatar img, .av img, .bigav img {
-    width: 100%; height: 100%; object-fit: cover; display: block;
-  }
-  .avatar, .av, .bigav { overflow: hidden; }
-  .switch {
-    width: 44px; height: 26px; border-radius: 13px; background: var(--border);
-    position: relative; transition: background .2s; flex-shrink: 0;
-  }
-  .switch.on { background: #fff; }
-  .switch i {
-    position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
-    border-radius: 50%; background: #666; transition: left .2s, background .2s;
-  }
-  .switch.on i { left: 21px; background: #000; }
-  .seg { display: flex; gap: 6px; }
-  .seg button {
-    flex: 1; padding: 8px 0; border-radius: 8px; font-size: 12px; font-weight: 600;
-    background: var(--surface); border: 1px solid var(--border); color: var(--muted);
-  }
-  .seg button.on { background: #fff; color: #000; border-color: #fff; }
-  .sect { font-size: 12px; font-weight: 600; color: var(--muted); margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .5px; }
-  .lbl { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
-  .save-bar {
-    position: sticky; bottom: 0; background: var(--bg); padding: 12px 0 0;
-    border-top: 1px solid var(--border); margin-top: 20px;
-  }
-  .chrome-pill { display: flex; align-items: center; gap: 1px; background: #1C1C1E; border-radius: 27px; padding: 3px; box-shadow: 0 4px 24px rgba(0,0,0,.35); }
-  .chrome-pill button { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; color: #9A9A9E; position: relative; }
-  .chrome-pill button:active { color: var(--accent); }
-  /* .badge/.badge.dot and .notif/.notif-av/etc. now come from design-2.css. */
-
-  /* Inbox: white, like TikTok's — a deliberate break from the app's dark
-     theme, same as the comment sheet already does.
-     Double-classed selector so it wins over .page regardless of source
-     order — a same-specificity tie between the two, declared in the wrong
-     order, is exactly what silently kept the inbox black before. */
+  /* Inbox: white, like TikTok's — a deliberate break from the app's dark theme. */
   .page.msgs-page { background: #fff; color: #000; }
   .msgs-page h2 { color: #000; }
   .thread-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid #F0F0F0; }
   .tav { position: relative; width: 52px; height: 52px; flex-shrink: 0; border-radius: 50%; overflow: hidden;
     background: #E4E4E6; display: grid; place-items: center; font-family: var(--display); font-weight: 700; color: #55555A; }
   .tav img { width: 100%; height: 100%; object-fit: cover; }
-  /* design-2.css's .has-dot .dot rings itself in var(--bg) (black) — right for
-     the dark chat header, wrong on the white inbox list. Scoped fix, not a
-     change to their file. */
   .msgs-page .has-dot .dot { box-shadow: 0 0 0 2.5px #fff; }
-  /* design-4.css only flips its skeleton to the light pair inside .sheet;
-     the inbox is white but isn't a .sheet, so it needs the same flip. */
   .msgs-page .sk { background: var(--sk-sheet); }
   .msgs-page .sk::after { background: linear-gradient(90deg, transparent 0%, var(--sk-sheet-lift) 50%, transparent 100%); }
   .thread-name { margin: 0; font-size: 15px; font-weight: 600; color: #111; }
@@ -229,188 +66,12 @@
   .thread-row.unread .thread-preview { color: #111; font-weight: 600; }
   .thread-time { font-size: 11px; color: #8A8A8E; flex-shrink: 0; }
 
-  .tabs {
-    position: absolute; top: 56px; left: 0; right: 0; z-index: 5;
-    display: flex; justify-content: center; gap: 24px;
-  }
-  .tabs button {
-    font-family: var(--display); font-weight: 700; font-size: 15px;
-    color: rgba(255,255,255,.55); padding-bottom: 6px; border-bottom: 2px solid transparent;
-    text-shadow: 0 1px 6px rgba(0,0,0,.5);
-  }
-  .tabs button.on { color: #fff; border-bottom-color: #fff; }
-
-  /* Bottom nav */
-  .nav {
-    position: absolute; bottom: 0; left: 0; right: 0; z-index: 12;
-    padding: 0 14px 16px; display: flex; align-items: center; gap: 12px; pointer-events: none;
-  }
-  .nav > * { pointer-events: auto; }
-  .navpill {
-    position: relative; flex: 1; height: 62px; background: #1C1C1E;
-    border-radius: 31px; padding: 5px; box-shadow: 0 4px 24px rgba(0,0,0,.35);
-  }
-  /* A lighter dark rounded highlight slides behind the active tab, exactly like
-     the Alarm app's selected-tab pill. */
-  .chip {
-    position: absolute; top: 5px; bottom: 5px; width: calc(50% - 5px);
-    background: #3A3A3C; border-radius: 26px;
-    transition: left .3s cubic-bezier(.4,0,.2,1);
-  }
-  .navrow { position: relative; display: flex; height: 100%; }
-  .navrow button {
-    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; color: #9A9A9E; transition: color .25s; height: 100%;
-    background: none; border: none; cursor: pointer; position: relative; z-index: 1;
-  }
-  /* Active tab: amber, like the Alarm tab. */
-  .navrow button.on { color: var(--accent); }
-  .navrow button svg { transition: transform .25s cubic-bezier(.34,1.56,.64,1); }
-  .navrow button.on svg { transform: translateY(-1px) scale(1.1); }
-  .navrow button span { font-size: 10px; font-weight: 500; }
-  .navrow button.on span { font-weight: 600; }
-  .fab {
-    width: 62px; height: 62px; border-radius: 50%; background: #1C1C1E;
-    display: grid; place-items: center; color: #fff; flex-shrink: 0;
-    box-shadow: 0 4px 24px rgba(0,0,0,.35);
-  }
-  .fab svg { animation: pop .28s ease; }
-  @keyframes pop { from { transform: scale(.6); opacity: 0 } to { transform: scale(1); opacity: 1 } }
-
-  /* Sheets & pages */
-  .page {
-    position: absolute; inset: 0; background: var(--bg); z-index: 10; overflow-y: auto;
-    padding: 16px 20px 100px;
-    /* Pages ease in from slightly below and faded, rather than snapping in.
-       The distance is small (12px) so it reads as a settle, not a slide. */
-    animation: pagein .28s cubic-bezier(.22,.61,.36,1);
-  }
-  @keyframes pagein {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  .page h2 { font-family: var(--display); font-size: 18px; margin: 0; }
-  .pagehead { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
-
-  .field {
-    display: flex; align-items: center; gap: 10px; background: var(--surface);
-    border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
-  }
-  .field input { background: none; border: none; outline: none; color: var(--text); font-size: 14px; width: 100%; }
-  .btn-primary {
-    width: 100%; background: #fff; color: #000; border-radius: 10px;
-    padding: 14px 0; font-weight: 600; font-size: 15px;
-  }
-  .btn-primary:disabled { opacity: .5; }
-  .row { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
-  .row .av { width: 44px; height: 44px; border-radius: 50%; background: var(--raised); border: 1px solid var(--border); display: grid; place-items: center; font-family: var(--display); font-weight: 700; }
-  .err { color: #FF6B6B; font-size: 13px; margin: 8px 0 0; }
-
-  /* Comment sheet — white, like TikTok's */
-  .sheet {
-    position: absolute; left: 0; right: 0; bottom: 0; height: 68%; z-index: 20;
-    background: #fff; border-radius: 14px 14px 0 0;
-    display: flex; flex-direction: column;
-    /* Decelerating ease so the sheet arrives softly instead of stopping dead. */
-    animation: up .32s cubic-bezier(.22,.61,.36,1);
-    box-shadow: 0 -8px 40px rgba(0,0,0,.35);
-    /* Lets the keyboard-avoidance JS slide the sheet up smoothly rather than
-       jumping the moment the keyboard's resize event fires. */
-    transition: transform .15s ease-out;
-  }
-  /* A dim layer fades in behind any sheet, so the content behind recedes. */
-  .sheet-backdrop {
-    position: absolute; inset: 0; z-index: 19; background: rgba(0,0,0,.4);
-    animation: fadein .32s ease;
-  }
-  @keyframes up { from { transform: translateY(100%) } to { transform: translateY(0) } }
-  @keyframes down { from { transform: translateY(0) } to { transform: translateY(100%) } }
-  @keyframes fadein { from { opacity: 0 } to { opacity: 1 } }
-  @keyframes fadeout { from { opacity: 1 } to { opacity: 0 } }
-  @keyframes toastout { from { opacity: 1; transform: translate(-50%, 0) } to { opacity: 0; transform: translate(-50%, 8px) } }
-  @keyframes fly {
-    0%   { transform: translateX(-50%) scale(.4); opacity: 0 }
-    25%  { transform: translateX(-50%) scale(1.25); opacity: 1 }
-    60%  { transform: translateX(-50%) translateY(-40px) scale(1); opacity: 1 }
-    100% { transform: translateX(-50%) translateY(-180px) scale(.7); opacity: 0 }
-  }
-  .sheet-head {
-    padding: 14px 16px; border-bottom: 1px solid #EDEDED;
-    display: flex; justify-content: center; align-items: center; position: relative;
-  }
-  .sheet-head .title { font-size: 14px; font-weight: 600; color: #111; }
-  .sheet-head .x { position: absolute; right: 14px; color: #111; display: flex; }
-  .sheet-body { flex: 1; overflow-y: auto; padding: 4px 0 8px; }
-  .sheet-foot {
-    padding: 10px 12px; border-top: 1px solid #EDEDED;
-    display: flex; gap: 8px; align-items: center; background: #fff;
-  }
-  .sheet-foot input {
-    flex: 1; background: #F1F1F2; border: none; border-radius: 20px;
-    padding: 11px 16px; color: #111; outline: none; font-size: 14px;
-  }
-  .sheet-foot input::placeholder { color: #8A8A8E; }
-  .sheet-foot .send {
-    background: #111; color: #fff; border-radius: 20px; padding: 0 16px;
-    height: 38px; font-weight: 600; font-size: 13px;
-  }
-  .sheet-foot .send:disabled { background: #D8D8DA; color: #fff; }
-
-  .cmt-row { display: flex; gap: 10px; padding: 10px 16px; }
-  .cmt-row .cav {
-    width: 36px; height: 36px; border-radius: 50%; background: #E4E4E6; flex-shrink: 0;
-    display: grid; place-items: center; overflow: hidden;
-    font-family: var(--display); font-weight: 700; font-size: 13px; color: #55555A;
-  }
-  .cmt-row .cav img { width: 100%; height: 100%; object-fit: cover; }
-  .cmt-name { font-size: 13px; color: #8A8A8E; margin: 0 0 2px; }
-  .cmt-body { font-size: 14px; color: #111; margin: 0; line-height: 1.35; word-break: break-word; }
-  .cmt-meta { display: flex; align-items: center; gap: 14px; margin-top: 5px; }
-  .cmt-meta span, .cmt-meta button { font-size: 12px; color: #8A8A8E; }
-  .cmt-meta .reply { font-weight: 600; }
-  .cmt-react { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 2px; }
-  .cmt-react button { display: flex; flex-direction: column; align-items: center; gap: 3px; color: #8A8A8E; }
-  .cmt-react .cnt { font-size: 11px; color: #8A8A8E; }
-  .cmt-react .on { color: #111; }
-  .cmt-react .on svg { fill: #111; }
-  .replies { padding-left: 46px; }
-  .more-replies { font-size: 12px; color: #8A8A8E; font-weight: 600; padding: 4px 16px 10px 62px; }
-  .replying {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 6px 16px; background: #F6F6F7; font-size: 12px; color: #55555A;
-  }
-
-  /* .opt-grid/.opt/.opt-ic now come from design-3.css. Speed and report
-     sub-sheets stay here — they're this app's own, not in the design files. */
   .speed-opt, .report-reason {
     display: flex; justify-content: space-between; align-items: center; width: 100%;
     padding: 14px 16px; font-size: 15px; color: #111; border-bottom: 1px solid #EDEDED; text-align: left;
   }
   .speed-opt .dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #D8D8DA; }
   .speed-opt .dot.on { border-color: #FF3040; background: #FF3040; }
-
-  .toast {
-    position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%);
-    background: rgba(255,255,255,.95); color: #000; padding: 10px 16px; border-radius: 20px;
-    font-size: 13px; font-weight: 500; z-index: 30; animation: pop .2s ease;
-  }
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
-  .grid .cell { aspect-ratio: 9/14; border-radius: 6px; overflow: hidden; background: var(--raised); position: relative; }
-  .grid .cell video, .grid .cell img { width: 100%; height: 100%; object-fit: cover; }
-  .spin { width: 28px; height: 28px; border: 2px solid var(--border); border-top-color: #fff; border-radius: 50%; animation: sp .7s linear infinite; margin: 40px auto; }
-  @keyframes sp { to { transform: rotate(360deg) } }
-  .empty { text-align: center; color: var(--muted); font-size: 14px; padding: 60px 20px; }
-</style>
-<link rel="stylesheet" href="/design-2.css">
-<link rel="stylesheet" href="/design-3.css">
-<link rel="stylesheet" href="/design-4.css">
-<style>
-  /* design-4.css's --sk-base (#1C1C1C) on this app's pure #000 page is too
-     close in value — on a real screen it reads as "nothing loaded" rather
-     than a skeleton, which is exactly the "blank feed" complaint. A style
-     block placed after the design files (same specificity as their :root,
-     later in source) is what actually wins here — editing their file isn't. */
-  :root { --sk-base: #302F35; --sk-lift: #46454C; }
 </style>
 </head>
 <body>
@@ -433,8 +94,8 @@ const app = document.getElementById("app");
 const I = {
   heart: `<svg width="29" height="29" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21.2l7.8-7.7 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>`,
   comment: `<svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 8.4-9 8.5 8.5 0 0 1 8.6 8.5z"/></svg>`,
-  repost: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
-  share: `<svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>`,
+  repost: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h12l-3-3M20 16H8l3 3"/></svg>`,
+  share: `<svg width="25" height="25" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M2 21 22 12 2 3l0 7 13 2-13 2z"/></svg>`,
   search: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>`,
   gear: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H7a1.7 1.7 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V7a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>`,
   mail: `<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 6l-10 7L2 6"/></svg>`,
@@ -555,14 +216,21 @@ function slide(v) {
         </div>
         ${v.repostOf ? `<p style="color:#bbb;font-size:12px;margin:0 0 4px">reposted @${esc(v.repostOf.username)}</p>` : ""}
         <p class="caption">${esc(v.caption || "")}</p>
+        <p class="sound"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${v.user.username}`)}</span></p>
       </div>
       <div class="rail">
         <button class="like ${v.liked ? "liked" : ""}">${I.heart}<span class="n">${fmt(v.counts.likes)}</span></button>
         <button class="cmt">${I.comment}<span class="n">${fmt(v.counts.comments)}</span></button>
         <button class="rep">${I.repost}<span class="n">${fmt(v.counts.reposts)}</span></button>
         <button class="shr">${I.share}<span class="n">${fmt(v.counts.shares)}</span></button>
-        <button class="more">${I.dots}</button>
+        <button class="more"><i></i><i></i><i></i></button>
         ${mine ? "" : `<button class="gift">${I.gift}<span class="n">${fmt(v.giftCoins || 0)}</span></button>`}
+      </div>
+      <i class="pause-glyph"></i>
+      <div class="scrub" data-video="${v.id}">
+        <i class="scrub-fill"></i>
+        <i class="scrub-knob"></i>
+        <span class="scrub-time"></span>
       </div>
     </div>
   `);
@@ -604,12 +272,79 @@ function slide(v) {
     if (ratio < 0.62) el.classList.add("cover");
   });
 
+  // The pause glyph tracks the video's actual state, not just the tap that
+  // caused it — autoplay policies and the feed's own scroll-driven pausing
+  // both stop playback without going through the tap handler.
+  const pauseGlyph = el.querySelector(".pause-glyph");
+  video.addEventListener("pause", () => pauseGlyph.classList.add("on"));
+  video.addEventListener("play", () => pauseGlyph.classList.remove("on"));
+
+  // Only scroll the sound name if it actually overflows its row — text that
+  // slides for no reason is motion tax on every video.
+  const soundName = el.querySelector(".sound-name");
+  requestAnimationFrame(() => {
+    if (soundName && soundName.scrollWidth > soundName.clientWidth) {
+      soundName.closest(".sound")?.classList.add("scrolls");
+    }
+  });
+
+  // ---- scrubber: drag-to-seek ----
+  const scrub = el.querySelector(".scrub");
+  const scrubFill = el.querySelector(".scrub-fill");
+  const scrubTime = el.querySelector(".scrub-time");
+  const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+  let rafId = null;
+  const tickFill = () => {
+    if (video.duration) scrubFill.style.width = `${(video.currentTime / video.duration) * 100}%`;
+    rafId = requestAnimationFrame(tickFill);
+  };
+  video.addEventListener("play", () => { if (!rafId) rafId = requestAnimationFrame(tickFill); });
+  video.addEventListener("pause", () => { cancelAnimationFrame(rafId); rafId = null; });
+  video.addEventListener("emptied", () => { cancelAnimationFrame(rafId); rafId = null; });
+
+  let wasPlaying = false;
+  const seekFromEvent = (e) => {
+    const rect = scrub.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left - 12) / (rect.width - 24)));
+    if (video.duration) {
+      video.currentTime = ratio * video.duration;
+      scrubFill.style.width = `${ratio * 100}%`;
+      scrubTime.textContent = fmtTime(video.currentTime);
+    }
+  };
+  scrub.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    scrub.setPointerCapture(e.pointerId);
+    wasPlaying = !video.paused;
+    video.pause();
+    scrub.classList.add("dragging");
+    el.classList.add("scrubbing");
+    seekFromEvent(e);
+  });
+  scrub.addEventListener("pointermove", (e) => {
+    if (!scrub.classList.contains("dragging")) return;
+    seekFromEvent(e);
+  });
+  const endDrag = (e) => {
+    if (!scrub.classList.contains("dragging")) return;
+    scrub.classList.remove("dragging");
+    el.classList.remove("scrubbing");
+    if (wasPlaying) video.play().catch(() => {});
+  };
+  scrub.addEventListener("pointerup", endDrag);
+  scrub.addEventListener("pointercancel", endDrag);
+  // Cancel the rAF loop if this slide is torn down mid-drag — a listener
+  // still ticking against a removed video is exactly the kind of dangling
+  // handler that leads to a null-element crash later.
+  video.addEventListener("emptied", () => scrub.classList.remove("dragging"));
+
   // Single tap plays/pauses; a second tap inside the window is a double-tap
   // that likes the video and pops a heart where the finger landed — the
   // single-tap action waits briefly to see if a second tap is coming.
   let tapTimer = null;
   el.addEventListener("click", (e) => {
-    if (e.target.closest(".rail") || e.target.closest(".author")) return;
+    if (e.target.closest(".rail") || e.target.closest(".author") || e.target.closest(".scrub")) return;
     if (tapTimer) {
       clearTimeout(tapTimer); tapTimer = null;
       const rect = el.getBoundingClientRect();
@@ -1736,7 +1471,7 @@ function settingsPage() {
       <p class="err" id="perr" style="display:none"></p>
 
       <p class="sect">Privacy</p>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)">
+      <div class="settings-row" style="display:flex;align-items:center;justify-content:space-between">
         <div>
           <p style="margin:0;font-size:14px">Private account</p>
           <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">Only approved followers see your videos</p>
@@ -1764,7 +1499,7 @@ function settingsPage() {
         ["notifyComments", "Comments"],
         ["notifyFollows", "New followers"],
       ].map(([k, label]) => `
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)">
+        <div class="settings-row" style="display:flex;align-items:center;justify-content:space-between">
           <span style="font-size:14px">${label}</span>
           <div class="switch ${u[k] ? "on" : ""}" data-k="${k}"><i></i></div>
         </div>`).join("")}
@@ -2016,7 +1751,7 @@ function profilePage() {
       <div style="display:flex;justify-content:center;gap:28px;margin-bottom:22px">
         ${[["Following", r.stats.following, "following"], ["Followers", r.stats.followers, "followers"], ["Likes", r.stats.likes, null]]
           .map(([l, n, kind]) => kind
-            ? `<button class="stat tap" data-kind="${kind}" style="text-align:center;background:none;border:none;padding:4px 8px;cursor:pointer">
+            ? `<button class="stat tap" data-kind="${kind}">
                  <p style="font-family:var(--mono);font-size:22px;font-weight:600;margin:0;color:#fff">${fmt(n)}</p>
                  <p style="font-size:13px;color:var(--muted);margin:3px 0 0">${l}</p>
                </button>`
@@ -2189,10 +1924,7 @@ function followListPage() {
             <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">@${esc(u.username)}</p>
           </div>
           ${u.isSelf ? "" : `
-            <button class="foll-btn tap-sm" data-id="${u.id}" data-on="${u.following}" style="border:none;border-radius:8px;
-              padding:7px 16px;font-size:13px;font-weight:600;
-              background:${u.following ? "rgba(255,255,255,.15)" : "#fff"};
-              color:${u.following ? "#fff" : "#000"}">
+            <button class="foll-btn tap-sm ${u.following ? "done" : ""}" data-id="${u.id}" data-on="${u.following}">
               ${u.following ? "Following" : "Follow"}
             </button>`}
         </div>`).join("")
@@ -2220,8 +1952,7 @@ function followListPage() {
       const paint = (v) => {
         btn.dataset.on = v;
         btn.textContent = v ? "Following" : "Follow";
-        btn.style.background = v ? "rgba(255,255,255,.15)" : "#fff";
-        btn.style.color = v ? "#fff" : "#000";
+        btn.classList.toggle("done", v);
       };
       paint(!on);
       try {
@@ -2456,7 +2187,7 @@ function openGifts(v, slideEl) {
         <span class="bal" style="font-family:var(--mono);font-size:15px;color:#111;font-weight:600">—</span>
       </div>
       <div class="sheet-body" style="padding:14px 12px">
-        <div class="gg" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px"></div>
+        <div class="gg"></div>
       </div>
       <div class="sheet-foot" style="justify-content:center">
         <button class="topup" style="background:none;border:none;color:#111;font-size:13px;font-weight:600;text-decoration:underline">
@@ -2624,9 +2355,7 @@ function walletPage() {
       <div id="packs" style="display:none;margin-bottom:18px">
         <p class="sect" style="margin-top:0">Choose a pack</p>
         ${w.coinPacks.map(p => `
-          <button data-coins="${p.coins}" class="pack" style="width:100%;display:flex;align-items:center;
-            justify-content:space-between;border:1px solid var(--border);border-radius:10px;
-            padding:14px;margin-bottom:8px">
+          <button data-coins="${p.coins}" class="pack">
             <span style="font-size:15px;color:#fff">🪙 ${fmt(p.coins)} coins</span>
             <span style="font-family:var(--mono);font-size:14px;color:var(--muted)">${money(p.cents)}</span>
           </button>`).join("")}
