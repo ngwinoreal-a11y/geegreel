@@ -370,8 +370,8 @@ async function monetizeStats(env, userId) {
 // arbitrary client-supplied strings.
 const INTERESTS = [
   "Music", "Comedy", "Dance", "Sports", "Fashion & Beauty", "Food & Cooking",
-  "Gaming", "Movies & TV", "Travel", "Technology", "Education", "Art & Design",
-  "Fitness", "News", "Animals & Pets", "Family",
+  "Lifestyle", "Gaming", "Movies & TV", "Travel", "Technology", "Education",
+  "Art & Design", "Fitness", "News", "Animals & Pets", "Family",
 ];
 
 // ---------- feed shaping ----------
@@ -568,10 +568,10 @@ async function handle(request, env, ctx) {
     // if someone abandons partway through.
     let interestsJson = null;
     if (interests !== undefined) {
-      if (!Array.isArray(interests) || interests.some(i => typeof i !== "string" || !INTERESTS.includes(i))) {
+      if (!Array.isArray(interests) || interests.length > 5 || interests.some(i => typeof i !== "string" || !INTERESTS.includes(i))) {
         return err("Invalid interests");
       }
-      interestsJson = JSON.stringify(interests.slice(0, 10));
+      interestsJson = JSON.stringify(interests);
     }
 
     const existing = await env.DB.prepare(

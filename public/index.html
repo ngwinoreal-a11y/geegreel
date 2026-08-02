@@ -1106,8 +1106,8 @@ function observePlayback() {
 // a round-trip to fetch it before the picker can even render.
 const INTERESTS = [
   "Music", "Comedy", "Dance", "Sports", "Fashion & Beauty", "Food & Cooking",
-  "Gaming", "Movies & TV", "Travel", "Technology", "Education", "Art & Design",
-  "Fitness", "News", "Animals & Pets", "Family",
+  "Lifestyle", "Gaming", "Movies & TV", "Travel", "Technology", "Education",
+  "Art & Design", "Fitness", "News", "Animals & Pets", "Family",
 ];
 
 const COUNTRIES = [
@@ -1145,14 +1145,16 @@ const COUNTRIES = [
 ];
 
 // ---------- screens ----------
+const MAX_INTERESTS = 5;
+
 function authScreen() {
   let mode = "login";
-  // Signup is a short wizard — username, then email/password, then interests
-  // (optional), then country/city (optional, last) — rather than one long
-  // form. Nothing is sent to the server until the final step submits; if
-  // someone abandons partway through, there's no half-created account to
-  // clean up.
-  const STEPS = ["username", "security", "interests", "location"];
+  // Signup is a short wizard: account basics, then location, then interests
+  // (last, since it's the one people are most likely to skip) — rather than
+  // one long form. Nothing is sent to the server until the final step
+  // submits; if someone abandons partway through, there's no half-created
+  // account to clean up.
+  const STEPS = ["basics", "location", "interests"];
   let step = 0;
   const data = { username: "", email: "", password: "", interests: [], country: "", city: "" };
 
@@ -1163,31 +1165,24 @@ function authScreen() {
     const key = STEPS[step];
 
     const heading = isLogin ? "Welcome back" : {
-      username: "Choose a username",
-      security: "Secure your account",
-      interests: "What do you like?",
+      basics: "Create account",
       location: "Where are you?",
+      interests: "What do you like?",
     }[key];
     const sub = isLogin ? "Log in to keep watching" : {
-      username: "This is how people will find you",
-      security: "Your email and a password",
-      interests: "Pick a few — you can change these later",
+      basics: "Start sharing your videos",
       location: "Helps us show you relevant content",
+      interests: `Pick up to ${MAX_INTERESTS} — you can change these later`,
     }[key];
 
     const body = isLogin ? `
       <div class="field"><input id="email" placeholder="Email or username" autocapitalize="none"></div>
       <div class="field"><input id="password" type="password" placeholder="Password"></div>
-    ` : key === "username" ? `
+    ` : key === "basics" ? `
       <div class="field"><input id="username" placeholder="Username" autocapitalize="none" value="${esc(data.username)}"></div>
-    ` : key === "security" ? `
       <div class="field"><input id="email" placeholder="Email" autocapitalize="none" value="${esc(data.email)}"></div>
       <div class="field"><input id="password" type="password" placeholder="Password" value="${esc(data.password)}"></div>
-    ` : key === "interests" ? `
-      <div class="interest-grid">
-        ${INTERESTS.map(i => `<button type="button" class="interest-chip${data.interests.includes(i) ? " on" : ""}" data-i="${esc(i)}">${esc(i)}</button>`).join("")}
-      </div>
-    ` : `
+    ` : key === "location" ? `
       <div class="field">
         <select id="country">
           <option value="">Country (optional)</option>
@@ -1195,7 +1190,17 @@ function authScreen() {
         </select>
       </div>
       <div class="field"><input id="city" placeholder="City (optional)" value="${esc(data.city)}"></div>
+    ` : `
+      <div class="interest-grid">
+        ${INTERESTS.map(i => `<button type="button" class="interest-chip${data.interests.includes(i) ? " on" : ""}" data-i="${esc(i)}">${esc(i)}</button>`).join("")}
+      </div>
     `;
+
+    const onInterests = !isLogin && key === "interests";
+    const goLabel = isLogin ? "Log in"
+      : step < STEPS.length - 1 ? "Next"
+      : onInterests && !data.interests.length ? "Skip for now"
+      : "Create account";
 
     el.innerHTML = `
       <div style="text-align:center;margin-bottom:36px">
@@ -1209,7 +1214,7 @@ function authScreen() {
         </div>
       ` : ""}
       ${body}
-      <button class="btn-primary" id="go">${isLogin ? "Log in" : step === STEPS.length - 1 ? "Create account" : "Next"}</button>
+      <button class="btn-primary" id="go">${goLabel}</button>
       ${!isLogin && step > 0 ? `<button class="btn-plain" id="back" style="width:100%;margin-top:10px;padding:10px;color:var(--muted)">Back</button>` : ""}
       <p class="err" id="err" style="display:none"></p>
       ${isLogin || step === 0 ? `
@@ -1231,12 +1236,13 @@ function authScreen() {
     // bootstrap IIFE at the bottom of this file).
     el.querySelector("#google-go")?.addEventListener("click", () => { location.href = "/api/auth/google/start"; });
 
-    if (!isLogin && key === "interests") {
+    if (onInterests) {
       el.querySelectorAll(".interest-chip").forEach(chip => chip.addEventListener("click", () => {
         const i = chip.dataset.i;
         if (data.interests.includes(i)) data.interests = data.interests.filter(x => x !== i);
-        else if (data.interests.length < 10) data.interests.push(i);
+        else if (data.interests.length < MAX_INTERESTS) data.interests.push(i);
         chip.classList.toggle("on", data.interests.includes(i));
+        el.querySelector("#go").textContent = data.interests.length ? "Create account" : "Skip for now";
       }));
     }
 
@@ -1261,12 +1267,11 @@ function authScreen() {
 
       // Signup: validate the current step, save it into `data`, then either
       // advance or — on the last step — actually submit.
-      if (key === "username") {
+      if (key === "basics") {
         data.username = el.querySelector("#username").value.trim();
-        if (data.username.length < 3) { errEl.textContent = "Username must be at least 3 characters"; errEl.style.display = "block"; return; }
-      } else if (key === "security") {
         data.email = el.querySelector("#email").value.trim();
         data.password = el.querySelector("#password").value;
+        if (data.username.length < 3) { errEl.textContent = "Username must be at least 3 characters"; errEl.style.display = "block"; return; }
         if (!data.email) { errEl.textContent = "Email is required"; errEl.style.display = "block"; return; }
         if (data.password.length < 8) { errEl.textContent = "Password must be at least 8 characters"; errEl.style.display = "block"; return; }
       } else if (key === "location") {
