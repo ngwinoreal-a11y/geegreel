@@ -1,0 +1,316 @@
+/* ============================================================================
+   design-live.css — VOICE-ONLY LIVE, TIKTOK-STYLE
+   ============================================================================
+
+   FOR CLAUDE CODE:
+
+   Save at public/design-live.css, linked after design-5.css. Pairs with
+   public/live.js (separate file in this handoff), which renders the markup
+   these rules style and calls the endpoints described in
+   live-backend-patch.md.
+
+   This is voice-only: no camera feed. The host and any approved guest are
+   shown as circular avatars with a speaking ring, not video tiles.
+
+   ---------------------------------------------------------------------------
+   CONTENTS
+     A. Stage — host/guest avatars, speaking ring
+     B. Top bar — LIVE badge, viewer count, end button
+     C. Floating gifts
+     D. Join request banner (host only)
+     E. Chat overlay
+     F. Composer — chat input, mic, gift, leave
+     G. Pre-live / start screen
+   ========================================================================= */
+
+
+/* ============================================================================
+   TOKENS
+   ========================================================================= */
+:root {
+  --live-red: #D91F42;       /* the LIVE badge — 4.97:1 with white text */
+  --live-ring: #F5A623;      /* speaking ring, matches the app's accent */
+  --live-chat-bg: rgba(0,0,0,.0);   /* chat has no panel — see section E */
+}
+
+
+/* ============================================================================
+   A. STAGE
+   ---------------------------------------------------------------------------
+   MARKUP:
+     <div class="live-stage">
+       <div class="live-host">
+         <div class="live-av-ring on"><div class="live-av">…</div></div>
+         <p class="live-name">GEEREEL</p>
+       </div>
+       <div class="live-guests">
+         <div class="live-guest">
+           <div class="live-av-ring"><div class="live-av" style="width:56px;height:56px">…</div></div>
+           <p class="live-name sm">powerlens</p>
+         </div>
+       </div>
+     </div>
+
+   Toggle .on on .live-av-ring for whoever the "speaking" WS event names —
+   live.js already does this. The ring pulses only while .on is present, so
+   the stage is quiet the instant someone stops talking.
+   ========================================================================= */
+.live-stage {
+  position: absolute; top: 90px; left: 0; right: 0; z-index: 3;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+}
+
+.live-host, .live-guest {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+
+.live-av-ring {
+  width: 104px; height: 104px; border-radius: 50%;
+  display: grid; place-items: center;
+  border: 3px solid transparent;
+  transition: border-color .2s ease;
+}
+.live-guest .live-av-ring { width: 72px; height: 72px; }
+
+/* Speaking: a ring that breathes, not spins — spinning reads as "loading",
+   breathing reads as "alive right now". */
+.live-av-ring.on {
+  border-color: var(--live-ring);
+  animation: live-breathe 1.1s ease-in-out infinite;
+}
+@keyframes live-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,166,35,.5); }
+  50%      { box-shadow: 0 0 0 8px rgba(245,166,35,0); }
+}
+
+.live-av {
+  width: 92px; height: 92px; border-radius: 50%;
+  background: var(--raised); border: 2px solid var(--border);
+  display: grid; place-items: center; overflow: hidden;
+  font-family: var(--display); font-weight: 700; font-size: 32px; color: #fff;
+}
+.live-av img { width: 100%; height: 100%; object-fit: cover; }
+
+.live-name { margin: 0; font-size: 13px; font-weight: 600; color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.6); }
+.live-name.sm { font-size: 12px; font-weight: 500; }
+
+.live-guests {
+  display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;
+  padding: 0 20px;
+}
+
+/* Muted indicator on an avatar (small mic-off badge, bottom-right of the ring). */
+.live-muted {
+  position: absolute; right: -2px; bottom: -2px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: var(--live-red); border: 2px solid var(--bg);
+  display: grid; place-items: center; color: #fff;
+}
+
+
+/* ============================================================================
+   B. TOP BAR
+   ---------------------------------------------------------------------------
+   MARKUP:
+     <div class="live-topbar">
+       <span class="live-badge">LIVE</span>
+       <span class="live-viewers"><i>👁</i> 24</span>
+       <button class="live-close">×</button>
+     </div>
+   ========================================================================= */
+.live-topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 6;
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 16px 0;
+}
+
+.live-badge {
+  background: var(--live-red); color: #fff;
+  font-size: 12px; font-weight: 700; letter-spacing: .4px;
+  padding: 5px 12px; border-radius: 14px;
+  /* A slow pulse so LIVE reads as "ongoing", not just a static label. */
+  animation: live-pulse 2s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .78; }
+}
+
+.live-viewers {
+  display: flex; align-items: center; gap: 5px;
+  background: rgba(0,0,0,.45); color: #fff;
+  font-family: var(--mono); font-size: 13px; font-weight: 500;
+  padding: 5px 12px; border-radius: 14px;
+}
+
+.live-close {
+  margin-left: auto;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(0,0,0,.45); color: #fff;
+  display: grid; place-items: center; font-size: 18px;
+}
+
+
+/* ============================================================================
+   C. FLOATING GIFTS
+   ---------------------------------------------------------------------------
+   MARKUP, appended and removed after the animation ends (live.js does this
+   on every WS "gift" event):
+     <div class="live-gift-float">🌹</div>
+
+   Each one gets a slightly different horizontal drift and duration so a
+   burst of gifts doesn't look like a single repeated sprite.
+   ========================================================================= */
+.live-gift-float {
+  position: absolute; right: 24px; bottom: 130px; z-index: 8;
+  font-size: 34px; pointer-events: none;
+  animation: live-gift-rise 2.6s ease-out forwards;
+}
+@keyframes live-gift-rise {
+  0%   { transform: translateY(0) scale(.5);              opacity: 0; }
+  15%  { transform: translateY(-20px) scale(1.15);         opacity: 1; }
+  100% { transform: translateY(-220px) scale(.85) rotate(-8deg); opacity: 0; }
+}
+
+/* A named toast under the badge when a gift lands, e.g. "Grace sent 🌹". */
+.live-gift-line {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; color: #fff; margin: 4px 0 0 16px;
+  animation: fadein .2s ease;
+}
+.live-gift-line b { font-weight: 600; }
+
+
+/* ============================================================================
+   D. JOIN REQUEST BANNER (host only)
+   ---------------------------------------------------------------------------
+   MARKUP, one per pending request, stacking above the composer:
+     <div class="live-request">
+       <div class="live-av" style="width:36px;height:36px">…</div>
+       <span>wants to join</span>
+       <button class="live-req-accept">Accept</button>
+       <button class="live-req-decline">×</button>
+     </div>
+   ========================================================================= */
+.live-request {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(28,28,30,.92);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border-radius: 14px; padding: 8px 10px 8px 8px;
+  margin: 0 16px 8px; animation: pagein .22s ease;
+}
+.live-request span { flex: 1; font-size: 13px; color: #fff; }
+.live-req-accept {
+  background: var(--accent); color: #111; border: none; border-radius: 8px;
+  padding: 6px 14px; font-size: 12px; font-weight: 600;
+}
+.live-req-decline {
+  width: 26px; height: 26px; border-radius: 50%; color: #9A9A9E;
+  display: grid; place-items: center; font-size: 15px;
+}
+
+
+/* ============================================================================
+   E. CHAT OVERLAY
+   ---------------------------------------------------------------------------
+   No background panel — TikTok Live's chat sits directly on the picture,
+   readable purely from the per-line text shadow, so it never blocks the
+   stage above it.
+
+   MARKUP:
+     <div class="live-chat">
+       <p class="live-msg"><b>powerlens</b> Muraho</p>
+       …
+     </div>
+
+   BEHAVIOUR (live.js): keep the last ~40 lines, auto-scroll to the newest,
+   and fade each line to 40% opacity once several newer ones have arrived —
+   done by adding .old to a line, not by removing it, so the conversation
+   stays scrollable.
+   ========================================================================= */
+.live-chat {
+  position: absolute; left: 0; right: 84px; bottom: 76px; z-index: 4;
+  max-height: 38%; overflow-y: auto;
+  padding: 0 16px; display: flex; flex-direction: column; gap: 7px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 20%);
+  mask-image: linear-gradient(to bottom, transparent, #000 20%);
+}
+.live-msg {
+  margin: 0; font-size: 14px; line-height: 1.35; color: #fff;
+  text-shadow: 0 1px 6px rgba(0,0,0,.75);
+  transition: opacity .4s ease;
+}
+.live-msg b { font-weight: 700; }
+.live-msg.old { opacity: .4; }
+
+/* System lines ("Grace joined") read quieter than real chat. */
+.live-msg.sys { color: rgba(255,255,255,.6); font-size: 13px; }
+
+
+/* ============================================================================
+   F. COMPOSER
+   ---------------------------------------------------------------------------
+   MARKUP:
+     <div class="live-composer">
+       <input class="live-input" placeholder="Say something...">
+       <button class="live-send">➤</button>
+       <button class="live-mic on">🎙</button>
+       <button class="live-gift-btn">🎁</button>
+     </div>
+   ========================================================================= */
+.live-composer {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px calc(12px + env(safe-area-inset-bottom, 0));
+}
+.live-input {
+  flex: 1; min-width: 0;
+  background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.16);
+  border-radius: 20px; padding: 10px 16px;
+  color: #fff; font-size: 14px; outline: none;
+}
+.live-input::placeholder { color: rgba(255,255,255,.55); }
+
+.live-send, .live-mic, .live-gift-btn {
+  width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center; color: #fff;
+}
+.live-send      { background: rgba(255,255,255,.12); }
+.live-gift-btn  { background: rgba(255,255,255,.12); }
+
+/* Mic: green when live and unmuted, red when muted — the colour IS the
+   state, no separate label needed. */
+.live-mic       { background: rgba(255,255,255,.12); }
+.live-mic.on    { background: var(--online); color: #062; }
+.live-mic.muted { background: var(--live-red); color: #fff; }
+
+
+/* ============================================================================
+   G. PRE-LIVE / START SCREEN
+   ---------------------------------------------------------------------------
+   Shown to a host before tapping "Go live" — title field, a reminder that
+   this is audio-only, and the one control that matters.
+
+   MARKUP:
+     <div class="live-setup">
+       <p class="live-setup-title">Go live</p>
+       <input class="live-input" placeholder="What's this about?">
+       <p class="live-setup-note">Audio only — no camera</p>
+       <button class="btn-primary">Go live</button>
+     </div>
+   ========================================================================= */
+.live-setup {
+  position: absolute; inset: 0; z-index: 15; background: var(--bg);
+  display: flex; flex-direction: column; justify-content: center;
+  gap: 14px; padding: 0 24px;
+}
+.live-setup-title {
+  margin: 0 0 6px; font-family: var(--display); font-weight: 700;
+  font-size: 22px; color: #fff; text-align: center;
+}
+.live-setup .live-input {
+  background: var(--surface); border: 1px solid var(--border); color: #fff;
+}
+.live-setup-note {
+  margin: 0; text-align: center; font-size: 12px; color: var(--muted);
+}

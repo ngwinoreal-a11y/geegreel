@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/design-3.css">
 <link rel="stylesheet" href="/design-4.css">
 <link rel="stylesheet" href="/design-5.css">
+<link rel="stylesheet" href="/design-live.css">
 <style>
   /* design-4.css's --sk-base (#1C1C1C) on this app's pure #000 page is too
      close in value — on a real screen it reads as "nothing loaded" rather
@@ -112,6 +113,7 @@
 </div>
 
 <script type="module">
+import { mountLive } from "/live.js";
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
 const app = document.getElementById("app");
 
@@ -2230,75 +2232,14 @@ const canCaptureSound = () => {
 
 // ---------- live streaming ----------
 //
-// Architecture: Live is a voice room, not a video call — audio only, no
-// camera anywhere in it. Every participant (listener or speaker) holds a
-// direct WebRTC connection to the host and only the host (a star, not a
-// mesh — listeners and speakers never connect to each other directly). The
-// host mixes audio itself with the Web Audio API rather than sending raw
-// mic tracks around: one mix (host + every current speaker) goes out to
-// plain listeners, and each speaker gets their OWN personalized mix — host
-// plus every OTHER speaker, excluding themselves — which is what avoids the
-// echo a single shared mix would cause for anyone actually talking. Because
-// each of these mixes lives behind one stable MediaStreamAudioDestinationNode
-// per recipient, speakers joining or leaving never requires renegotiating
-// anyone's existing connection — only the mix's contents change, not the
-// track object itself.
-//
-// No TURN relay is configured (that needs server-minted credentials this
-// backend doesn't generate), only Cloudflare's and Google's free STUN — a
-// connection between two peers both behind strict/symmetric NATs can fail to
-// establish. Most home and mobile networks aren't that restrictive, and
-// audio-only connections are light enough (tens of kbps, not the ~1-2Mbps a
-// video call needs) that the host can sustain many more of them than the
-// original video design ever could on the same connection.
-const ICE_SERVERS = [
-  { urls: "stun:stun.cloudflare.com:3478" },
-  { urls: "stun:stun.l.google.com:19302" },
-];
-
-function openLiveSocket(sessionId) {
-  const wsOrigin = location.origin.replace(/^http/, "ws");
-  return new WebSocket(`${wsOrigin}/api/live/${sessionId}/socket?token=${encodeURIComponent(store.token)}`);
-}
-
-function makePeerConnection(peerId, ws, { localStream, onTrack } = {}) {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-  if (localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-  pc.onicecandidate = (e) => {
-    if (e.candidate) ws.send(JSON.stringify({ type: "signal", to: peerId, data: { candidate: e.candidate } }));
-  };
-  pc.ontrack = (e) => onTrack?.(e.streams[0]);
-  return pc;
-}
-
-// One tile per person on stage (host or speaker) — shared markup between
-// liveHostPage and liveWatchPage so the two look identical. The mic-off
-// badge and the speaking glow are toggled by id after the fact, not baked
-// in here, since both change continuously after the tile is drawn once.
-const speakerTile = (info, { big } = {}) => `
-  <div class="speaker-tile" data-speaker="${info.id}" style="display:flex;flex-direction:column;align-items:center;gap:6px">
-    <div class="av speaker-av" style="width:${big ? 84 : 64}px;height:${big ? 84 : 64}px;font-size:${big ? 26 : 18}px;
-      position:relative;border-radius:50%;background:var(--raised);display:grid;place-items:center;
-      transition:box-shadow .15s ease;overflow:hidden">
-      ${avatarInner(info)}
-    </div>
-    <span class="mute-badge" style="display:none;width:20px;height:20px;margin-top:-30px;align-self:flex-end;margin-right:2px;
-      border-radius:50%;background:#FF3B30;color:#fff;font-size:10px;place-items:center">🔇</span>
-    <span style="color:#fff;font-size:12px;max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-      ${esc(info.displayName || info.username)}
-    </span>
-  </div>
-`;
-
-// Toggles the glow ring (speaking) and 🔇 badge (muted) on a rendered tile,
-// used identically by the host (who computes both locally) and viewers (who
-// only ever learn about them from the host's broadcasts).
-function setTileState(root, id, { speaking, muted } = {}) {
-  const tile = root.querySelector(`[data-speaker="${id}"]`);
-  if (!tile) return;
-  if (speaking !== undefined) tile.querySelector(".speaker-av").style.boxShadow = speaking ? "0 0 0 3px #4ADE80" : "none";
-  if (muted !== undefined) tile.querySelector(".mute-badge").style.display = muted ? "grid" : "none";
-}
+// The room itself (WebSocket, chat, gifts, join requests, mic capture,
+// chunk upload/playback) is /live.js — imported at the top of this file as
+// mountLive(). It replaced an earlier WebRTC host<->guest connection that
+// had no TURN relay and so failed for anyone on mobile data (the common
+// case here, not the exception); this version works over any connection,
+// at the cost of a few seconds of delay. What's left here is just this
+// app's own screens around it: the pre-live setup, and wiring mountLive's
+// close/end/gift/image events into this app's navigation and gift sheet.
 
 function soundPage() {
   const id = state.soundId;
@@ -2388,329 +2329,58 @@ function liveDiscoverPage() {
   return el;
 }
 
+// Shown for the "live:image" event mountLive() dispatches (see live.js's
+// header comment) — it deliberately doesn't render this itself since
+// design-live.css leaves the discussion-image slot to whatever page mounts
+// it. Same handling for host and viewer, so it's shared here.
+function renderLiveImage(container, url) {
+  let img = container.querySelector(".live-discuss-img");
+  if (!url) { img?.remove(); return; }
+  if (!img) {
+    img = $(`<img class="live-discuss-img" style="position:absolute;top:90px;left:16px;right:16px;
+      max-width:280px;margin:0 auto;border-radius:14px;z-index:2;display:block">`);
+    container.appendChild(img);
+  }
+  img.src = url;
+}
+
 function liveHostPage() {
   const el = $(`
-    <div class="page" style="padding:0;background:#0B0B0F;display:flex;flex-direction:column">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 16px 10px;flex-shrink:0">
-        <button id="closeLive" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.08);color:#fff;display:grid;place-items:center">${I.x}</button>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="background:#FF3B30;color:#fff;font-size:11px;font-weight:700;padding:4px 10px;border-radius:12px;letter-spacing:.5px">LIVE</span>
-          <span id="viewerCount" style="background:rgba(255,255,255,.08);color:#fff;font-size:12px;padding:4px 10px;border-radius:12px;font-family:var(--mono);min-width:20px;text-align:center">0</span>
-        </div>
-        <button id="muteBtn" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.08);color:#fff;display:grid;place-items:center">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>
-        </button>
+    <div class="page" style="padding:0;background:#0B0B0F">
+      <div class="live-setup">
+        <p class="live-setup-title">Go live</p>
+        <input class="live-input" id="liveTitle" placeholder="What's this about?" maxlength="120">
+        <p class="live-setup-note">Audio only — no camera</p>
+        <button class="btn-primary" id="goLiveBtn">Go live</button>
       </div>
-
-      <div id="requestsBar" style="padding:0 16px;flex-shrink:0"></div>
-
-      <div id="stageArea" style="flex:1;min-height:0;overflow-y:auto;padding:8px 16px 16px;display:flex;flex-direction:column;align-items:center;gap:18px">
-        <div id="discussImage" style="display:none;width:100%;max-width:280px;border-radius:14px;overflow:hidden;position:relative;flex-shrink:0">
-          <img style="width:100%;display:block">
-          <button id="clearImage" style="position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;display:grid;place-items:center">${I.x}</button>
-        </div>
-        <div id="speakerGrid" style="display:flex;flex-wrap:wrap;justify-content:center;gap:20px;padding-top:8px"></div>
-      </div>
-
-      <div style="flex-shrink:0;padding:0 12px 16px">
-        <div id="liveChat" style="max-height:140px;overflow-y:auto;margin-bottom:8px;display:flex;flex-direction:column;gap:5px"></div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input id="chatInput" placeholder="Say something..." style="flex:1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:20px;padding:10px 16px;color:#fff;font-size:14px;outline:none">
-          <button id="sendChat" style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;flex-shrink:0">${I.send}</button>
-          <button id="imageBtn" style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;flex-shrink:0;font-size:16px">🖼️</button>
-          <button id="chatToggleBtn" style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;flex-shrink:0;font-size:15px">💬</button>
-          <button id="endLive" style="background:#FF3B30;color:#fff;border-radius:20px;padding:0 16px;font-weight:600;font-size:13px;flex-shrink:0;height:38px">End</button>
-        </div>
-        <input type="file" id="imageFile" accept="image/*" hidden>
-      </div>
+      <div id="liveRoot" style="position:absolute;inset:0"></div>
     </div>
   `);
 
-  let ws = null;
-  let ended = false;
-  let sessionId = null;
-  let localStream = null;      // host's own mic (audio only — Live is a voice room, not video)
-  let muted = false;
-  let chatEnabled = true;
+  let stop = null;
+  el.addEventListener("screen-exit", () => stop?.());
 
-  let audioCtx = null;
-  let micSourceNode = null;
-  let viewerMixDest = null;    // what every plain listener hears
-  let hostAnalyser = null;
-  const speakers = new Map();  // id -> { pc, sourceNode, personalMixDest, info, analyser }
-  const listeners = new Map(); // id -> { pc, info }
-  let levelRaf = null;
-
-  const hostInfo = () => ({ id: store.user.id, username: store.user.username, displayName: store.user.displayName, avatarUrl: store.user.avatarUrl });
-
-  const stageArea = el.querySelector("#stageArea");
-  const speakerGrid = el.querySelector("#speakerGrid");
-  const requestsBar = el.querySelector("#requestsBar");
-  const chatLog = el.querySelector("#liveChat");
-  const viewerCountEl = el.querySelector("#viewerCount");
-  const chatInput = el.querySelector("#chatInput");
-  const discussImage = el.querySelector("#discussImage");
-  const imageFile = el.querySelector("#imageFile");
-
-  const cleanup = () => {
-    // "screen-exit" fires on every navigation away, not just the explicit
-    // End button — guards against double-running and, more importantly,
-    // makes sure a live actually gets marked ended even when someone leaves
-    // via the nav bar or the phone's back gesture instead of tapping End.
-    // Without this it would stay "live" in discovery forever.
-    if (ended) return;
-    ended = true;
-    cancelAnimationFrame(levelRaf);
-    if (sessionId) api(`/live/${sessionId}/end`, { method: "POST" }).catch(() => {});
-    try { ws?.close(); } catch {}
-    localStream?.getTracks().forEach(t => t.stop());
-    listeners.forEach(l => l.pc.close());
-    speakers.forEach(s => s.pc.close());
-    listeners.clear(); speakers.clear();
-    try { audioCtx?.close(); } catch {}
-  };
-  el.addEventListener("screen-exit", cleanup);
-
-  // Same technique as chatPage(): the input row is the only thing below a
-  // flex:1 area, so resizing just the page's own height to the keyboard-
-  // shrunk visual viewport keeps the header pinned and only the stage area
-  // gives up space, instead of the whole layout jumping around.
-  const vv = window.visualViewport;
-  const onViewport = () => {
-    if (!vv) return;
-    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-    el.style.height = kb > 40 ? `${vv.height}px` : "";
-  };
-  vv?.addEventListener("resize", onViewport);
-  vv?.addEventListener("scroll", onViewport);
-
-  const appendChat = (html) => {
-    const row = $(`<div style="color:#fff;font-size:13px">${html}</div>`);
-    chatLog.appendChild(row);
-    chatLog.scrollTop = chatLog.scrollHeight;
-    while (chatLog.children.length > 50) chatLog.removeChild(chatLog.firstChild);
-  };
-
-  const renderSpeakers = () => {
-    const tiles = [speakerTile(hostInfo(), { big: true })]
-      .concat([...speakers.values()].map(s => speakerTile(s.info)));
-    speakerGrid.innerHTML = tiles.join("");
-    setTileState(speakerGrid, hostInfo().id, { muted });
-  };
-  renderSpeakers();
-
-  // ---- audio level -> speaking glow, computed once here (the only place
-  // every individual source, pre-mix, actually exists) and broadcast so
-  // viewers — who only ever receive one already-mixed stream — can show the
-  // same glow on the same avatar without being able to detect it themselves. ----
-  const makeAnalyser = (stream) => {
-    const src = audioCtx.createMediaStreamSource(stream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 512;
-    src.connect(analyser);
-    return { analyser, data: new Uint8Array(analyser.fftSize), sourceForMix: src };
-  };
-  const rms = (a) => {
-    a.analyser.getByteTimeDomainData(a.data);
-    let sum = 0;
-    for (let i = 0; i < a.data.length; i++) { const v = (a.data[i] - 128) / 128; sum += v * v; }
-    return Math.sqrt(sum / a.data.length);
-  };
-  let lastSpeakingSet = "";
-  const levelLoop = () => {
-    if (ended) return;
-    const speakingIds = [];
-    if (hostAnalyser && !muted && rms(hostAnalyser) > 0.04) speakingIds.push(hostInfo().id);
-    speakers.forEach((s, id) => { if (s.analyser && rms(s.analyser) > 0.04) speakingIds.push(id); });
-    speakingIds.forEach(id => setTileState(speakerGrid, id, { speaking: true }));
-    [hostInfo().id, ...speakers.keys()].forEach(id => { if (!speakingIds.includes(id)) setTileState(speakerGrid, id, { speaking: false }); });
-    const key = speakingIds.sort().join(",");
-    if (key !== lastSpeakingSet) {
-      lastSpeakingSet = key;
-      ws?.send(JSON.stringify({ type: "speaking", ids: speakingIds }));
-    }
-    levelRaf = requestAnimationFrame(levelLoop);
-  };
-
-  // Rebuilt from scratch on every speaker add/remove rather than tracked
-  // incrementally — simpler to get right, and cheap since it only runs on
-  // join/leave, not per frame. Each speaker hears everyone EXCEPT themselves
-  // (their own personalMixDest), which is what avoids the echo a naive
-  // single shared mix would cause for anyone actually talking.
-  const rebuildMixGraph = () => {
-    micSourceNode.disconnect();
-    micSourceNode.connect(viewerMixDest);
-    speakers.forEach(s => micSourceNode.connect(s.personalMixDest));
-
-    speakers.forEach((s, id) => {
-      if (!s.sourceForMix) return;
-      s.sourceForMix.disconnect();
-      s.sourceForMix.connect(viewerMixDest);
-      speakers.forEach((other, otherId) => { if (otherId !== id) s.sourceForMix.connect(other.personalMixDest); });
-    });
-  };
-
-  const connectListener = (info) => {
-    const pc = makePeerConnection(info.id, ws, { localStream: viewerMixDest.stream });
-    listeners.set(info.id, { pc, info });
-    pc.createOffer()
-      .then(offer => pc.setLocalDescription(offer).then(() => offer))
-      .then(offer => ws.send(JSON.stringify({ type: "signal", to: info.id, data: { sdp: offer } })))
-      .catch(() => listeners.delete(info.id));
-  };
-
-  const showRequest = (info) => {
-    requestsBar.style.display = "block";
-    const row = $(`
-      <div data-req="${info.id}" style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.08);
-        border-radius:10px;padding:8px 10px;margin-bottom:6px">
-        <div class="av" style="width:32px;height:32px;font-size:12px">${avatarInner(info)}</div>
-        <span style="flex:1;color:#fff;font-size:13px">${esc(info.displayName || info.username)} wants to speak</span>
-        <button class="approveReq" style="background:#4ADE80;color:#000;border-radius:14px;padding:5px 12px;font-size:12px;font-weight:600">Accept</button>
-        <button class="declineReq" style="background:rgba(255,255,255,.15);color:#fff;border-radius:14px;padding:5px 12px;font-size:12px;font-weight:600">No</button>
-      </div>
-    `);
-    const removeRow = () => { row.remove(); if (!requestsBar.children.length) requestsBar.style.display = "none"; };
-
-    row.querySelector(".approveReq").onclick = () => {
-      ws.send(JSON.stringify({ type: "approve", userId: info.id }));
-      removeRow();
-
-      // Promoting a listener to a speaker needs a bidirectional connection
-      // and a personalized (echo-free) outgoing mix — simpler to tear down
-      // their listen-only connection and build a fresh one than to
-      // renegotiate an existing one from receive-only to send+receive.
-      listeners.get(info.id)?.pc.close();
-      listeners.delete(info.id);
-
-      const personalMixDest = audioCtx.createMediaStreamDestination();
-      speakers.set(info.id, { pc: null, sourceForMix: null, analyser: null, personalMixDest, info });
-      rebuildMixGraph();
-      renderSpeakers();
-
-      const pc = makePeerConnection(info.id, ws, {
-        localStream: personalMixDest.stream,
-        onTrack: (stream) => {
-          const s = speakers.get(info.id);
-          if (!s) return;
-          const a = makeAnalyser(stream);
-          s.sourceForMix = a.sourceForMix;
-          s.analyser = a;
-          rebuildMixGraph();
-        },
-      });
-      speakers.get(info.id).pc = pc;
-
-      pc.createOffer()
-        .then(offer => pc.setLocalDescription(offer).then(() => offer))
-        .then(offer => ws.send(JSON.stringify({ type: "signal", to: info.id, data: { sdp: offer } })))
-        .catch(() => { toast("Couldn't connect to that guest"); speakers.delete(info.id); rebuildMixGraph(); renderSpeakers(); });
-    };
-    row.querySelector(".declineReq").onclick = () => {
-      ws.send(JSON.stringify({ type: "decline", userId: info.id }));
-      removeRow();
-    };
-    requestsBar.appendChild(row);
-  };
-
-  const removeParticipant = (id) => {
-    if (listeners.has(id)) { listeners.get(id).pc.close(); listeners.delete(id); }
-    if (speakers.has(id)) {
-      speakers.get(id).pc.close();
-      speakers.get(id).sourceForMix?.disconnect();
-      speakers.delete(id);
-      rebuildMixGraph();
-      renderSpeakers();
-    }
-  };
-
-  const start = async () => {
+  el.querySelector("#goLiveBtn").onclick = async () => {
+    const btn = el.querySelector("#goLiveBtn");
+    btn.disabled = true;
+    let r;
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      toast("Couldn't start the mic");
-      history.back();
+      r = await api("/live/start", { method: "POST", body: { title: el.querySelector("#liveTitle").value.trim() } });
+    } catch (e) {
+      toast(e.message);
+      btn.disabled = false;
       return;
     }
+    el.querySelector(".live-setup").remove();
 
-    let r;
-    try { r = await api("/live/start", { method: "POST", body: {} }); }
-    catch (e) { toast(e.message); history.back(); return; }
-    sessionId = r.session.id;
+    const root = el.querySelector("#liveRoot");
+    stop = mountLive(root, { sessionId: r.session.id, isHost: true, me: store.user, token: store.token });
 
-    audioCtx = new AudioContext();
-    micSourceNode = audioCtx.createMediaStreamSource(localStream);
-    viewerMixDest = audioCtx.createMediaStreamDestination();
-    micSourceNode.connect(viewerMixDest);
-    hostAnalyser = makeAnalyser(localStream);
-    levelLoop();
-
-    ws = openLiveSocket(sessionId);
-    ws.onmessage = (e) => {
-      let msg; try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.type === "joined") connectListener(msg.user);
-      else if (msg.type === "request-join") showRequest(msg.user);
-      else if (msg.type === "viewerCount") viewerCountEl.textContent = fmt(msg.count);
-      else if (msg.type === "chat") appendChat(`<b>${esc(msg.user.displayName || msg.user.username)}</b> ${esc(msg.body)}`);
-      else if (msg.type === "gift") {
-        appendChat(`🎁 <b>${esc(msg.user.displayName || msg.user.username)}</b> sent ${msg.gift.emoji} ${esc(msg.gift.name)}`);
-        toast(`${msg.gift.emoji} ${msg.gift.name} from ${msg.user.displayName || msg.user.username}`);
-      } else if (msg.type === "left") {
-        removeParticipant(msg.id);
-      } else if (msg.type === "signal") {
-        const target = speakers.get(msg.from) || listeners.get(msg.from);
-        if (!target?.pc) return;
-        if (msg.data.sdp) target.pc.setRemoteDescription(new RTCSessionDescription(msg.data.sdp)).catch(() => {});
-        else if (msg.data.candidate) target.pc.addIceCandidate(new RTCIceCandidate(msg.data.candidate)).catch(() => {});
-      }
-    };
-    ws.onclose = () => { if (!ended) toast("Live connection lost"); };
+    root.querySelector("#live-close-btn").addEventListener("click", () => history.back());
+    root.querySelector("#live-end-btn").addEventListener("click", () => history.back());
+    root.addEventListener("live:image", (e) => renderLiveImage(root, e.detail));
   };
 
-  const leave = () => { cleanup(); history.back(); };
-  el.querySelector("#closeLive").onclick = leave;
-  el.querySelector("#endLive").onclick = leave;
-
-  el.querySelector("#muteBtn").onclick = (e) => {
-    if (!localStream) return;
-    muted = !muted;
-    localStream.getAudioTracks().forEach(t => t.enabled = !muted);
-    e.currentTarget.style.color = muted ? "#FF3B30" : "#fff";
-    setTileState(speakerGrid, hostInfo().id, { muted });
-    ws?.send(JSON.stringify({ type: "muteState", muted }));
-  };
-
-  el.querySelector("#chatToggleBtn").onclick = (e) => {
-    chatEnabled = !chatEnabled;
-    e.currentTarget.style.background = chatEnabled ? "rgba(255,255,255,.12)" : "rgba(255,59,48,.35)";
-    ws?.send(JSON.stringify({ type: "chatToggle", enabled: chatEnabled }));
-  };
-
-  el.querySelector("#imageBtn").onclick = () => imageFile.click();
-  imageFile.onchange = async () => {
-    const f = imageFile.files[0];
-    if (!f || !sessionId) return;
-    const fd = new FormData();
-    fd.append("image", f);
-    try {
-      await fetch(`/api/live/${sessionId}/image`, { method: "POST", headers: { Authorization: `Bearer ${store.token}` }, body: fd });
-    } catch { toast("Couldn't share that image"); }
-    imageFile.value = "";
-  };
-  el.querySelector("#clearImage").onclick = () => {
-    if (sessionId) fetch(`/api/live/${sessionId}/image`, { method: "DELETE", headers: { Authorization: `Bearer ${store.token}` } }).catch(() => {});
-  };
-
-  const sendChat = () => {
-    const body = chatInput.value.trim();
-    if (!body || !ws) return;
-    ws.send(JSON.stringify({ type: "chat", body }));
-    chatInput.value = "";
-  };
-  el.querySelector("#sendChat").onclick = sendChat;
-  chatInput.addEventListener("keydown", e => e.key === "Enter" && sendChat());
-
-  start();
   return el;
 }
 
@@ -2718,233 +2388,28 @@ function liveWatchPage() {
   const sessionId = state.liveId;
   if (!sessionId) { state.page = null; render(); return $(`<div></div>`); }
 
-  const el = $(`
-    <div class="page" style="padding:0;background:#0B0B0F;display:flex;flex-direction:column">
-      <audio id="roomAudio" autoplay playsinline></audio>
+  const el = $(`<div class="page" style="padding:0;background:#0B0B0F"><div class="spin"></div></div>`);
+  let stop = null;
+  el.addEventListener("screen-exit", () => stop?.());
 
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 16px 10px;flex-shrink:0">
-        <button id="closeWatch" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.08);color:#fff;display:grid;place-items:center">${I.x}</button>
-        <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.08);border-radius:20px;padding:4px 10px 4px 4px">
-          <div class="av" id="hostAv" style="width:26px;height:26px;font-size:11px"></div>
-          <span id="hostName" style="color:#fff;font-size:13px;font-weight:600"></span>
-          <span style="background:#FF3B30;color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:9px">LIVE</span>
-          <span id="viewerCount" style="color:#fff;font-size:12px;font-family:var(--mono);min-width:16px;text-align:center">0</span>
-        </div>
-        <button id="muteBtn" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.08);color:#fff;display:grid;place-items:center;visibility:hidden">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>
-        </button>
-      </div>
-
-      <div id="joinStatus" style="padding:0 16px;flex-shrink:0;color:#fff;font-size:12px;display:none"></div>
-
-      <div id="stageArea" style="flex:1;min-height:0;overflow-y:auto;padding:8px 16px 16px;display:flex;flex-direction:column;align-items:center;gap:18px">
-        <div id="discussImage" style="display:none;width:100%;max-width:280px;border-radius:14px;overflow:hidden;flex-shrink:0">
-          <img style="width:100%;display:block">
-        </div>
-        <div id="speakerGrid" style="display:flex;flex-wrap:wrap;justify-content:center;gap:20px;padding-top:8px"></div>
-      </div>
-
-      <div style="flex-shrink:0;padding:0 12px 16px">
-        <div id="liveChat" style="max-height:140px;overflow-y:auto;margin-bottom:8px;display:flex;flex-direction:column;gap:5px"></div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input id="chatInput" placeholder="Say something..." style="flex:1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:20px;padding:10px 16px;color:#fff;font-size:14px;outline:none">
-          <button id="sendChat" style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;flex-shrink:0">${I.send}</button>
-          <button id="giftBtn" style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;flex-shrink:0">${I.gift}</button>
-          <button id="joinBtn" style="background:#fff;color:#000;border-radius:20px;padding:0 14px;font-weight:600;font-size:12px;flex-shrink:0;height:38px">Speak</button>
-        </div>
-      </div>
-    </div>
-  `);
-
-  let ws = null;
-  let ended = false;
-  let role = "viewer";          // "viewer" | "guest"
-  let joinRequested = false;
-  let muted = false;
-  let chatEnabled = true;
-  let pc = null;
-  let localStream = null;
-  const stage = new Map();      // id -> info, everyone currently rendered as a speaker tile (host included)
-  const knownUsers = new Map(); // id -> info, every participant seen so far (for roleChanged, which only carries an id)
-  let hostId = null;
-
-  const audioEl = el.querySelector("#roomAudio");
-  const stageArea = el.querySelector("#stageArea");
-  const speakerGrid = el.querySelector("#speakerGrid");
-  const chatLog = el.querySelector("#liveChat");
-  const viewerCountEl = el.querySelector("#viewerCount");
-  const joinStatus = el.querySelector("#joinStatus");
-  const joinBtn = el.querySelector("#joinBtn");
-  const muteBtn = el.querySelector("#muteBtn");
-  const chatInput = el.querySelector("#chatInput");
-  const discussImage = el.querySelector("#discussImage");
-
-  const cleanup = () => {
-    if (ended) return;
-    ended = true;
-    try { ws?.close(); } catch {}
-    localStream?.getTracks().forEach(t => t.stop());
-    pc?.close();
-  };
-  el.addEventListener("screen-exit", cleanup);
-
-  const vv = window.visualViewport;
-  const onViewport = () => {
-    if (!vv) return;
-    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-    el.style.height = kb > 40 ? `${vv.height}px` : "";
-  };
-  vv?.addEventListener("resize", onViewport);
-  vv?.addEventListener("scroll", onViewport);
-
-  const appendChat = (html) => {
-    const row = $(`<div style="color:#fff;font-size:13px">${html}</div>`);
-    chatLog.appendChild(row);
-    chatLog.scrollTop = chatLog.scrollHeight;
-    while (chatLog.children.length > 50) chatLog.removeChild(chatLog.firstChild);
-  };
-
-  const renderStage = () => {
-    speakerGrid.innerHTML = [...stage.values()]
-      .map(info => speakerTile(info, { big: info.id === hostId }))
-      .join("");
-  };
-
-  const start = async () => {
-    let s;
-    try { s = (await api(`/live/${sessionId}`)).session; }
-    catch { toast("This live isn't available anymore"); history.back(); return; }
+  api(`/live/${sessionId}`).then(({ session: s }) => {
     if (s.status !== "live") { toast("This live has ended"); history.back(); return; }
 
-    hostId = s.host.id;
-    el.querySelector("#hostAv").innerHTML = avatarInner(s.host);
-    el.querySelector("#hostName").textContent = s.host.displayName || s.host.username;
-    stage.set(hostId, s.host);
-    renderStage();
+    el.innerHTML = "";
+    const root = $(`<div id="liveRoot" style="position:absolute;inset:0"></div>`);
+    el.appendChild(root);
 
-    ws = openLiveSocket(sessionId);
-    ws.onmessage = async (e) => {
-      let msg; try { msg = JSON.parse(e.data); } catch { return; }
+    stop = mountLive(root, { sessionId, isHost: false, me: store.user, token: store.token });
 
-      if (msg.type === "welcome") {
-        msg.participants.forEach(p => knownUsers.set(p.id, p));
-        msg.participants.filter(p => p.role !== "viewer").forEach(p => stage.set(p.id, p));
-        renderStage();
-      } else if (msg.type === "joined") {
-        // Cached even for a plain viewer who isn't shown on stage — if they
-        // later get approved to speak, "roleChanged" only carries their id,
-        // and this is what lets that tile show their real name and avatar
-        // instead of a placeholder.
-        knownUsers.set(msg.user.id, msg.user);
-      } else if (msg.type === "roleChanged" && msg.role === "guest") {
-        if (!stage.has(msg.id)) stage.set(msg.id, knownUsers.get(msg.id) || { id: msg.id, username: "…" });
-        renderStage();
-      } else if (msg.type === "left") {
-        stage.delete(msg.id);
-        renderStage();
-      } else if (msg.type === "speaking") {
-        [...stage.keys()].forEach(id => setTileState(speakerGrid, id, { speaking: msg.ids.includes(id) }));
-      } else if (msg.type === "muteState") {
-        setTileState(speakerGrid, msg.id, { muted: msg.muted });
-      } else if (msg.type === "chatToggle") {
-        chatEnabled = msg.enabled;
-        chatInput.disabled = !chatEnabled;
-        chatInput.placeholder = chatEnabled ? "Say something..." : "The host turned off chat";
-      } else if (msg.type === "image") {
-        discussImage.style.display = "block";
-        discussImage.querySelector("img").src = msg.url;
-      } else if (msg.type === "clearImage") {
-        discussImage.style.display = "none";
-      } else if (msg.type === "viewerCount") {
-        viewerCountEl.textContent = fmt(msg.count);
-      } else if (msg.type === "chat") {
-        appendChat(`<b>${esc(msg.user.displayName || msg.user.username)}</b> ${esc(msg.body)}`);
-      } else if (msg.type === "gift") {
-        appendChat(`🎁 <b>${esc(msg.user.displayName || msg.user.username)}</b> sent ${msg.gift.emoji} ${esc(msg.gift.name)}`);
-        flyGift(msg.gift.emoji);
-      } else if (msg.type === "ended") {
-        toast("The live has ended");
-        cleanup();
-        history.back();
-      } else if (msg.type === "approved") {
-        toast("You're on! Say hi.");
-        try {
-          localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        } catch {
-          toast("Couldn't start your mic");
-          return;
-        }
-        role = "guest";
-        joinStatus.style.display = "none";
-        joinBtn.style.display = "none";
-        muteBtn.style.visibility = "visible";
-        // A promoted connection needs to switch from receive-only to
-        // send+receive — simpler and more reliable to close the old
-        // listen-only connection and answer the host's fresh offer below
-        // than to renegotiate the existing one.
-        pc?.close(); pc = null;
-      } else if (msg.type === "declined") {
-        toast("The host didn't accept your request");
-        joinRequested = false;
-        joinStatus.style.display = "none";
-      } else if (msg.type === "signal" && msg.from === hostId) {
-        if (msg.data.sdp?.type === "offer") {
-          if (!pc) {
-            pc = makePeerConnection(hostId, ws, {
-              localStream: role === "guest" ? localStream : null,
-              onTrack: (stream) => { audioEl.srcObject = stream; },
-            });
-          }
-          try {
-            await pc.setRemoteDescription(new RTCSessionDescription(msg.data.sdp));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            ws.send(JSON.stringify({ type: "signal", to: hostId, data: { sdp: answer } }));
-          } catch { toast("Couldn't connect to the host"); }
-        } else if (msg.data.candidate && pc) {
-          pc.addIceCandidate(new RTCIceCandidate(msg.data.candidate)).catch(() => {});
-        }
-      }
-    };
-    ws.onclose = () => { if (!ended) toast("Live connection lost"); };
-  };
+    root.querySelector("#live-close-btn").addEventListener("click", () => history.back());
+    root.addEventListener("live:ended", () => history.back());
+    root.addEventListener("live:image", (e) => renderLiveImage(root, e.detail));
+    root.addEventListener("live:gift-request", () => {
+      if (!store.token) return toast("Log in to send gifts");
+      openLiveGiftSheet(sessionId);
+    });
+  }).catch(() => { toast("This live isn't available anymore"); history.back(); });
 
-  el.querySelector("#closeWatch").onclick = () => { cleanup(); history.back(); };
-
-  joinBtn.onclick = () => {
-    if (!store.token) return toast("Log in to request to speak");
-    if (joinRequested || role !== "viewer") return;
-    joinRequested = true;
-    ws.send(JSON.stringify({ type: "request-join" }));
-    joinStatus.textContent = "Request sent — waiting for the host";
-    joinStatus.style.display = "block";
-  };
-
-  muteBtn.onclick = (e) => {
-    if (!localStream) return;
-    muted = !muted;
-    localStream.getAudioTracks().forEach(t => t.enabled = !muted);
-    e.currentTarget.style.color = muted ? "#FF3B30" : "#fff";
-    ws?.send(JSON.stringify({ type: "muteState", muted }));
-  };
-
-  const sendChat = () => {
-    if (!store.token) return toast("Log in to chat");
-    if (!chatEnabled) return;
-    const body = chatInput.value.trim();
-    if (!body || !ws) return;
-    ws.send(JSON.stringify({ type: "chat", body }));
-    chatInput.value = "";
-  };
-  el.querySelector("#sendChat").onclick = sendChat;
-  chatInput.addEventListener("keydown", e => e.key === "Enter" && sendChat());
-
-  el.querySelector("#giftBtn").onclick = () => {
-    if (!store.token) return toast("Log in to send gifts");
-    openLiveGiftSheet(sessionId);
-  };
-
-  start();
   return el;
 }
 
