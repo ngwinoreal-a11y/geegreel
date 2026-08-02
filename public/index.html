@@ -2355,10 +2355,18 @@ function renderLiveImage(container, url) {
   img.src = url;
 }
 
+// Wired identically for host and viewer — a chat @username is clickable on
+// both screens, and should go to the same place.
+function goToLiveProfile(username) {
+  state.viewUser = username;
+  state.page = "profile";
+  render();
+}
+
 function liveHostPage() {
   const el = $(`
     <div class="page" style="padding:0;background:#0B0B0F">
-      <div class="live-setup">
+      <div class="live-setup" id="liveSetup" style="display:none">
         <p class="live-setup-title">Go live</p>
         <input class="live-input" id="liveTitle" placeholder="What's this about?" maxlength="120">
         <p class="live-setup-note">Audio only — no camera</p>
@@ -2371,6 +2379,15 @@ function liveHostPage() {
   let stop = null;
   el.addEventListener("screen-exit", () => stop?.());
 
+  const enterRoom = (sessionId) => {
+    const root = el.querySelector("#liveRoot");
+    stop = mountLive(root, { sessionId, isHost: true, me: store.user, token: store.token });
+    root.querySelector("#live-close-btn").addEventListener("click", () => history.back());
+    root.querySelector("#live-end-btn").addEventListener("click", () => history.back());
+    root.addEventListener("live:image", (e) => renderLiveImage(root, e.detail));
+    root.addEventListener("live:profile-request", (e) => goToLiveProfile(e.detail.username));
+  };
+
   el.querySelector("#goLiveBtn").onclick = async () => {
     const btn = el.querySelector("#goLiveBtn");
     btn.disabled = true;
@@ -2382,15 +2399,22 @@ function liveHostPage() {
       btn.disabled = false;
       return;
     }
-    el.querySelector(".live-setup").remove();
-
-    const root = el.querySelector("#liveRoot");
-    stop = mountLive(root, { sessionId: r.session.id, isHost: true, me: store.user, token: store.token });
-
-    root.querySelector("#live-close-btn").addEventListener("click", () => history.back());
-    root.querySelector("#live-end-btn").addEventListener("click", () => history.back());
-    root.addEventListener("live:image", (e) => renderLiveImage(root, e.detail));
+    el.querySelector("#liveSetup").style.display = "none";
+    enterRoom(r.session.id);
   };
+
+  // A host who stepped away (a dropped connection, backgrounding the app)
+  // and comes back here should rejoin what they already have — with real
+  // people still in it — not be walked through creating a whole new one
+  // while the real one sits abandoned. GET /api/live/mine is read-only, so
+  // just checking never creates anything by itself.
+  (async () => {
+    try {
+      const r = await api("/live/mine");
+      if (r.session) { toast("Rejoining your live"); enterRoom(r.session.id); return; }
+    } catch {}
+    el.querySelector("#liveSetup").style.display = "flex";
+  })();
 
   return el;
 }
@@ -2415,6 +2439,7 @@ function liveWatchPage() {
     root.querySelector("#live-close-btn").addEventListener("click", () => history.back());
     root.addEventListener("live:ended", () => history.back());
     root.addEventListener("live:image", (e) => renderLiveImage(root, e.detail));
+    root.addEventListener("live:profile-request", (e) => goToLiveProfile(e.detail.username));
     root.addEventListener("live:gift-request", () => {
       if (!store.token) return toast("Log in to send gifts");
       openLiveGiftSheet(sessionId);

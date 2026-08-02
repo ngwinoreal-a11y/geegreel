@@ -2576,7 +2576,13 @@ async function handle(request, env, ctx) {
     const already = await env.DB.prepare(
       "SELECT id FROM live_sessions WHERE host_user_id = ? AND status = 'live'"
     ).bind(user.id).first();
-    if (already) return json({ session: { id: already.id } }, 200);
+    // `resumed` lets the frontend skip the "what's this about" setup screen
+    // and rejoin straight into the room — without it, a host who steps away
+    // (a dropped connection, backgrounding the app) and comes back looks
+    // identical to someone starting fresh, so they'd be walked through
+    // creating a whole new live while their real one, with real people
+    // still in it, sits abandoned.
+    if (already) return json({ session: { id: already.id }, resumed: true }, 200);
 
     const body = await request.json().catch(() => ({}));
     const id = uid();
@@ -2584,7 +2590,7 @@ async function handle(request, env, ctx) {
       "INSERT INTO live_sessions (id, host_user_id, title, status, started_at) VALUES (?, ?, ?, 'live', ?)"
     ).bind(id, user.id, (body.title || "").trim().slice(0, 120) || null, now()).run();
 
-    return json({ session: { id } }, 201);
+    return json({ session: { id }, resumed: false }, 201);
   }
 
   const liveEndMatch = /^\/api\/live\/([\w-]+)\/end$/.exec(path);
@@ -2605,6 +2611,18 @@ async function handle(request, env, ctx) {
   }
 
   // Currently-live sessions, newest first — the "Live" discovery row.
+  // Read-only check for "do I already have a live running" — used to skip
+  // the go-live setup screen and rejoin directly. Deliberately separate
+  // from POST /api/live/start, which has the side effect of creating one
+  // if none exists; a plain status check has no business doing that.
+  if (path === "/api/live/mine" && method === "GET") {
+    requireUser(user);
+    const session = await env.DB.prepare(
+      "SELECT id FROM live_sessions WHERE host_user_id = ? AND status = 'live'"
+    ).bind(user.id).first();
+    return json({ session: session ? { id: session.id } : null });
+  }
+
   if (path === "/api/live/active" && method === "GET") {
     const { results } = await env.DB.prepare(`
       SELECT ls.id, ls.title, ls.started_at,

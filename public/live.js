@@ -2,17 +2,12 @@
    live.js — VOICE-ONLY LIVE, FRONTEND LOGIC
    ============================================================================
 
-   FOR CLAUDE CODE:
+   Save at public/live.js. Self-contained module — renders its own markup
+   into a container and doesn't assume anything about the rest of the app
+   beyond a global api()-style token (see CONNECT BELOW).
 
-   Save at public/live.js. This is a self-contained module — it renders its
-   own markup into a container you give it and doesn't assume anything about
-   the rest of the app beyond a global `api()` helper and an `apiToken`
-   (adjust the two lines marked CONNECT BELOW to match however index.html
-   currently authenticates requests).
-
-   REQUIRES the backend patch in live-backend-patch.md — this file calls the
-   patched shape of /chunk and /chunks (multi-speaker), not the original
-   host-only shape.
+   REQUIRES the backend patch in live-backend-patch.md (multi-speaker chunk
+   upload/poll) and GET /api/live/mine (added alongside the fixes below).
 
    USAGE:
      import { mountLive } from "./live.js";
@@ -34,26 +29,27 @@
 const CHUNK_MS = 2500;          // how much audio each uploaded chunk holds
 const POLL_MS = 1800;           // how often each speaker's stream is polled
 const AUDIO_BITRATE = 32000;    // opus, speech-only — small files, clear voice
+const MAX_GUESTS = 8;           // host + 8 guests = a 3x3 grid, matching the reference
 
 export function mountLive(container, { sessionId, isHost, me, token, apiBase = "/api" }) {
   const state = {
     ws: null,
-    participants: new Map(),   // id -> { username, displayName, avatarUrl, role, muted }
+    participants: new Map(),   // id -> { id, username, displayName, avatarUrl, role, muted }
     speakers: new Set(),
     myRole: isHost ? "host" : "viewer",
+    joinRequested: false,
     micStream: null,
+    micActive: false,
     recorder: null,
+    recTimer: null,
     recSeq: 0,
     // Playback: one queue + cursor per person whose audio we're pulling.
-    players: new Map(),        // id -> { after, timer, queue: [], playing:false, el:Audio }
+    players: new Map(),        // id -> { after, timer, queue: [], playing:false }
     ended: false,
     chatEnabled: true,
   };
 
   // -------------------------------------------------------------- CONNECT BELOW
-  // Adjust these two to match how the rest of the app calls the API and
-  // carries the session token. Everything else in this file is independent
-  // of that choice.
   const authHeaders = () => ({ Authorization: `Bearer ${token}` });
   const apiJson = async (path, opts = {}) => {
     const res = await fetch(apiBase + path, {
@@ -77,8 +73,7 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
         <button class="live-close" id="live-close-btn">&times;</button>
       </div>
       <div class="live-stage">
-        <div class="live-host" id="live-host-slot"></div>
-        <div class="live-guests" id="live-guests-slot"></div>
+        <div id="live-stage-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px 8px;padding:0 12px"></div>
       </div>
       <div id="live-requests"></div>
       <div class="live-chat" id="live-chat"></div>
@@ -93,40 +88,66 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
     `;
   }
 
-  function avatarHtml(p, size) {
+  function avatarHtml(p) {
     const initial = (p.displayName || p.username || "?")[0].toUpperCase();
-    return p.avatarUrl
-      ? `<img src="${p.avatarUrl}" alt="">`
-      : initial;
+    return p.avatarUrl ? `<img src="${p.avatarUrl}" alt="">` : initial;
   }
 
-  function renderHost() {
-    const host = [...state.participants.values()].find((p) => p.role === "host") ||
-      { username: me.username, displayName: me.displayName, avatarUrl: me.avatarUrl, role: "host" };
-    const speaking = state.speakers.has(host.id) ? "on" : "";
-    $("#live-host-slot").innerHTML = `
-      <div class="live-av-ring ${speaking}" style="position:relative">
-        <div class="live-av">${avatarHtml(host)}</div>
-        ${host.muted ? '<div class="live-muted">&#128263;</div>' : ""}
+  // One 3x3-grid cell — the host's own seat, a guest's seat, or (for a
+  // viewer who could still request one) the open "+" seat. Matches the
+  // reference screenshot: avatar circle with a speaking ring, name below,
+  // a small mic-off badge when muted.
+  function seatTile(p, { isHostSeat = false, revokable = false } = {}) {
+    const speaking = state.speakers.has(p.id) ? "on" : "";
+    return `
+      <div class="live-seat" data-speaker="${p.id}" style="display:flex;flex-direction:column;align-items:center;gap:5px">
+        <div class="live-av-ring ${speaking}" style="position:relative;width:78px;height:78px">
+          <div class="live-av" style="width:72px;height:72px;font-size:24px">${avatarHtml(p)}</div>
+          ${p.muted ? '<div class="live-muted" style="width:20px;height:20px">&#128263;</div>' : ""}
+          ${revokable ? `<button data-revoke="${p.id}" title="Remove" style="position:absolute;top:-2px;right:-2px;width:20px;height:20px;
+            border-radius:50%;background:rgba(0,0,0,.75);color:#fff;font-size:12px;display:grid;place-items:center;border:none">&times;</button>` : ""}
+        </div>
+        <p class="live-name sm" style="max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(isHostSeat ? "Host" : (p.displayName || p.username))}</p>
       </div>
-      <p class="live-name">${escapeHtml(host.displayName || host.username || "Host")}</p>
     `;
   }
 
-  function renderGuests() {
-    const guests = [...state.participants.values()].filter((p) => p.role === "guest");
-    $("#live-guests-slot").innerHTML = guests.map((g) => `
-      <div class="live-guest">
-        <div class="live-av-ring ${state.speakers.has(g.id) ? "on" : ""}" style="position:relative">
-          <div class="live-av" style="width:56px;height:56px">${avatarHtml(g)}</div>
-          ${g.muted ? '<div class="live-muted" style="width:18px;height:18px">&#128263;</div>' : ""}
+  function openSeatTile() {
+    return `
+      <button id="live-open-seat" style="display:flex;flex-direction:column;align-items:center;gap:5px;background:none;border:none">
+        <div class="live-av-ring" style="width:78px;height:78px">
+          <div class="live-av" style="width:72px;height:72px;font-size:28px;opacity:.6">${state.joinRequested ? "&#8230;" : "+"}</div>
         </div>
-        <p class="live-name sm">${escapeHtml(g.displayName || g.username)}</p>
-        ${isHost ? `<button class="live-req-decline" data-revoke="${g.id}" title="Remove">&times;</button>` : ""}
-      </div>
-    `).join("");
+        <p class="live-name sm" style="opacity:.7">${state.joinRequested ? "Requested" : "Join"}</p>
+      </button>
+    `;
+  }
+
+  // Host tile always first, then guests in the order they were approved,
+  // then (only for someone who could actually tap it) one open seat.
+  function renderStage() {
+    const host = [...state.participants.values()].find((p) => p.role === "host") ||
+      (isHost ? { id: me.id, username: me.username, displayName: me.displayName, avatarUrl: me.avatarUrl, role: "host" } : null);
+    const guests = [...state.participants.values()].filter((p) => p.role === "guest");
+
+    const tiles = [];
+    if (host) tiles.push(seatTile(host, { isHostSeat: true }));
+    guests.forEach((g) => tiles.push(seatTile(g, { revokable: isHost })));
+    if (!isHost && state.myRole === "viewer" && guests.length < MAX_GUESTS) tiles.push(openSeatTile());
+
+    $("#live-stage-grid").innerHTML = tiles.join("");
+
     container.querySelectorAll("[data-revoke]").forEach((b) =>
-      b.addEventListener("click", () => send({ type: "revoke", userId: b.dataset.revoke })));
+      b.addEventListener("click", (e) => { e.stopPropagation(); send({ type: "revoke", userId: b.dataset.revoke }); }));
+
+    // Tapping the open seat IS the join request — same as tapping an empty
+    // seat in TikTok's own multi-guest live.
+    $("#live-open-seat")?.addEventListener("click", () => {
+      if (state.joinRequested) return;
+      state.joinRequested = true;
+      send({ type: "request-join" });
+      renderStage();
+    });
   }
 
   function addChatLine(html, { sys = false } = {}) {
@@ -135,11 +156,27 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
     line.className = "live-msg" + (sys ? " sys" : "");
     line.innerHTML = html;
     chat.appendChild(line);
+    // A username inside the line (real chat, not a system line) is
+    // clickable — dispatched, not navigated directly, since this module
+    // doesn't know the surrounding app's routing.
+    const userBtn = line.querySelector("[data-username]");
+    if (userBtn) userBtn.addEventListener("click", () =>
+      container.dispatchEvent(new CustomEvent("live:profile-request", { detail: { username: userBtn.dataset.username } })));
     // Fade lines once there's a real backlog, so the newest few stay crisp.
     const lines = chat.querySelectorAll(".live-msg:not(.sys)");
     if (lines.length > 6) lines[lines.length - 7].classList.add("old");
     while (chat.children.length > 40) chat.removeChild(chat.firstChild);
     chat.scrollTop = chat.scrollHeight;
+  }
+
+  // A real chat message: small avatar + a tappable @username (opens their
+  // profile in the surrounding app), then the message itself.
+  function addUserChatLine(user, bodyHtml) {
+    addChatLine(
+      `<span class="live-av" style="width:18px;height:18px;font-size:9px;display:inline-grid;vertical-align:middle;margin-right:4px">${avatarHtml(user)}</span>` +
+      `<button class="live-chat-user" data-username="${escapeHtml(user.username)}" style="background:none;border:none;padding:0;` +
+      `color:#5AC8FA;font-weight:700;font-size:inherit;cursor:pointer;vertical-align:middle">@${escapeHtml(user.username)}</button> ${bodyHtml}`
+    );
   }
 
   function floatGift(emoji, fromName) {
@@ -193,7 +230,7 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
         case "welcome":
           state.participants.set(msg.you.id, msg.you);
           msg.participants.forEach((p) => state.participants.set(p.id, p));
-          renderHost(); renderGuests();
+          renderStage();
           // Start pulling audio for the host, and for any guest already
           // on stage when we joined.
           [...state.participants.values()].filter((p) => p.role === "host" || p.role === "guest")
@@ -202,18 +239,24 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
         case "joined":
           state.participants.set(msg.user.id, msg.user);
           addChatLine(`${escapeHtml(msg.user.displayName || msg.user.username)} joined`, { sys: true });
-          renderGuests();
+          renderStage();
           break;
-        case "left":
-          state.participants.delete(msg.id);
+        case "left": {
+          const p = state.participants.get(msg.id);
+          // The host is kept, not deleted — their tile stays put (just not
+          // speaking) while briefly disconnected/reconnecting, rather than
+          // the grid showing an empty slot or, worse, falling back to
+          // showing whoever's own client is rendering it.
+          if (p && p.role !== "host") state.participants.delete(msg.id);
           stopPlayback(msg.id);
-          renderHost(); renderGuests();
+          renderStage();
           break;
+        }
         case "viewerCount":
           $("#live-vcount").textContent = msg.count;
           break;
         case "chat":
-          addChatLine(`<b>@${escapeHtml(msg.user.username)}</b> ${escapeHtml(msg.body)}`);
+          addUserChatLine(msg.user, escapeHtml(msg.body));
           break;
         case "gift": {
           const from = msg.user.displayName || msg.user.username;
@@ -233,33 +276,39 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
           break;
         case "approved":
           state.myRole = "guest";
+          state.joinRequested = false;
           startMic();
           addChatLine("You're live — say hi!", { sys: true });
+          renderStage();
           break;
         case "declined":
+          state.joinRequested = false;
           addChatLine("The host didn't accept your request right now", { sys: true });
+          renderStage();
           break;
         case "revoked":
           state.myRole = "viewer";
+          state.joinRequested = false;
           stopMic();
           addChatLine("You're back to listening", { sys: true });
+          renderStage();
           break;
         case "roleChanged": {
           const p = state.participants.get(msg.id);
           if (p) p.role = msg.role;
           if (msg.role === "guest") startPlayback(msg.id);
           if (msg.role === "viewer") stopPlayback(msg.id);
-          renderHost(); renderGuests();
+          renderStage();
           break;
         }
         case "muteState": {
           const p = state.participants.get(msg.id);
-          if (p) { p.muted = msg.muted; renderHost(); renderGuests(); }
+          if (p) { p.muted = msg.muted; renderStage(); }
           break;
         }
         case "speaking":
           state.speakers = new Set(msg.ids || []);
-          renderHost(); renderGuests();
+          renderStage();
           break;
         case "chatToggle": {
           state.chatEnabled = !!msg.enabled;
@@ -309,6 +358,16 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
   });
 
   // ---------- mic capture (host, and any approved guest) ----------
+  //
+  // Recorded as a sequence of complete, independently-playable ~2.5s clips
+  // (stop and start a FRESH MediaRecorder each cycle) rather than one
+  // continuously-running recorder with a timeslice. This is not a style
+  // preference: a running recorder's dataavailable events after the first
+  // one are WebM continuation clusters, not standalone files — a fresh
+  // <audio> element on the listening end can't decode them at all. Only
+  // the very first chunk of a session would ever have played; every one
+  // after it would silently fail, which matches "nobody can hear anybody"
+  // far better than a partial fix would.
   async function startMic() {
     if (state.micStream) return;
     try {
@@ -317,37 +376,51 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
       addChatLine("Microphone access is blocked — allow it in your browser settings", { sys: true });
       return;
     }
-    // { mimeType: "" } is not "let the browser pick" — it's an invalid
-    // value that makes the constructor throw, synchronously, with nothing
-    // here to catch it. That's a silent, total failure: no recorder, no
-    // chunks, ever, on any browser that supports neither of these two types
-    // (every iOS Safari, and several in-app browsers — WhatsApp's embedded
-    // one among them). Omitting mimeType entirely is what actually means
-    // "browser default".
+    $("#live-mic-btn").classList.add("on");
+    state.micActive = true;
+    state.recSeq = 0;
+    recordSegment();
+  }
+
+  function recordSegment() {
+    if (!state.micActive || !state.micStream) return;
+    // { mimeType: "" } is not "let the browser pick" — it's invalid and
+    // makes the constructor throw. Omitting the key entirely is what
+    // actually means "browser default"; every iOS Safari and several
+    // in-app browsers (WhatsApp's embedded one among them) support neither
+    // of the two types tried here.
     const mime = ["audio/webm;codecs=opus", "audio/webm"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+    let recorder;
     try {
-      state.recorder = new MediaRecorder(state.micStream, mime
+      recorder = new MediaRecorder(state.micStream, mime
         ? { mimeType: mime, audioBitsPerSecond: AUDIO_BITRATE }
         : { audioBitsPerSecond: AUDIO_BITRATE });
-    } catch (err) {
+    } catch {
       addChatLine("This browser can't record audio here — try Chrome or Safari directly, not an in-app browser", { sys: true });
-      $("#live-mic-btn").classList.remove("on");
-      state.micStream.getTracks().forEach((t) => t.stop());
-      state.micStream = null;
+      stopMic();
       return;
     }
-    state.recSeq = 0;
-    state.recorder.ondataavailable = async (e) => {
-      if (!e.data || !e.data.size) return;
-      const seq = state.recSeq++;
-      const fd = new FormData();
-      fd.append("chunk", e.data, `${seq}.webm`);
-      fd.append("seq", String(seq));
-      try { await apiJson(`/live/${sessionId}/chunk`, { method: "POST", body: fd }); } catch { /* drop a lost chunk rather than block */ }
+    const chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: chunks[0]?.type || mime || "audio/webm" });
+      if (blob.size > 200) {
+        const seq = state.recSeq++;
+        const fd = new FormData();
+        fd.append("chunk", blob, `${seq}.webm`);
+        fd.append("seq", String(seq));
+        apiJson(`/live/${sessionId}/chunk`, { method: "POST", body: fd }).catch(() => { /* drop a lost chunk rather than block */ });
+      }
+      if (state.micActive) recordSegment(); // next segment = a fresh, real standalone file
     };
-    state.recorder.start(CHUNK_MS);
+    state.recorder = recorder;
+    recorder.start();
+    state.recTimer = setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, CHUNK_MS);
   }
+
   function stopMic() {
+    state.micActive = false;
+    clearTimeout(state.recTimer);
     if (state.recorder && state.recorder.state !== "inactive") state.recorder.stop();
     if (state.micStream) state.micStream.getTracks().forEach((t) => t.stop());
     state.micStream = null; state.recorder = null;
@@ -355,20 +428,12 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
   }
 
   $("#live-mic-btn").addEventListener("click", () => {
-    if (!state.micStream) return; // viewers with no mic role: no-op
+    if (!state.micStream) return; // viewers with no mic role: no-op (they request via the open seat instead)
     const track = state.micStream.getAudioTracks()[0];
     track.enabled = !track.enabled;
     $("#live-mic-btn").classList.toggle("muted", !track.enabled);
     send({ type: "muteState", muted: !track.enabled });
   });
-
-  // A viewer taps the mic button to ask to speak; a host or already-approved
-  // guest instead toggles mute (handled above).
-  if (!isHost) {
-    $("#live-mic-btn").addEventListener("click", () => {
-      if (state.myRole === "viewer") send({ type: "request-join" });
-    }, { once: false });
-  }
 
   // ---------- playback: one poller per active speaker ----------
   function startPlayback(speakerId) {
@@ -393,6 +458,7 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
       playNext(speakerId);
     } catch { /* miss a poll, catch up next tick */ }
   }
+
   // Browsers block audio.play() from running without a real user gesture
   // behind it — a poll timer doesn't count. That rejection was previously
   // swallowed with nothing shown: every chunk would silently fail to play,
@@ -414,9 +480,6 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
     btn.onclick = () => {
       audioBlocked = false;
       btn.remove();
-      // A silent, muted play — purely to register as the real user gesture
-      // browsers require — then every real speaker's queued/future audio
-      // resumes through the normal playNext() path.
       const unlock = new Audio();
       unlock.muted = true;
       unlock.play().catch(() => {}).finally(() => {
@@ -457,7 +520,7 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
   // ---------- start ----------
   connectSocket();
   if (isHost) startMic();
-  renderHost(); renderGuests();
+  renderStage();
 
   return teardown;
 }
