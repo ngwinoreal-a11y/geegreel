@@ -19,16 +19,18 @@ database_id = "bd2c9e85-462a-42c7-839e-1850b6065625"
 binding = "MEDIA"
 bucket_name = "video-app-media"
 
-# Durable Objects — one LiveRoom instance per live session, holding its
-# WebSocket connections for signaling (join requests, WebRTC offer/answer/ICE
-# relay, chat, gift events). SQLite-backed, free on the Workers Free plan.
-[[durable_objects.bindings]]
-name = "LIVE_ROOMS"
-class_name = "LiveRoom"
-
+# The LiveRoom Durable Object (Live feature) was removed. The binding is
+# gone; this migration entry stays so Cloudflare properly decommissions the
+# class and its storage rather than leaving it orphaned — removing a
+# binding without a matching deleted_classes migration doesn't actually
+# clean anything up on Cloudflare's side.
 [[migrations]]
 tag = "v1-live-rooms"
 new_sqlite_classes = ["LiveRoom"]
+
+[[migrations]]
+tag = "v2-remove-live-rooms"
+deleted_classes = ["LiveRoom"]
 
 [vars]
 MAX_UPLOAD_BYTES = "104857600"

@@ -10,7 +10,6 @@
 <link rel="stylesheet" href="/design-3.css">
 <link rel="stylesheet" href="/design-4.css">
 <link rel="stylesheet" href="/design-5.css">
-<link rel="stylesheet" href="/design-live.css">
 <style>
   /* design-4.css's --sk-base (#1C1C1C) on this app's pure #000 page is too
      close in value — on a real screen it reads as "nothing loaded" rather
@@ -98,17 +97,6 @@
      time on the right edge. Raised to clear it, roughly where the rail's
      own bottom edge (132px) leaves room. */
   .sound-disc { bottom: 146px; }
-
-  /* design-live.css never positions #live-requests itself — only the
-     .live-request card inside it — and its own doc comment says these
-     should "stack above the composer". Every sibling around it
-     (.live-topbar, .live-stage, .live-chat) is position:absolute, so
-     without this it falls back to static flow and renders pinned to the
-     very top of the screen, behind the topbar, instead of where the file's
-     own comment says it belongs. */
-  #live-requests {
-    position: absolute; left: 0; right: 0; bottom: 68px; z-index: 5;
-  }
 </style>
 </head>
 <body>
@@ -124,7 +112,6 @@
 </div>
 
 <script type="module">
-import { mountLive } from "/live.js";
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
 const app = document.getElementById("app");
 
@@ -155,8 +142,6 @@ const I = {
   home: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>`,
   bell: `<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
   user: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>`,
-  live: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M6.3 6.3a8 8 0 0 0 0 11.4M17.7 6.3a8 8 0 0 1 0 11.4M3.5 3.5a12 12 0 0 0 0 17M20.5 3.5a12 12 0 0 1 0 17"/></svg>`,
-  send: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M2 21 22 12 2 3l0 7 13 2-13 2z"/></svg>`,
 };
 
 // "8h", "5d" — matches how TikTok stamps comments
@@ -244,8 +229,7 @@ let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: nu
               // A sound picked on a sound page's "Use this sound", carried
               // into the upload flow. Cleared after posting or leaving upload.
               selectedSound: null,
-              soundId: null,
-              liveId: null };
+              soundId: null };
 
 // ---------- feed ----------
 function slide(v) {
@@ -2241,17 +2225,6 @@ const canCaptureSound = () => {
   return typeof a.captureStream === "function" || typeof a.mozCaptureStream === "function";
 };
 
-// ---------- live streaming ----------
-//
-// The room itself (WebSocket, chat, gifts, join requests, mic capture,
-// chunk upload/playback) is /live.js — imported at the top of this file as
-// mountLive(). It replaced an earlier WebRTC host<->guest connection that
-// had no TURN relay and so failed for anyone on mobile data (the common
-// case here, not the exception); this version works over any connection,
-// at the cost of a few seconds of delay. What's left here is just this
-// app's own screens around it: the pre-live setup, and wiring mountLive's
-// close/end/gift/image events into this app's navigation and gift sheet.
-
 function soundPage() {
   const id = state.soundId;
   const el = $(`<div class="page" style="padding:0"><div class="spin"></div></div>`);
@@ -2301,150 +2274,6 @@ function soundPage() {
     el.innerHTML = `<div class="pagehead"><button id="back">${I.back}</button><h2>Sound</h2></div><p class="empty">${esc(e.message)}</p>`;
     el.querySelector("#back").onclick = () => history.back();
   });
-
-  return el;
-}
-
-function liveDiscoverPage() {
-  const el = $(`
-    <div class="page">
-      <div class="pagehead"><button id="back">${I.back}</button><h2>Live</h2></div>
-      <button class="btn-primary" id="goLive" style="margin-bottom:20px;display:flex;align-items:center;justify-content:center;gap:8px">
-        ${I.live} Go Live
-      </button>
-      <div id="list"><div class="spin"></div></div>
-    </div>
-  `);
-  el.querySelector("#back").onclick = () => history.back();
-  el.querySelector("#goLive").onclick = () => { state.page = "live-host"; render(); };
-
-  api("/live/active").then(r => {
-    const list = el.querySelector("#list");
-    if (!r.sessions.length) { list.innerHTML = `<p class="empty">No one is live right now.</p>`; return; }
-    list.innerHTML = r.sessions.map(s => `
-      <div class="row tap" data-id="${s.id}">
-        <div class="av">${avatarInner(s.host)}</div>
-        <div style="flex:1;min-width:0">
-          <p style="margin:0;font-size:14px;font-weight:600">${esc(s.host.displayName || s.host.username)}</p>
-          <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">${esc(s.title || "Live now")}</p>
-        </div>
-        <span style="background:#FF3B30;color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:10px;flex-shrink:0">LIVE</span>
-      </div>`).join("");
-    list.querySelectorAll("[data-id]").forEach(row => row.onclick = () => {
-      state.liveId = row.dataset.id;
-      state.page = "live-watch";
-      render();
-    });
-  }).catch(e => { el.querySelector("#list").innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
-
-  return el;
-}
-
-// Shown for the "live:image" event mountLive() dispatches (see live.js's
-// header comment) — it deliberately doesn't render this itself since
-// design-live.css leaves the discussion-image slot to whatever page mounts
-// it. Same handling for host and viewer, so it's shared here.
-function renderLiveImage(container, url) {
-  let img = container.querySelector(".live-discuss-img");
-  if (!url) { img?.remove(); return; }
-  if (!img) {
-    img = $(`<img class="live-discuss-img" style="position:absolute;top:90px;left:16px;right:16px;
-      max-width:280px;margin:0 auto;border-radius:14px;z-index:2;display:block">`);
-    container.appendChild(img);
-  }
-  img.src = url;
-}
-
-// Wired identically for host and viewer — a chat @username is clickable on
-// both screens, and should go to the same place.
-function goToLiveProfile(username) {
-  state.viewUser = username;
-  state.page = "profile";
-  render();
-}
-
-function liveHostPage() {
-  const el = $(`
-    <div class="page" style="padding:0;background:#0B0B0F">
-      <div class="live-setup" id="liveSetup" style="display:none">
-        <p class="live-setup-title">Go live</p>
-        <input class="live-input" id="liveTitle" placeholder="What's this about?" maxlength="120">
-        <p class="live-setup-note">Audio only — no camera</p>
-        <button class="btn-primary" id="goLiveBtn">Go live</button>
-      </div>
-      <div id="liveRoot" style="position:absolute;inset:0"></div>
-    </div>
-  `);
-
-  let stop = null;
-  el.addEventListener("screen-exit", () => stop?.());
-
-  const enterRoom = (sessionId) => {
-    const root = el.querySelector("#liveRoot");
-    stop = mountLive(root, { sessionId, isHost: true, me: store.user, token: store.token });
-    root.querySelector("#live-close-btn").addEventListener("click", () => history.back());
-    root.querySelector("#live-end-btn").addEventListener("click", () => history.back());
-    root.addEventListener("live:image", (e) => renderLiveImage(root, e.detail));
-    root.addEventListener("live:profile-request", (e) => goToLiveProfile(e.detail.username));
-  };
-
-  el.querySelector("#goLiveBtn").onclick = async () => {
-    const btn = el.querySelector("#goLiveBtn");
-    btn.disabled = true;
-    let r;
-    try {
-      r = await api("/live/start", { method: "POST", body: { title: el.querySelector("#liveTitle").value.trim() } });
-    } catch (e) {
-      toast(e.message);
-      btn.disabled = false;
-      return;
-    }
-    el.querySelector("#liveSetup").style.display = "none";
-    enterRoom(r.session.id);
-  };
-
-  // A host who stepped away (a dropped connection, backgrounding the app)
-  // and comes back here should rejoin what they already have — with real
-  // people still in it — not be walked through creating a whole new one
-  // while the real one sits abandoned. GET /api/live/mine is read-only, so
-  // just checking never creates anything by itself.
-  (async () => {
-    try {
-      const r = await api("/live/mine");
-      if (r.session) { toast("Rejoining your live"); enterRoom(r.session.id); return; }
-    } catch {}
-    el.querySelector("#liveSetup").style.display = "flex";
-  })();
-
-  return el;
-}
-
-function liveWatchPage() {
-  const sessionId = state.liveId;
-  if (!sessionId) { state.page = null; render(); return $(`<div></div>`); }
-
-  const el = $(`<div class="page" style="padding:0;background:#0B0B0F"><div class="spin"></div></div>`);
-  let stop = null;
-  el.addEventListener("screen-exit", () => stop?.());
-
-  api(`/live/${sessionId}`).then(({ session: s }) => {
-    if (s.status !== "live") { toast("This live has ended"); history.back(); return; }
-
-    el.innerHTML = "";
-    const root = $(`<div id="liveRoot" style="position:absolute;inset:0"></div>`);
-    el.appendChild(root);
-
-    stop = mountLive(root, { sessionId, isHost: false, me: store.user, token: store.token });
-
-    root.querySelector("#live-close-btn").addEventListener("click", () => history.back());
-    root.addEventListener("live:ended", () => history.back());
-    root.addEventListener("live:image", (e) => renderLiveImage(root, e.detail));
-    root.addEventListener("live:profile-request", (e) => goToLiveProfile(e.detail.username));
-    root.addEventListener("live:gift-request", () => {
-      if (!store.token) return toast("Log in to send gifts");
-      openLiveGiftSheet(sessionId);
-    });
-  }).catch(() => { toast("This live isn't available anymore"); history.back(); });
 
   return el;
 }
@@ -2801,78 +2630,6 @@ function flyGift(emoji) {
     font-size:64px;z-index:60;pointer-events:none;animation:fly 1.1s ease-out forwards">${emoji}</div>`);
   app.appendChild(n);
   setTimeout(() => n.remove(), 1100);
-}
-
-// Same shape as openGifts(), aimed at a live session instead of a video —
-// LiveRoom broadcasts the arrival to everyone watching once this commits.
-function openLiveGiftSheet(sessionId) {
-  const sheet = $(`
-    <div class="sheet" style="height:auto;max-height:70%">
-      <div class="sheet-head">
-        <span class="title">Send a gift</span>
-        <button class="x">${I.x}</button>
-      </div>
-      <div style="padding:10px 16px;border-bottom:1px solid #EDEDED;display:flex;align-items:center;justify-content:space-between">
-        <span style="font-size:13px;color:#55555A">Your coins</span>
-        <span class="bal" style="font-family:var(--mono);font-size:15px;color:#111;font-weight:600">—</span>
-      </div>
-      <div class="sheet-body" style="padding:14px 12px">
-        <div class="gg"></div>
-      </div>
-      <div class="sheet-foot" style="justify-content:center">
-        <button class="topup" style="background:none;border:none;color:#111;font-size:13px;font-weight:600;text-decoration:underline">
-          Get more coins
-        </button>
-      </div>
-    </div>
-  `);
-  const close = mountSheet(sheet);
-  sheet.querySelector(".x").onclick = close;
-  sheet.querySelector(".topup").onclick = () => { close(); state.page = "wallet"; render(); };
-
-  const grid = sheet.querySelector(".gg");
-  const bal = sheet.querySelector(".bal");
-
-  Promise.all([api("/gifts/catalog"), api("/wallet")]).then(([cat, w]) => {
-    bal.textContent = fmt(w.coins);
-
-    grid.innerHTML = cat.gifts.map(g => `
-      <button data-k="${g.key}" data-c="${g.coins}" style="
-        background:#F6F6F7;border:1px solid #EDEDED;border-radius:10px;padding:10px 4px;
-        display:flex;flex-direction:column;align-items:center;gap:3px">
-        <span style="font-size:24px;line-height:1">${g.emoji}</span>
-        <span style="font-size:10px;color:#55555A;font-weight:600">${esc(g.name)}</span>
-        <span style="font-family:var(--mono);font-size:10px;color:#8A8A8E">${fmt(g.coins)}</span>
-      </button>`).join("");
-
-    grid.querySelectorAll("[data-k]").forEach(b => {
-      b.onclick = async () => {
-        const cost = parseInt(b.dataset.c);
-        const have = parseInt(bal.textContent.replace(/[^\d]/g, "")) || 0;
-
-        if (have < cost) {
-          if (confirm(`This gift costs ${cost} coins and you have ${have}. Get more coins?`)) {
-            close();
-            state.page = "wallet";
-            render();
-          }
-          return;
-        }
-
-        grid.querySelectorAll("button").forEach(x => x.disabled = true);
-        try {
-          const r = await api(`/live/${sessionId}/gift`, { method: "POST", body: { giftKey: b.dataset.k } });
-          bal.textContent = fmt(r.coinsLeft);
-          flyGift(cat.gifts.find(g => g.key === b.dataset.k)?.emoji || "🎁");
-          toast("Gift sent");
-          setTimeout(close, 700);
-        } catch (e) {
-          toast(e.message);
-          grid.querySelectorAll("button").forEach(x => x.disabled = false);
-        }
-      };
-    });
-  }).catch(e => { grid.innerHTML = `<p class="empty" style="color:#8A8A8E">${esc(e.message)}</p>`; });
 }
 
 // ---------- wallet ----------
@@ -3706,9 +3463,6 @@ function renderInner() {
   if (state.page === "wallet") { app.appendChild(walletPage()); return; }
   if (state.page === "wallet-history") { app.appendChild(walletHistoryPage()); return; }
   if (state.page === "sound") { app.appendChild(soundPage()); return; }
-  if (state.page === "live-discover") { app.appendChild(liveDiscoverPage()); return; }
-  if (state.page === "live-host") { app.appendChild(liveHostPage()); return; }
-  if (state.page === "live-watch") { app.appendChild(liveWatchPage()); return; }
   if (state.page === "search") { app.appendChild(searchPage()); attachNav(app, "search"); return; }
   if (state.page === "notifications") { app.appendChild(notificationsPage()); return; }
 
@@ -3718,7 +3472,6 @@ function renderInner() {
     <div class="topbar">
       <button class="me-btn" id="me">${avatarInner(store.user)}</button>
       <div class="chrome-pill">
-        <button id="liveBtn">${I.live}</button>
         <button id="search">${I.search}</button>
         <button id="notifBell">${I.bell}${state.unreadCount ? '<span class="badge dot"></span>' : ""}</button>
         <button id="settings">${I.gear}</button>
@@ -3726,7 +3479,6 @@ function renderInner() {
     </div>`));
 
   app.querySelector("#me").onclick = () => { state.viewUser = null; state.tab = "profile"; state.page = "profile"; render(); };
-  app.querySelector("#liveBtn").onclick = () => { state.page = "live-discover"; render(); };
   app.querySelector("#search").onclick = () => { state.tab = "search"; state.page = "search"; render(); };
   app.querySelector("#notifBell").onclick = () => { state.page = "notifications"; render(); };
   app.querySelector("#settings").onclick = () => { state.page = "settings"; render(); };
