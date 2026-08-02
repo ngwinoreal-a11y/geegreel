@@ -235,7 +235,7 @@ let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: nu
 function slide(v) {
   const mine = v.user.id === store.user?.id;
   const el = $(`
-    <div class="slide" data-id="${v.id}">
+    <div class="slide cover" data-id="${v.id}">
       <video src="${v.videoUrl}" data-src="${v.videoUrl}" loop playsinline
              preload="none" ${v.thumbUrl ? `poster="${v.thumbUrl}"` : ""}></video>
       <div class="overlay">
@@ -299,13 +299,6 @@ function slide(v) {
   });
 
   const video = el.querySelector("video");
-
-  // Match TikTok: fill the screen when the source is portrait (≈9:16),
-  // letterbox anything wider so nothing important gets cropped.
-  video.addEventListener("loadedmetadata", () => {
-    const ratio = video.videoWidth / video.videoHeight;
-    if (ratio < 0.62) el.classList.add("cover");
-  });
 
   // The pause glyph tracks the video's actual state, not just the tap that
   // caused it — autoplay policies and the feed's own scroll-driven pausing
@@ -520,7 +513,7 @@ function adSlide(v) {
   const el = $(`
     <div class="slide ad-slide" data-id="${v.id}" data-ad="1">
       ${v.adType === "video"
-        ? `<video src="${v.mediaUrl}" data-src="${v.mediaUrl}" loop playsinline preload="auto"></video>`
+        ? `<video src="${v.mediaUrl}" data-src="${v.mediaUrl}" loop playsinline preload="none"></video>`
         : `<img src="${v.mediaUrl}" alt="">`}
       <div class="overlay">
         <span class="sponsor-tag">Sponsored</span>
@@ -999,6 +992,29 @@ async function loadFeed(reset = true) {
 let io;
 const viewed = new Set();
 
+// Best-effort offline playback: once a video has genuinely been watched
+// (see the view timer below, not just scrolled past), pull down the whole
+// file with no Range header and hand it to the service worker's cache —
+// see sw.js, which serves it back (correctly sliced for Range) when a
+// later request for the same URL hits with no network. Capped so a long
+// scrolling session doesn't quietly fill up someone's phone.
+const OFFLINE_VIDEO_CACHE = "geereel-offline-videos-v1";
+const OFFLINE_VIDEO_CAP = 15;
+async function cacheVideoForOffline(url) {
+  if (!url || !("caches" in window)) return;
+  try {
+    const cache = await caches.open(OFFLINE_VIDEO_CACHE);
+    if (await cache.match(url)) return;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    await cache.put(url, res);
+    const keys = await cache.keys();
+    if (keys.length > OFFLINE_VIDEO_CAP) {
+      await Promise.all(keys.slice(0, keys.length - OFFLINE_VIDEO_CAP).map(k => cache.delete(k)));
+    }
+  } catch {}
+}
+
 // Keep the current slide plus a couple either side warm. Everything else
 // releases its buffer — holding 30 buffered videos is what makes a feed
 // stutter after a minute of scrolling.
@@ -1065,6 +1081,7 @@ function observePlayback() {
             viewed.add(id);
             const ep = isAd ? `/ads/${id}/view` : `/videos/${id}/view`;
             api(ep, { method: "POST" }).catch(() => {});
+            if (v && !isAd) cacheVideoForOffline(v.dataset.src);
           }, 1000);
         }
       } else {
