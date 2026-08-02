@@ -371,6 +371,20 @@ button:active { transform: scale(.9); opacity: .85; }
 
 .btn-plain { background: none; border: none; font-size: 14px; font-weight: 500; }
 
+.or-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 16px 0; color: var(--faint); font-size: 12px;
+}
+.or-divider::before, .or-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--border);
+}
+
+.btn-oauth {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 0; font-weight: 600; font-size: 14px; color: var(--text);
+}
+
 /* Signup wizard progress — small dots, not a numbered "step 2 of 4" label. */
 .step-dots {
   display: flex; justify-content: center; gap: 6px; margin-bottom: 24px;

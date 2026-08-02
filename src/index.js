@@ -621,6 +621,106 @@ async function handle(request, env, ctx) {
     return json({ user: privateUser(user) });
   }
 
+  // ----- Google sign-in -----
+  // Server-side authorization-code flow — two redirects, no client-side
+  // Google library. GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are Worker
+  // secrets (wrangler secret put), not vars — until they're set, these
+  // 501 instead of silently pretending to work.
+  if (path === "/api/auth/google/start" && method === "GET") {
+    if (!env.GOOGLE_CLIENT_ID) return err("Google sign-in isn't configured yet", 501);
+    const state = uid();
+    const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    authUrl.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
+    authUrl.searchParams.set("redirect_uri", `${url.origin}/api/auth/google/callback`);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("scope", "openid email profile");
+    authUrl.searchParams.set("state", state);
+    authUrl.searchParams.set("prompt", "select_account");
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: authUrl.toString(),
+        // HttpOnly + short-lived — only ever read back by the callback
+        // below, to confirm the request that comes back from Google really
+        // started here (blocks login CSRF) instead of being forged.
+        "Set-Cookie": `oauth_state=${state}; Max-Age=600; Path=/; HttpOnly; Secure; SameSite=Lax`,
+      },
+    });
+  }
+
+  if (path === "/api/auth/google/callback" && method === "GET") {
+    const fail = (reason) => Response.redirect(`${url.origin}/?authError=${encodeURIComponent(reason)}`, 302);
+    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return err("Google sign-in isn't configured yet", 501);
+
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const cookieState = (request.headers.get("Cookie") || "").match(/oauth_state=([^;]+)/)?.[1];
+    if (!code || !state || !cookieState || state !== cookieState) {
+      return fail("Could not verify this sign-in attempt — please try again");
+    }
+
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code, client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: `${url.origin}/api/auth/google/callback`, grant_type: "authorization_code",
+      }),
+    });
+    if (!tokenRes.ok) return fail("Google sign-in failed — please try again");
+    const tokens = await tokenRes.json();
+
+    const profileRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+    if (!profileRes.ok) return fail("Google sign-in failed — please try again");
+    const profile = await profileRes.json(); // { sub, email, email_verified, name, picture }
+    if (!profile.email_verified) return fail("That Google account's email isn't verified");
+
+    let account = await env.DB.prepare("SELECT * FROM users WHERE google_id = ?").bind(profile.sub).first();
+
+    if (!account) {
+      // Same email, no Google link yet — Google has already verified this
+      // address, so linking it to the existing password account is safe
+      // and saves someone who signed up with a password from ending up
+      // with two accounts for the same email.
+      account = await env.DB.prepare("SELECT * FROM users WHERE email = ?").bind(profile.email).first();
+      if (account) {
+        await env.DB.prepare("UPDATE users SET google_id = ? WHERE id = ?").bind(profile.sub, account.id).run();
+      } else {
+        // New account. Google gives no username, so derive one from the
+        // email and disambiguate if it's taken.
+        const base = (profile.email.split("@")[0] || "user").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 16) || "user";
+        let username = base, tries = 0;
+        while (await env.DB.prepare("SELECT id FROM users WHERE username = ?").bind(username).first()) {
+          username = `${base}${Math.floor(Math.random() * 10000)}`;
+          if (++tries > 20) return fail("Couldn't create an account — please try again");
+        }
+        const id = uid();
+        // No password was ever set — hash a random value so password_hash
+        // stays satisfied (NOT NULL) but unusable for logging in.
+        const unusablePassword = await hashPassword(crypto.randomUUID() + crypto.randomUUID());
+        await env.DB.prepare(`
+          INSERT INTO users (id, username, email, password_hash, display_name, bio, created_at, google_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(id, username, profile.email, unusablePassword, profile.name || username, "", now(), profile.sub).run();
+        account = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first();
+      }
+    }
+
+    if (account.status === "banned") return fail(account.banned_reason || "This account has been banned");
+
+    const token = await createSession(env, account.id);
+    // The token can't go in a query string (server logs, browser history) —
+    // the fragment never leaves the browser, and the frontend's bootstrap
+    // picks it up on load (see the IIFE at the bottom of index.html).
+    return new Response(null, {
+      status: 302,
+      headers: { Location: `${url.origin}/#auth=${token}`, "Set-Cookie": "oauth_state=; Max-Age=0; Path=/" },
+    });
+  }
+
   // ----- settings -----
 
   // Everything the settings screen reads
