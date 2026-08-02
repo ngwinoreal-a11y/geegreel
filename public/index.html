@@ -142,6 +142,8 @@ const I = {
   home: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>`,
   bell: `<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
   user: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>`,
+  live: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M6.3 6.3a8 8 0 0 0 0 11.4M17.7 6.3a8 8 0 0 1 0 11.4M3.5 3.5a12 12 0 0 0 0 17M20.5 3.5a12 12 0 0 1 0 17"/></svg>`,
+  send: `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M2 21 22 12 2 3l0 7 13 2-13 2z"/></svg>`,
 };
 
 // "8h", "5d" — matches how TikTok stamps comments
@@ -229,7 +231,8 @@ let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: nu
               // A sound picked on a sound page's "Use this sound", carried
               // into the upload flow. Cleared after posting or leaving upload.
               selectedSound: null,
-              soundId: null };
+              soundId: null,
+              liveId: null };
 
 // ---------- feed ----------
 function slide(v) {
@@ -2225,6 +2228,66 @@ const canCaptureSound = () => {
   return typeof a.captureStream === "function" || typeof a.mozCaptureStream === "function";
 };
 
+// ---------- live streaming ----------
+//
+// Architecture: the host and each approved guest hold a direct WebRTC
+// connection to each other (a star, centred on the host — guests don't
+// connect to each other directly). The host draws everyone it can see
+// (itself plus every connected guest) onto one canvas and sends THAT mixed
+// picture back down each guest's own connection, so a guest still sees
+// everyone even without a direct link to the other guests. That same canvas
+// is also what gets recorded into the short clips viewers watch — so
+// "what's being broadcast" and "what a guest sees" are the same picture.
+//
+// No TURN relay is configured (that needs server-minted credentials this
+// backend doesn't generate), only Cloudflare's and Google's free STUN — a
+// connection between two peers both behind strict/symmetric NATs can fail to
+// establish. Most home and mobile networks aren't that restrictive.
+const ICE_SERVERS = [
+  { urls: "stun:stun.cloudflare.com:3478" },
+  { urls: "stun:stun.l.google.com:19302" },
+];
+
+function openLiveSocket(sessionId) {
+  const wsOrigin = location.origin.replace(/^http/, "ws");
+  return new WebSocket(`${wsOrigin}/api/live/${sessionId}/socket?token=${encodeURIComponent(store.token)}`);
+}
+
+// Raw fetch rather than the api() helper — a live chunk is FormData, not
+// JSON, same reason the video-post upload uses XHR directly instead of api().
+async function uploadLiveChunk(sessionId, blob, seq) {
+  const fd = new FormData();
+  fd.append("chunk", blob, "chunk.webm");
+  fd.append("seq", String(seq));
+  await fetch(`/api/live/${sessionId}/chunk`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${store.token}` },
+    body: fd,
+  });
+}
+
+// Draws a <video> into a target rect the way CSS object-fit:cover would —
+// crop to fill rather than stretch/distort — since plain drawImage(video,
+// x,y,w,h) stretches the whole frame into the target box otherwise.
+function drawCover(ctx, video, x, y, w, h) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return;
+  const scale = Math.max(w / vw, h / vh);
+  const sw = w / scale, sh = h / scale;
+  const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+  ctx.drawImage(video, sx, sy, sw, sh, x, y, w, h);
+}
+
+function makePeerConnection(peerId, ws, { localStream, onTrack } = {}) {
+  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  if (localStream) localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  pc.onicecandidate = (e) => {
+    if (e.candidate) ws.send(JSON.stringify({ type: "signal", to: peerId, data: { candidate: e.candidate } }));
+  };
+  pc.ontrack = (e) => onTrack?.(e.streams[0]);
+  return pc;
+}
+
 function soundPage() {
   const id = state.soundId;
   const el = $(`<div class="page" style="padding:0"><div class="spin"></div></div>`);
@@ -2275,6 +2338,473 @@ function soundPage() {
     el.querySelector("#back").onclick = () => history.back();
   });
 
+  return el;
+}
+
+function liveDiscoverPage() {
+  const el = $(`
+    <div class="page">
+      <div class="pagehead"><button id="back">${I.back}</button><h2>Live</h2></div>
+      <button class="btn-primary" id="goLive" style="margin-bottom:20px;display:flex;align-items:center;justify-content:center;gap:8px">
+        ${I.live} Go Live
+      </button>
+      <div id="list"><div class="spin"></div></div>
+    </div>
+  `);
+  el.querySelector("#back").onclick = () => history.back();
+  el.querySelector("#goLive").onclick = () => { state.page = "live-host"; render(); };
+
+  api("/live/active").then(r => {
+    const list = el.querySelector("#list");
+    if (!r.sessions.length) { list.innerHTML = `<p class="empty">No one is live right now.</p>`; return; }
+    list.innerHTML = r.sessions.map(s => `
+      <div class="row tap" data-id="${s.id}">
+        <div class="av">${avatarInner(s.host)}</div>
+        <div style="flex:1;min-width:0">
+          <p style="margin:0;font-size:14px;font-weight:600">${esc(s.host.displayName || s.host.username)}</p>
+          <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">${esc(s.title || "Live now")}</p>
+        </div>
+        <span style="background:#FF3B30;color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:10px;flex-shrink:0">LIVE</span>
+      </div>`).join("");
+    list.querySelectorAll("[data-id]").forEach(row => row.onclick = () => {
+      state.liveId = row.dataset.id;
+      state.page = "live-watch";
+      render();
+    });
+  }).catch(e => { el.querySelector("#list").innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+
+  return el;
+}
+
+function liveHostPage() {
+  const el = $(`
+    <div class="page" style="padding:0;background:#000">
+      <div id="hostStage" style="position:absolute;inset:0;background:#000">
+        <video id="hostCam" autoplay muted playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
+
+        <div style="position:absolute;top:16px;left:16px;right:16px;display:flex;align-items:center;justify-content:space-between;z-index:4">
+          <button id="closeLive" style="width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.4);color:#fff;display:grid;place-items:center">
+            ${I.x}
+          </button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="background:#FF3B30;color:#fff;font-size:11px;font-weight:700;padding:4px 10px;border-radius:12px;letter-spacing:.5px">LIVE</span>
+            <span id="viewerCount" style="background:rgba(0,0,0,.4);color:#fff;font-size:12px;padding:4px 10px;border-radius:12px;font-family:var(--mono);min-width:20px;text-align:center">0</span>
+          </div>
+        </div>
+
+        <div id="requestsBar" style="position:absolute;top:64px;left:16px;right:16px;z-index:5;display:none"></div>
+
+        <div style="position:absolute;bottom:0;left:0;right:0;z-index:4;padding:0 12px 16px">
+          <div id="liveChat" style="max-height:160px;overflow-y:auto;margin-bottom:8px;display:flex;flex-direction:column;gap:5px"></div>
+          <div style="display:flex;gap:8px">
+            <input id="chatInput" placeholder="Say something..." style="flex:1;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.25);border-radius:20px;padding:10px 16px;color:#fff;font-size:14px;outline:none">
+            <button id="sendChat" style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.2);color:#fff;display:grid;place-items:center;flex-shrink:0">${I.send}</button>
+            <button id="endLive" style="background:#FF3B30;color:#fff;border-radius:20px;padding:0 16px;font-weight:600;font-size:13px;flex-shrink:0">End</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  let ws = null;
+  let localStream = null;       // host's own camera + mic
+  let sessionId = null;
+  let ended = false;
+  const guests = new Map();     // userId -> { pc, video, info }
+  let canvasStream = null;
+  let hostReturnStream = null;  // composite video + host's mic, sent back down each guest connection
+  let compositeRaf = null;
+  let chunkSeq = 0;
+  let segmentTimer = null;
+
+  // Fixed at a lower resolution than a single-shot post: a live stream runs
+  // continuously for potentially many minutes, so keeping the composite
+  // small keeps the per-frame draw cost and every 3-second chunk's upload
+  // size predictable for the whole session instead of just the first take.
+  const CW = 720, CH = 1280;
+  const canvas = document.createElement("canvas");
+  canvas.width = CW; canvas.height = CH;
+  canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1";
+  const cctx = canvas.getContext("2d");
+  // The canvas IS the host's own preview — what it draws is exactly what
+  // gets broadcast, so there's no separate "what you see" vs "what ships".
+  el.querySelector("#hostStage").prepend(canvas);
+
+  const cam = el.querySelector("#hostCam");
+  const requestsBar = el.querySelector("#requestsBar");
+  const chatLog = el.querySelector("#liveChat");
+  const viewerCountEl = el.querySelector("#viewerCount");
+  const chatInput = el.querySelector("#chatInput");
+
+  const cleanup = () => {
+    // "screen-exit" fires on every navigation away, not just the explicit
+    // End button — guards against running this twice (button press, then
+    // the screen-exit its own history.back() triggers) and, more
+    // importantly, makes sure a live actually gets marked ended even when
+    // someone leaves via the nav bar or the phone's back gesture instead of
+    // tapping End. Without this a live left that way would stay "live" in
+    // the database forever — still listed in discovery — even though the
+    // host stopped uploading chunks.
+    if (ended) return;
+    ended = true;
+    cancelAnimationFrame(compositeRaf);
+    clearTimeout(segmentTimer);
+    if (sessionId) api(`/live/${sessionId}/end`, { method: "POST" }).catch(() => {});
+    try { ws?.close(); } catch {}
+    localStream?.getTracks().forEach(t => t.stop());
+    guests.forEach(g => g.pc.close());
+    guests.clear();
+  };
+  el.addEventListener("screen-exit", cleanup);
+
+  const appendChat = (html) => {
+    const row = $(`<div style="color:#fff;font-size:13px;text-shadow:0 1px 4px rgba(0,0,0,.6)">${html}</div>`);
+    chatLog.appendChild(row);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    while (chatLog.children.length > 50) chatLog.removeChild(chatLog.firstChild);
+  };
+
+  const drawComposite = () => {
+    cctx.save();
+    cctx.translate(CW, 0); cctx.scale(-1, 1); // selfie mirror, same as every camera app
+    drawCover(cctx, cam, 0, 0, CW, CH);
+    cctx.restore();
+
+    // Guest tiles stack down the right edge, newest at top.
+    const tileW = 150, tileH = 220, gap = 10, startY = 90;
+    let i = 0;
+    for (const g of guests.values()) {
+      if (g.video.readyState >= 2) {
+        const x = CW - tileW - 14, y = startY + i * (tileH + gap);
+        cctx.save();
+        cctx.beginPath();
+        if (cctx.roundRect) { cctx.roundRect(x, y, tileW, tileH, 12); cctx.clip(); }
+        drawCover(cctx, g.video, x, y, tileW, tileH);
+        cctx.strokeStyle = "rgba(255,255,255,.6)"; cctx.lineWidth = 2;
+        cctx.strokeRect(x, y, tileW, tileH);
+        cctx.restore();
+      }
+      i++;
+    }
+    compositeRaf = requestAnimationFrame(drawComposite);
+  };
+
+  // Records the canvas in complete, independently-playable ~3-second clips
+  // (stopping and starting a fresh MediaRecorder each time, not one
+  // continuously time-sliced recorder) because viewers play these back by
+  // swapping a <video> element's src from one to the next — a mid-stream
+  // WebM cluster from a running recorder isn't a valid standalone file the
+  // way a freshly-started one is.
+  const recordSegment = () => {
+    if (ended || !canvasStream) return;
+    const chunks = [];
+    const types = ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp9,opus", "video/webm"];
+    const mime = types.find(t => MediaRecorder.isTypeSupported(t)) || "";
+    const audioTracks = localStream ? localStream.getAudioTracks() : [];
+    const recStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
+    const rec = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+    rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      const blob = new Blob(chunks, { type: chunks[0]?.type || "video/webm" });
+      if (blob.size > 500 && sessionId) uploadLiveChunk(sessionId, blob, chunkSeq++).catch(() => {});
+      if (!ended) recordSegment();
+    };
+    rec.start();
+    segmentTimer = setTimeout(() => { if (rec.state === "recording") rec.stop(); }, 3000);
+  };
+
+  const showRequest = (info) => {
+    requestsBar.style.display = "block";
+    const row = $(`
+      <div data-req="${info.id}" style="display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.6);
+        border-radius:10px;padding:8px 10px;margin-bottom:6px">
+        <div class="av" style="width:32px;height:32px;font-size:12px">${avatarInner(info)}</div>
+        <span style="flex:1;color:#fff;font-size:13px">${esc(info.displayName || info.username)} wants to join</span>
+        <button class="approveReq" style="background:#4ADE80;color:#000;border-radius:14px;padding:5px 12px;font-size:12px;font-weight:600">Accept</button>
+        <button class="declineReq" style="background:rgba(255,255,255,.2);color:#fff;border-radius:14px;padding:5px 12px;font-size:12px;font-weight:600">No</button>
+      </div>
+    `);
+    const removeRow = () => { row.remove(); if (!requestsBar.children.length) requestsBar.style.display = "none"; };
+
+    row.querySelector(".approveReq").onclick = () => {
+      ws.send(JSON.stringify({ type: "approve", userId: info.id }));
+      removeRow();
+
+      const video = document.createElement("video");
+      video.autoplay = true; video.muted = true; video.playsInline = true;
+      const pc = makePeerConnection(info.id, ws, {
+        localStream: hostReturnStream,
+        onTrack: (stream) => { video.srcObject = stream; },
+      });
+      guests.set(info.id, { pc, video, info });
+
+      pc.createOffer()
+        .then(offer => pc.setLocalDescription(offer).then(() => offer))
+        .then(offer => ws.send(JSON.stringify({ type: "signal", to: info.id, data: { sdp: offer } })))
+        .catch(() => { toast("Couldn't connect to that guest"); guests.delete(info.id); });
+    };
+    row.querySelector(".declineReq").onclick = () => {
+      ws.send(JSON.stringify({ type: "decline", userId: info.id }));
+      removeRow();
+    };
+    requestsBar.appendChild(row);
+  };
+
+  const start = async () => {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 720 }, aspectRatio: { ideal: 9 / 16 }, resizeMode: { ideal: "none" } },
+        audio: true,
+      });
+    } catch {
+      toast("Couldn't start the camera or mic");
+      history.back();
+      return;
+    }
+    cam.srcObject = localStream;
+
+    let r;
+    try { r = await api("/live/start", { method: "POST", body: {} }); }
+    catch (e) { toast(e.message); history.back(); return; }
+    sessionId = r.session.id;
+
+    canvasStream = canvas.captureStream(30);
+    hostReturnStream = new MediaStream([...canvasStream.getVideoTracks(), ...localStream.getAudioTracks()]);
+    drawComposite();
+    recordSegment();
+
+    ws = openLiveSocket(sessionId);
+    ws.onmessage = (e) => {
+      let msg; try { msg = JSON.parse(e.data); } catch { return; }
+      if (msg.type === "request-join") showRequest(msg.user);
+      else if (msg.type === "viewerCount") viewerCountEl.textContent = fmt(msg.count);
+      else if (msg.type === "chat") appendChat(`<b>${esc(msg.user.displayName || msg.user.username)}</b> ${esc(msg.body)}`);
+      else if (msg.type === "gift") {
+        appendChat(`🎁 <b>${esc(msg.user.displayName || msg.user.username)}</b> sent ${msg.gift.emoji} ${esc(msg.gift.name)}`);
+        toast(`${msg.gift.emoji} ${msg.gift.name} from ${msg.user.displayName || msg.user.username}`);
+      } else if (msg.type === "left") {
+        const g = guests.get(msg.id);
+        if (g) { g.pc.close(); guests.delete(msg.id); }
+      } else if (msg.type === "signal") {
+        const g = guests.get(msg.from);
+        if (!g) return;
+        if (msg.data.sdp) g.pc.setRemoteDescription(new RTCSessionDescription(msg.data.sdp)).catch(() => {});
+        else if (msg.data.candidate) g.pc.addIceCandidate(new RTCIceCandidate(msg.data.candidate)).catch(() => {});
+      }
+    };
+    ws.onclose = () => { if (!ended) toast("Live connection lost"); };
+  };
+
+  const leave = () => { cleanup(); history.back(); };
+  el.querySelector("#closeLive").onclick = leave;
+  el.querySelector("#endLive").onclick = leave;
+
+  const sendChat = () => {
+    const body = chatInput.value.trim();
+    if (!body || !ws) return;
+    ws.send(JSON.stringify({ type: "chat", body }));
+    chatInput.value = "";
+  };
+  el.querySelector("#sendChat").onclick = sendChat;
+  chatInput.addEventListener("keydown", e => e.key === "Enter" && sendChat());
+
+  start();
+  return el;
+}
+
+function liveWatchPage() {
+  const sessionId = state.liveId;
+  if (!sessionId) { state.page = null; render(); return $(`<div></div>`); }
+
+  const el = $(`
+    <div class="page" style="padding:0;background:#000">
+      <video id="viewCam" autoplay playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000"></video>
+
+      <div style="position:absolute;top:16px;left:16px;right:16px;display:flex;align-items:center;justify-content:space-between;z-index:4">
+        <button id="closeWatch" style="width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.4);color:#fff;display:grid;place-items:center">
+          ${I.x}
+        </button>
+        <div style="display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.4);border-radius:20px;padding:4px 10px 4px 4px">
+          <div class="av" id="hostAv" style="width:26px;height:26px;font-size:11px"></div>
+          <span id="hostName" style="color:#fff;font-size:13px;font-weight:600"></span>
+          <span style="background:#FF3B30;color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:9px">LIVE</span>
+          <span id="viewerCount" style="color:#fff;font-size:12px;font-family:var(--mono);min-width:16px;text-align:center">0</span>
+        </div>
+      </div>
+
+      <div id="joinStatus" style="position:absolute;top:64px;left:16px;z-index:4;color:#fff;font-size:12px;
+        background:rgba(0,0,0,.55);padding:6px 12px;border-radius:12px;display:none"></div>
+
+      <div style="position:absolute;bottom:0;left:0;right:0;z-index:4;padding:0 12px 16px">
+        <div id="liveChat" style="max-height:160px;overflow-y:auto;margin-bottom:8px;display:flex;flex-direction:column;gap:5px"></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="chatInput" placeholder="Say something..." style="flex:1;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.25);border-radius:20px;padding:10px 16px;color:#fff;font-size:14px;outline:none">
+          <button id="sendChat" style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.2);color:#fff;display:grid;place-items:center;flex-shrink:0">${I.send}</button>
+          <button id="giftBtn" style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.2);color:#fff;display:grid;place-items:center;flex-shrink:0">${I.gift}</button>
+          <button id="joinBtn" style="background:#fff;color:#000;border-radius:20px;padding:0 14px;font-weight:600;font-size:12px;flex-shrink:0;height:38px">Join</button>
+        </div>
+      </div>
+    </div>
+  `);
+
+  let ws = null;
+  let ended = false;
+  let role = "viewer";          // "viewer" | "guest"
+  let joinRequested = false;
+  let pc = null;
+  let localStream = null;
+  let pollTimer = null;
+  let lastSeq = -1;
+  let chunkQueue = [];
+  let playingChunks = false;
+
+  const video = el.querySelector("#viewCam");
+  const chatLog = el.querySelector("#liveChat");
+  const viewerCountEl = el.querySelector("#viewerCount");
+  const joinStatus = el.querySelector("#joinStatus");
+  const joinBtn = el.querySelector("#joinBtn");
+  const chatInput = el.querySelector("#chatInput");
+
+  const cleanup = () => {
+    if (ended) return;
+    ended = true;
+    clearTimeout(pollTimer);
+    try { ws?.close(); } catch {}
+    localStream?.getTracks().forEach(t => t.stop());
+    pc?.close();
+  };
+  el.addEventListener("screen-exit", cleanup);
+
+  const appendChat = (html) => {
+    const row = $(`<div style="color:#fff;font-size:13px;text-shadow:0 1px 4px rgba(0,0,0,.6)">${html}</div>`);
+    chatLog.appendChild(row);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    while (chatLog.children.length > 50) chatLog.removeChild(chatLog.firstChild);
+  };
+
+  // ---- chunked playback: what a plain viewer watches, a few seconds behind
+  // real time, until (if ever) they're approved onto a direct connection ----
+  const playNext = () => {
+    if (role !== "viewer" || !chunkQueue.length) { playingChunks = false; return; }
+    playingChunks = true;
+    video.src = chunkQueue.shift().url;
+    video.play().catch(() => {});
+  };
+  video.addEventListener("ended", playNext);
+
+  const pollChunks = async () => {
+    if (ended || role !== "viewer") return;
+    try {
+      const r = await api(`/live/${sessionId}/chunks?after=${lastSeq}`);
+      if (r.chunks.length) {
+        lastSeq = r.chunks[r.chunks.length - 1].seq;
+        chunkQueue.push(...r.chunks);
+        // Caps how far behind playback can fall — always prefer catching up
+        // to real time over queuing every missed second forever.
+        if (chunkQueue.length > 6) chunkQueue = chunkQueue.slice(-6);
+        if (!playingChunks) playNext();
+      }
+    } catch {}
+    if (!ended && role === "viewer") pollTimer = setTimeout(pollChunks, 1500);
+  };
+
+  // ---- becoming a guest: swap chunk playback for a direct connection ----
+  const becomeGuest = async () => {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 480 }, aspectRatio: { ideal: 9 / 16 } },
+        audio: true,
+      });
+    } catch {
+      toast("Couldn't start your camera/mic");
+      return;
+    }
+    role = "guest";
+    chunkQueue = [];
+    joinStatus.style.display = "none";
+    joinBtn.style.display = "none";
+  };
+
+  const start = async () => {
+    let s;
+    try { s = (await api(`/live/${sessionId}`)).session; }
+    catch { toast("This live isn't available anymore"); history.back(); return; }
+    if (s.status !== "live") { toast("This live has ended"); history.back(); return; }
+
+    el.querySelector("#hostAv").innerHTML = avatarInner(s.host);
+    el.querySelector("#hostName").textContent = s.host.displayName || s.host.username;
+
+    ws = openLiveSocket(sessionId);
+    ws.onmessage = async (e) => {
+      let msg; try { msg = JSON.parse(e.data); } catch { return; }
+
+      if (msg.type === "viewerCount") viewerCountEl.textContent = fmt(msg.count);
+      else if (msg.type === "chat") appendChat(`<b>${esc(msg.user.displayName || msg.user.username)}</b> ${esc(msg.body)}`);
+      else if (msg.type === "gift") {
+        appendChat(`🎁 <b>${esc(msg.user.displayName || msg.user.username)}</b> sent ${msg.gift.emoji} ${esc(msg.gift.name)}`);
+        flyGift(msg.gift.emoji);
+      } else if (msg.type === "ended") {
+        toast("The live has ended");
+        cleanup();
+        history.back();
+      } else if (msg.type === "approved") {
+        toast("You're on! Say hi.");
+        await becomeGuest();
+      } else if (msg.type === "declined") {
+        toast("The host didn't accept your request");
+        joinRequested = false;
+        joinStatus.style.display = "none";
+      } else if (msg.type === "signal" && role === "guest") {
+        if (msg.data.sdp?.type === "offer") {
+          if (!pc) {
+            pc = makePeerConnection(msg.from, ws, {
+              localStream,
+              onTrack: (stream) => { video.removeAttribute("src"); video.srcObject = stream; },
+            });
+          }
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(msg.data.sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            ws.send(JSON.stringify({ type: "signal", to: msg.from, data: { sdp: answer } }));
+          } catch { toast("Couldn't connect to the host"); }
+        } else if (msg.data.candidate && pc) {
+          pc.addIceCandidate(new RTCIceCandidate(msg.data.candidate)).catch(() => {});
+        }
+      }
+    };
+    ws.onclose = () => { if (!ended) toast("Live connection lost"); };
+
+    pollChunks();
+  };
+
+  el.querySelector("#closeWatch").onclick = () => { cleanup(); history.back(); };
+
+  joinBtn.onclick = () => {
+    if (!store.token) return toast("Log in to join");
+    if (joinRequested || role !== "viewer") return;
+    joinRequested = true;
+    ws.send(JSON.stringify({ type: "request-join" }));
+    joinStatus.textContent = "Request sent — waiting for the host";
+    joinStatus.style.display = "block";
+  };
+
+  const sendChat = () => {
+    if (!store.token) return toast("Log in to chat");
+    const body = chatInput.value.trim();
+    if (!body || !ws) return;
+    ws.send(JSON.stringify({ type: "chat", body }));
+    chatInput.value = "";
+  };
+  el.querySelector("#sendChat").onclick = sendChat;
+  chatInput.addEventListener("keydown", e => e.key === "Enter" && sendChat());
+
+  el.querySelector("#giftBtn").onclick = () => {
+    if (!store.token) return toast("Log in to send gifts");
+    openLiveGiftSheet(sessionId);
+  };
+
+  start();
   return el;
 }
 
@@ -2630,6 +3160,78 @@ function flyGift(emoji) {
     font-size:64px;z-index:60;pointer-events:none;animation:fly 1.1s ease-out forwards">${emoji}</div>`);
   app.appendChild(n);
   setTimeout(() => n.remove(), 1100);
+}
+
+// Same shape as openGifts(), aimed at a live session instead of a video —
+// LiveRoom broadcasts the arrival to everyone watching once this commits.
+function openLiveGiftSheet(sessionId) {
+  const sheet = $(`
+    <div class="sheet" style="height:auto;max-height:70%">
+      <div class="sheet-head">
+        <span class="title">Send a gift</span>
+        <button class="x">${I.x}</button>
+      </div>
+      <div style="padding:10px 16px;border-bottom:1px solid #EDEDED;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:13px;color:#55555A">Your coins</span>
+        <span class="bal" style="font-family:var(--mono);font-size:15px;color:#111;font-weight:600">—</span>
+      </div>
+      <div class="sheet-body" style="padding:14px 12px">
+        <div class="gg"></div>
+      </div>
+      <div class="sheet-foot" style="justify-content:center">
+        <button class="topup" style="background:none;border:none;color:#111;font-size:13px;font-weight:600;text-decoration:underline">
+          Get more coins
+        </button>
+      </div>
+    </div>
+  `);
+  const close = mountSheet(sheet);
+  sheet.querySelector(".x").onclick = close;
+  sheet.querySelector(".topup").onclick = () => { close(); state.page = "wallet"; render(); };
+
+  const grid = sheet.querySelector(".gg");
+  const bal = sheet.querySelector(".bal");
+
+  Promise.all([api("/gifts/catalog"), api("/wallet")]).then(([cat, w]) => {
+    bal.textContent = fmt(w.coins);
+
+    grid.innerHTML = cat.gifts.map(g => `
+      <button data-k="${g.key}" data-c="${g.coins}" style="
+        background:#F6F6F7;border:1px solid #EDEDED;border-radius:10px;padding:10px 4px;
+        display:flex;flex-direction:column;align-items:center;gap:3px">
+        <span style="font-size:24px;line-height:1">${g.emoji}</span>
+        <span style="font-size:10px;color:#55555A;font-weight:600">${esc(g.name)}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:#8A8A8E">${fmt(g.coins)}</span>
+      </button>`).join("");
+
+    grid.querySelectorAll("[data-k]").forEach(b => {
+      b.onclick = async () => {
+        const cost = parseInt(b.dataset.c);
+        const have = parseInt(bal.textContent.replace(/[^\d]/g, "")) || 0;
+
+        if (have < cost) {
+          if (confirm(`This gift costs ${cost} coins and you have ${have}. Get more coins?`)) {
+            close();
+            state.page = "wallet";
+            render();
+          }
+          return;
+        }
+
+        grid.querySelectorAll("button").forEach(x => x.disabled = true);
+        try {
+          const r = await api(`/live/${sessionId}/gift`, { method: "POST", body: { giftKey: b.dataset.k } });
+          bal.textContent = fmt(r.coinsLeft);
+          flyGift(cat.gifts.find(g => g.key === b.dataset.k)?.emoji || "🎁");
+          toast("Gift sent");
+          setTimeout(close, 700);
+        } catch (e) {
+          toast(e.message);
+          grid.querySelectorAll("button").forEach(x => x.disabled = false);
+        }
+      };
+    });
+  }).catch(e => { grid.innerHTML = `<p class="empty" style="color:#8A8A8E">${esc(e.message)}</p>`; });
 }
 
 // ---------- wallet ----------
@@ -3429,6 +4031,16 @@ function renderInner() {
       v.srcObject = null;
     }
   });
+  // A page's own "screen-exit" listener (uploadPage's camera teardown, the
+  // live pages' WebSocket/WebRTC/timer teardown) was never actually reached
+  // by anything before this — nothing dispatched it, so it only ever ran via
+  // each page's own explicit close button. Camera release happened to still
+  // work regardless because of the querySelectorAll("video") loop just
+  // above, which masked the gap; a live session's open WebSocket, active
+  // peer connections, and chunk-upload timer have no such fallback, so
+  // navigating away any other way (a nav-bar tap, the phone's back gesture)
+  // would leak all of them — and keep billing the Durable Object.
+  [...app.children].forEach(c => c.dispatchEvent(new Event("screen-exit")));
   app.innerHTML = "";
 
   if (!store.token) { app.appendChild(authScreen()); return; }
@@ -3453,6 +4065,9 @@ function renderInner() {
   if (state.page === "wallet") { app.appendChild(walletPage()); return; }
   if (state.page === "wallet-history") { app.appendChild(walletHistoryPage()); return; }
   if (state.page === "sound") { app.appendChild(soundPage()); return; }
+  if (state.page === "live-discover") { app.appendChild(liveDiscoverPage()); return; }
+  if (state.page === "live-host") { app.appendChild(liveHostPage()); return; }
+  if (state.page === "live-watch") { app.appendChild(liveWatchPage()); return; }
   if (state.page === "search") { app.appendChild(searchPage()); attachNav(app, "search"); return; }
   if (state.page === "notifications") { app.appendChild(notificationsPage()); return; }
 
@@ -3462,6 +4077,7 @@ function renderInner() {
     <div class="topbar">
       <button class="me-btn" id="me">${avatarInner(store.user)}</button>
       <div class="chrome-pill">
+        <button id="liveBtn">${I.live}</button>
         <button id="search">${I.search}</button>
         <button id="notifBell">${I.bell}${state.unreadCount ? '<span class="badge dot"></span>' : ""}</button>
         <button id="settings">${I.gear}</button>
@@ -3469,6 +4085,7 @@ function renderInner() {
     </div>`));
 
   app.querySelector("#me").onclick = () => { state.viewUser = null; state.tab = "profile"; state.page = "profile"; render(); };
+  app.querySelector("#liveBtn").onclick = () => { state.page = "live-discover"; render(); };
   app.querySelector("#search").onclick = () => { state.tab = "search"; state.page = "search"; render(); };
   app.querySelector("#notifBell").onclick = () => { state.page = "notifications"; render(); };
   app.querySelector("#settings").onclick = () => { state.page = "settings"; render(); };
