@@ -2767,6 +2767,38 @@ async function handle(request, env, ctx) {
     });
   }
 
+  // A discussion image the host puts up for everyone in an audio live —
+  // not stored on live_sessions since it's transient (cleared the moment
+  // the host picks a new one or taps clear, never needed after the live
+  // ends), so this only touches R2 and LiveRoom, not D1.
+  const liveImageMatch = /^\/api\/live\/([\w-]+)\/image$/.exec(path);
+  if (liveImageMatch && (method === "POST" || method === "DELETE")) {
+    requireUser(user);
+    const session = await env.DB.prepare("SELECT * FROM live_sessions WHERE id = ?").bind(liveImageMatch[1]).first();
+    if (!session) return err("Live not found", 404);
+    if (session.host_user_id !== user.id) return err("That isn't your live", 403);
+
+    const room = env.LIVE_ROOMS.get(env.LIVE_ROOMS.idFromName(session.id));
+
+    if (method === "DELETE") {
+      await room.fetch("https://do/broadcast", { method: "POST", body: JSON.stringify({ type: "clearImage" }) });
+      return json({ ok: true });
+    }
+
+    const form = await request.formData();
+    const file = form.get("image");
+    if (!file || typeof file === "string") return err("An image file is required");
+    if (!/^image\//.test(file.type)) return err("That file isn't an image");
+
+    const key = `live/${session.id}/discuss-${uid()}.jpg`;
+    await env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type || "image/jpeg" } });
+
+    await room.fetch("https://do/broadcast", {
+      method: "POST", body: JSON.stringify({ type: "image", url: `/api/media/${key}` }),
+    });
+    return json({ ok: true, url: `/api/media/${key}` }, 201);
+  }
+
   return err("Not found", 404);
 }
 
@@ -2900,6 +2932,27 @@ export class LiveRoom {
     if (msg.type === "chat") {
       const body = String(msg.body || "").trim().slice(0, 300);
       if (body) this.broadcast({ type: "chat", user: this.publicInfo(info), body });
+      return;
+    }
+
+    // Purely cosmetic broadcasts — who's muted (an icon on their tile) and
+    // whether the host has chat open — never touch D1, so they're handled
+    // right here instead of round-tripping through handle() like the
+    // gift/end/image ones that change something durable.
+    if (msg.type === "muteState") {
+      this.broadcast({ type: "muteState", id: info.id, muted: !!msg.muted });
+      return;
+    }
+    if (msg.type === "chatToggle" && info.isHost) {
+      this.broadcast({ type: "chatToggle", enabled: !!msg.enabled });
+      return;
+    }
+    // The host is the only one who can see every individual speaker's
+    // pre-mix audio level, so it's the only one that ever sends this —
+    // relayed as-is to everyone else, who only ever get one already-mixed
+    // stream and can't tell who's talking from the audio alone.
+    if (msg.type === "speaking" && info.isHost) {
+      this.broadcast({ type: "speaking", ids: Array.isArray(msg.ids) ? msg.ids : [] });
       return;
     }
   }
