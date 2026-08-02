@@ -1101,40 +1101,176 @@ function observePlayback() {
   warmNeighbours(0, slides);
 }
 
+// Matches the INTERESTS whitelist src/index.js validates signup against —
+// kept in sync by hand since it's a short, rarely-changing list; not worth
+// a round-trip to fetch it before the picker can even render.
+const INTERESTS = [
+  "Music", "Comedy", "Dance", "Sports", "Fashion & Beauty", "Food & Cooking",
+  "Gaming", "Movies & TV", "Travel", "Technology", "Education", "Art & Design",
+  "Fitness", "News", "Animals & Pets", "Family",
+];
+
+const COUNTRIES = [
+  "Rwanda", "Burundi", "Democratic Republic of the Congo", "Kenya", "Tanzania",
+  "Uganda", "South Sudan", "Ethiopia", "Somalia", "Djibouti", "Eritrea",
+  "Afghanistan", "Albania", "Algeria", "Andorra", "Angola",
+  "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan",
+  "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belarus", "Belgium",
+  "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina",
+  "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina Faso",
+  "Cambodia", "Cameroon", "Canada", "Cape Verde", "Central African Republic",
+  "Chad", "Chile", "China", "Colombia", "Comoros", "Costa Rica",
+  "Croatia", "Cuba", "Cyprus", "Czechia", "Denmark",
+  "Dominican Republic", "Ecuador", "Egypt", "El Salvador",
+  "Equatorial Guinea", "Estonia", "Eswatini", "Fiji", "Finland", "France",
+  "Gabon", "Gambia", "Georgia", "Germany", "Ghana", "Greece", "Guatemala",
+  "Guinea", "Guinea-Bissau", "Guyana", "Haiti", "Honduras", "Hungary",
+  "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland", "Israel",
+  "Italy", "Ivory Coast", "Jamaica", "Japan", "Jordan", "Kazakhstan",
+  "Kuwait", "Kyrgyzstan", "Laos", "Latvia", "Lebanon", "Lesotho", "Liberia",
+  "Libya", "Liechtenstein", "Lithuania", "Luxembourg", "Madagascar", "Malawi",
+  "Malaysia", "Maldives", "Mali", "Malta", "Mauritania", "Mauritius",
+  "Mexico", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco",
+  "Mozambique", "Myanmar", "Namibia", "Nepal", "Netherlands", "New Zealand",
+  "Nicaragua", "Niger", "Nigeria", "North Korea", "North Macedonia",
+  "Norway", "Oman", "Pakistan", "Panama", "Papua New Guinea", "Paraguay",
+  "Peru", "Philippines", "Poland", "Portugal", "Qatar", "Republic of the Congo",
+  "Romania", "Russia", "Saudi Arabia", "Senegal", "Serbia", "Seychelles",
+  "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "South Africa",
+  "South Korea", "Spain", "Sri Lanka", "Sudan", "Suriname", "Sweden",
+  "Switzerland", "Syria", "Taiwan", "Tajikistan", "Thailand", "Togo",
+  "Trinidad and Tobago", "Tunisia", "Turkey", "Turkmenistan", "Ukraine",
+  "United Arab Emirates", "United Kingdom", "United States", "Uruguay",
+  "Uzbekistan", "Venezuela", "Vietnam", "Yemen", "Zambia", "Zimbabwe",
+];
+
 // ---------- screens ----------
 function authScreen() {
   let mode = "login";
+  // Signup is a short wizard — username, then email/password, then interests
+  // (optional), then country/city (optional, last) — rather than one long
+  // form. Nothing is sent to the server until the final step submits; if
+  // someone abandons partway through, there's no half-created account to
+  // clean up.
+  const STEPS = ["username", "security", "interests", "location"];
+  let step = 0;
+  const data = { username: "", email: "", password: "", interests: [], country: "", city: "" };
+
   const el = $(`<div class="page" style="display:flex;flex-direction:column;justify-content:center"></div>`);
 
   const draw = () => {
     const isLogin = mode === "login";
+    const key = STEPS[step];
+
+    const heading = isLogin ? "Welcome back" : {
+      username: "Choose a username",
+      security: "Secure your account",
+      interests: "What do you like?",
+      location: "Where are you?",
+    }[key];
+    const sub = isLogin ? "Log in to keep watching" : {
+      username: "This is how people will find you",
+      security: "Your email and a password",
+      interests: "Pick a few — you can change these later",
+      location: "Helps us show you relevant content",
+    }[key];
+
+    const body = isLogin ? `
+      <div class="field"><input id="email" placeholder="Email or username" autocapitalize="none"></div>
+      <div class="field"><input id="password" type="password" placeholder="Password"></div>
+    ` : key === "username" ? `
+      <div class="field"><input id="username" placeholder="Username" autocapitalize="none" value="${esc(data.username)}"></div>
+    ` : key === "security" ? `
+      <div class="field"><input id="email" placeholder="Email" autocapitalize="none" value="${esc(data.email)}"></div>
+      <div class="field"><input id="password" type="password" placeholder="Password" value="${esc(data.password)}"></div>
+    ` : key === "interests" ? `
+      <div class="interest-grid">
+        ${INTERESTS.map(i => `<button type="button" class="interest-chip${data.interests.includes(i) ? " on" : ""}" data-i="${esc(i)}">${esc(i)}</button>`).join("")}
+      </div>
+    ` : `
+      <div class="field">
+        <select id="country">
+          <option value="">Country (optional)</option>
+          ${COUNTRIES.map(c => `<option value="${esc(c)}" ${data.country === c ? "selected" : ""}>${esc(c)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field"><input id="city" placeholder="City (optional)" value="${esc(data.city)}"></div>
+    `;
+
     el.innerHTML = `
       <div style="text-align:center;margin-bottom:36px">
         <div style="width:56px;height:56px;border-radius:16px;background:#fff;display:grid;place-items:center;margin:0 auto 16px;color:#000">${I.play}</div>
-        <h1 style="font-family:var(--display);font-size:24px;margin:0">${isLogin ? "Welcome back" : "Create account"}</h1>
-        <p style="color:var(--muted);font-size:14px;margin-top:8px">${isLogin ? "Log in to keep watching" : "Start sharing your videos"}</p>
+        <h1 style="font-family:var(--display);font-size:24px;margin:0">${heading}</h1>
+        <p style="color:var(--muted);font-size:14px;margin-top:8px">${sub}</p>
       </div>
-      ${!isLogin ? `<div class="field"><input id="username" placeholder="Username" autocapitalize="none"></div>` : ""}
-      <div class="field"><input id="email" placeholder="${isLogin ? "Email or username" : "Email"}" autocapitalize="none"></div>
-      <div class="field"><input id="password" type="password" placeholder="Password"></div>
-      <button class="btn-primary" id="go">${isLogin ? "Log in" : "Sign up"}</button>
+      ${!isLogin ? `
+        <div class="step-dots">
+          ${STEPS.map((_, i) => `<i class="step-dot${i === step ? " on" : ""}${i < step ? " done" : ""}"></i>`).join("")}
+        </div>
+      ` : ""}
+      ${body}
+      <button class="btn-primary" id="go">${isLogin ? "Log in" : step === STEPS.length - 1 ? "Create account" : "Next"}</button>
+      ${!isLogin && step > 0 ? `<button class="btn-plain" id="back" style="width:100%;margin-top:10px;padding:10px;color:var(--muted)">Back</button>` : ""}
       <p class="err" id="err" style="display:none"></p>
       <p style="text-align:center;margin-top:24px;font-size:13px;color:var(--muted)">
         ${isLogin ? "Don't have an account? " : "Already have an account? "}
         <span id="swap" style="color:#fff;font-weight:600;cursor:pointer">${isLogin ? "Sign up" : "Log in"}</span>
       </p>`;
 
-    el.querySelector("#swap").onclick = () => { mode = isLogin ? "signup" : "login"; draw(); };
+    el.querySelector("#swap").onclick = () => { mode = isLogin ? "signup" : "login"; step = 0; draw(); };
+    el.querySelector("#back")?.addEventListener("click", () => { step--; draw(); });
+
+    if (!isLogin && key === "interests") {
+      el.querySelectorAll(".interest-chip").forEach(chip => chip.addEventListener("click", () => {
+        const i = chip.dataset.i;
+        if (data.interests.includes(i)) data.interests = data.interests.filter(x => x !== i);
+        else if (data.interests.length < 10) data.interests.push(i);
+        chip.classList.toggle("on", data.interests.includes(i));
+      }));
+    }
+
     el.querySelector("#go").onclick = async (e) => {
       const btn = e.currentTarget, errEl = el.querySelector("#err");
-      btn.disabled = true; errEl.style.display = "none";
+      errEl.style.display = "none";
+
+      if (isLogin) {
+        btn.disabled = true;
+        try {
+          const r = await api("/auth/login", { method: "POST", body: {
+            email: el.querySelector("#email").value.trim(),
+            password: el.querySelector("#password").value,
+          } });
+          store.token = r.token; store.user = r.user;
+          render();
+        } catch (e2) {
+          errEl.textContent = e2.message; errEl.style.display = "block"; btn.disabled = false;
+        }
+        return;
+      }
+
+      // Signup: validate the current step, save it into `data`, then either
+      // advance or — on the last step — actually submit.
+      if (key === "username") {
+        data.username = el.querySelector("#username").value.trim();
+        if (data.username.length < 3) { errEl.textContent = "Username must be at least 3 characters"; errEl.style.display = "block"; return; }
+      } else if (key === "security") {
+        data.email = el.querySelector("#email").value.trim();
+        data.password = el.querySelector("#password").value;
+        if (!data.email) { errEl.textContent = "Email is required"; errEl.style.display = "block"; return; }
+        if (data.password.length < 8) { errEl.textContent = "Password must be at least 8 characters"; errEl.style.display = "block"; return; }
+      } else if (key === "location") {
+        data.country = el.querySelector("#country").value;
+        data.city = el.querySelector("#city").value.trim();
+      }
+
+      if (step < STEPS.length - 1) { step++; draw(); return; }
+
+      btn.disabled = true;
       try {
-        const body = {
-          email: el.querySelector("#email").value.trim(),
-          password: el.querySelector("#password").value,
-        };
-        if (!isLogin) body.username = el.querySelector("#username").value.trim();
-        const r = await api(`/auth/${isLogin ? "login" : "signup"}`, { method: "POST", body });
+        const r = await api("/auth/signup", { method: "POST", body: {
+          username: data.username, email: data.email, password: data.password,
+          interests: data.interests, country: data.country || undefined, city: data.city || undefined,
+        } });
         store.token = r.token; store.user = r.user;
         render();
       } catch (e2) {

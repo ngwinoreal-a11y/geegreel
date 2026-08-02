@@ -365,6 +365,15 @@ async function monetizeStats(env, userId) {
   };
 }
 
+// Fixed list an interests picker offers at signup — whitelisted server-side
+// (in the signup handler) so the column only ever holds one of these, not
+// arbitrary client-supplied strings.
+const INTERESTS = [
+  "Music", "Comedy", "Dance", "Sports", "Fashion & Beauty", "Food & Cooking",
+  "Gaming", "Movies & TV", "Travel", "Technology", "Education", "Art & Design",
+  "Fitness", "News", "Animals & Pets", "Family",
+];
+
 // ---------- feed shaping ----------
 
 const publicUser = u => ({
@@ -390,6 +399,9 @@ const privateUser = u => ({
   notifyComments: !!u.notify_comments,
   notifyFollows: !!u.notify_follows,
   language: u.language || "en",
+  country: u.country || null,
+  city: u.city || null,
+  interests: u.interests ? JSON.parse(u.interests) : [],
 });
 
 // One query returns every video with real counts + whether the viewer liked it.
@@ -545,10 +557,22 @@ async function handle(request, env, ctx) {
 
   // ----- auth -----
   if (path === "/api/auth/signup" && method === "POST") {
-    const { username, email, password, displayName } = await request.json();
+    const { username, email, password, displayName, country, city, interests } = await request.json();
     if (!username || !email || !password) return err("username, email and password are required");
     if (password.length < 8) return err("Password must be at least 8 characters");
     if (!/^[a-z0-9_]{3,20}$/i.test(username)) return err("Username must be 3-20 letters, numbers or underscores");
+
+    // Interests, country and city are collected on later steps of the signup
+    // wizard but all land in this one call — the account isn't created until
+    // the whole flow finishes, so there's no half-signed-up row to clean up
+    // if someone abandons partway through.
+    let interestsJson = null;
+    if (interests !== undefined) {
+      if (!Array.isArray(interests) || interests.some(i => typeof i !== "string" || !INTERESTS.includes(i))) {
+        return err("Invalid interests");
+      }
+      interestsJson = JSON.stringify(interests.slice(0, 10));
+    }
 
     const existing = await env.DB.prepare(
       "SELECT id FROM users WHERE username = ? OR email = ?"
@@ -557,9 +581,12 @@ async function handle(request, env, ctx) {
 
     const id = uid();
     await env.DB.prepare(`
-      INSERT INTO users (id, username, email, password_hash, display_name, bio, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(id, username, email, await hashPassword(password), displayName || username, "", now()).run();
+      INSERT INTO users (id, username, email, password_hash, display_name, bio, created_at, country, city, interests)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      id, username, email, await hashPassword(password), displayName || username, "", now(),
+      country || null, city || null, interestsJson
+    ).run();
 
     const token = await createSession(env, id);
     const u = await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(id).first();

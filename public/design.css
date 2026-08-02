@@ -354,16 +354,46 @@ button:active { transform: scale(.9); opacity: .85; }
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
 }
-.field input {
+.field input, .field select {
   background: none; border: none; outline: none;
   color: var(--text); font-size: 14px; width: 100%;
+  font-family: inherit;
 }
+/* Selects don't inherit the surface's dark background on every platform. */
+.field select { appearance: none; }
+.field select option { background: var(--surface); color: var(--text); }
 
 .btn-primary {
   width: 100%; background: #fff; color: #000; border-radius: 10px;
   padding: 14px 0; font-weight: 600; font-size: 15px;
 }
 .btn-primary:disabled { opacity: .5; }
+
+.btn-plain { background: none; border: none; font-size: 14px; font-weight: 500; }
+
+/* Signup wizard progress — small dots, not a numbered "step 2 of 4" label. */
+.step-dots {
+  display: flex; justify-content: center; gap: 6px; margin-bottom: 24px;
+}
+.step-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--border); transition: background .18s ease, width .18s ease;
+}
+.step-dot.done { background: var(--muted); }
+.step-dot.on { background: #fff; width: 16px; border-radius: 3px; }
+
+/* Interests picker: a wrapping grid of toggle chips, not a list. */
+.interest-grid {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px;
+}
+.interest-chip {
+  padding: 9px 14px; border-radius: 20px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); font-size: 13px; font-weight: 500;
+}
+.interest-chip.on {
+  background: #fff; color: #111; border-color: #fff;
+}
 
 /* People rows — search results, message threads, follower lists.
    Deliberately no divider line: spacing separates them. */
