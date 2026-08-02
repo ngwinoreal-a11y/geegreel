@@ -1089,22 +1089,25 @@ function authScreen() {
   return el;
 }
 
-// Colour/beauty presets for the camera. Real CSS filter strings, applied two
-// places: instantly on the live <video> preview (cheap, GPU-composited, zero
-// cost while just looking through the lens), and baked into the actual
-// recorded frames via a canvas's 2D context (same string, ctx.filter) only
-// while a take is actually rolling — so the exported video carries the look,
-// not just the preview. "Smooth" is a cheap slight-blur-plus-lift, the usual
-// budget stand-in for real skin smoothing without a face-tracking model.
+// Colour-grade presets for the camera, modelled after real photo/film looks
+// rather than one-slider "warm/cool" toys — each pairs a restrained CSS
+// filter combo (nothing pushed so far it looks like a toy) with a vignette
+// strength, since a graded edge falloff is most of what reads as
+// "professional" versus a flat Instagram-filter look. Applied two places:
+// instantly on the live <video> preview (cheap, GPU-composited, zero cost
+// while just looking through the lens), and baked into the actual recorded
+// frames via a canvas's 2D context (same filter string, plus the vignette
+// drawn as a radial gradient) only while a take is actually rolling — so the
+// exported video carries the look, not just the preview.
 const FILTERS = [
-  { key: "none",   label: "Original",  swatch: "#8E8E93", css: "none" },
-  { key: "smooth", label: "Smooth",    swatch: "#F3D9C4", css: "brightness(1.06) contrast(0.96) saturate(1.05) blur(0.5px)" },
-  { key: "glow",   label: "Glow",      swatch: "#FFE29A", css: "brightness(1.12) saturate(1.15) contrast(1.03)" },
-  { key: "pink",   label: "Soft Pink", swatch: "#F5A9C7", css: "saturate(1.25) brightness(1.08) hue-rotate(-6deg) contrast(0.98)" },
-  { key: "warm",   label: "Warm",      swatch: "#E3A85A", css: "sepia(0.18) saturate(1.25) brightness(1.05)" },
-  { key: "cool",   label: "Cool",      swatch: "#9AC7E8", css: "saturate(1.1) hue-rotate(8deg) brightness(1.02)" },
-  { key: "vivid",  label: "Vivid",     swatch: "#F5A623", css: "saturate(1.4) contrast(1.15)" },
-  { key: "bw",     label: "B&W",       swatch: "#BEBEC2", css: "grayscale(1) contrast(1.1)" },
+  { key: "none",      label: "Original",    swatch: "#8E8E93", css: "none", vignette: 0 },
+  { key: "cinematic", label: "Cinematic",   swatch: "#5C7A8A", css: "contrast(1.08) saturate(0.88) brightness(1.02) hue-rotate(-4deg)", vignette: 0.30 },
+  { key: "portra",    label: "Portra",      swatch: "#D9B99B", css: "sepia(0.12) saturate(1.1) contrast(0.95) brightness(1.04)", vignette: 0.16 },
+  { key: "rose",      label: "Rosé",        swatch: "#F0AEC4", css: "saturate(1.2) brightness(1.07) hue-rotate(-6deg) contrast(0.97)", vignette: 0.14 },
+  { key: "golden",    label: "Golden Hour", swatch: "#E8A85C", css: "sepia(0.22) saturate(1.3) brightness(1.08) contrast(1.02)", vignette: 0.22 },
+  { key: "noir",      label: "Noir",        swatch: "#4A4A4E", css: "grayscale(1) contrast(1.25) brightness(0.97)", vignette: 0.40 },
+  { key: "moody",     label: "Moody",       swatch: "#3E4A52", css: "saturate(0.65) contrast(1.18) brightness(0.93)", vignette: 0.36 },
+  { key: "editorial", label: "Editorial",   swatch: "#C2453A", css: "contrast(1.22) saturate(1.15) brightness(1.01)", vignette: 0.18 },
 ];
 
 function uploadPage() {
@@ -1301,6 +1304,9 @@ function uploadPage() {
       <div style="position:absolute;inset:0;background:#000">
         <video id="cam" autoplay muted playsinline
           style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+        <div id="vignette" style="position:absolute;inset:0;z-index:1;pointer-events:none;opacity:0;
+          transition:opacity .15s ease;
+          background:radial-gradient(ellipse at center, rgba(0,0,0,0) 35%, rgba(0,0,0,.85) 100%)"></div>
 
         <div id="deny" style="position:absolute;inset:0;display:none;place-items:center;padding:0 32px;text-align:center">
           <div>
@@ -1410,6 +1416,17 @@ function uploadPage() {
     // costs nothing while just looking through the lens. beginRecording()
     // re-applies the same string to a canvas's 2D context so it's actually
     // baked into the exported video, not just how it looked on screen.
+    // A CSS filter alone can't grade an edge falloff, so the vignette is a
+    // second, separate layer (see #vignette above) whose opacity tracks the
+    // picked preset — cheap on the live preview, and mirrored as a real
+    // radial gradient drawn into the canvas in beginRecording() below.
+    const vignetteEl = el.querySelector("#vignette");
+    const applyFilterPreview = () => {
+      const f = FILTERS.find(x => x.key === activeFilter);
+      cam.style.filter = f?.css || "none";
+      vignetteEl.style.opacity = f?.vignette || 0;
+    };
+
     el.querySelectorAll(".filt").forEach(b => b.onclick = () => {
       el.querySelectorAll(".filt").forEach(x => {
         x.classList.remove("on");
@@ -1418,7 +1435,7 @@ function uploadPage() {
       b.classList.add("on");
       b.querySelector("i").style.borderColor = "#fff";
       activeFilter = b.dataset.f;
-      cam.style.filter = FILTERS.find(f => f.key === activeFilter)?.css || "none";
+      applyFilterPreview();
     });
 
     const flashBtn = el.querySelector("#flash");
@@ -1485,8 +1502,21 @@ function uploadPage() {
     const start = async () => {
       try {
         stream?.getTracks().forEach(t => t.stop());
+        // Forcing an exact width AND height together (1080x1920) makes
+        // Chrome on most Android phones satisfy that precise 9:16 shape by
+        // digitally zooming into the sensor's real (usually wider) native
+        // frame, instead of just picking a sensor mode that already matches
+        // — that digital crop is the "too zoomed in" video. aspectRatio as
+        // a soft ideal, plus resizeMode:"none", asks for a 9:16-ish frame
+        // without demanding the exact pixels, so the browser can pick a
+        // native mode instead of cropping into one.
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: facing, width: { ideal: 1080 }, height: { ideal: 1920 } },
+          video: {
+            facingMode: facing,
+            width: { ideal: 1080 },
+            aspectRatio: { ideal: 9 / 16 },
+            resizeMode: { ideal: "none" },
+          },
           // A chosen sound replaces the mic entirely, same as TikTok — the
           // recording's audio track comes from beginRecording()'s captureStream
           // of `sound`, not the room.
@@ -1498,7 +1528,7 @@ function uploadPage() {
         // Reapplies whatever filter was already picked — start() reruns on
         // flip and after clearing a sound, both of which rebuild the stream
         // but shouldn't reset a choice the person already made.
-        cam.style.filter = FILTERS.find(f => f.key === activeFilter)?.css || "none";
+        applyFilterPreview();
         // A fresh getUserMedia call means a fresh track — torch never
         // carries over, so the toggle's own state and its button shouldn't
         // pretend it did.
@@ -1543,7 +1573,20 @@ function uploadPage() {
         const canvas = document.createElement("canvas");
         canvas.width = cw; canvas.height = ch;
         const ctx = canvas.getContext("2d");
-        const filterCss = FILTERS.find(f => f.key === activeFilter)?.css || "none";
+        const activePreset = FILTERS.find(f => f.key === activeFilter) || FILTERS[0];
+        const filterCss = activePreset.css;
+
+        // Built once, not per frame — a gradient is comparatively expensive
+        // to construct and nothing about it changes for the life of this take.
+        let vignetteGradient = null;
+        if (activePreset.vignette > 0) {
+          vignetteGradient = ctx.createRadialGradient(
+            cw / 2, ch / 2, Math.min(cw, ch) * 0.35,
+            cw / 2, ch / 2, Math.max(cw, ch) * 0.75
+          );
+          vignetteGradient.addColorStop(0, "rgba(0,0,0,0)");
+          vignetteGradient.addColorStop(1, `rgba(0,0,0,${activePreset.vignette})`);
+        }
 
         const drawFrame = () => {
           ctx.filter = filterCss;
@@ -1551,6 +1594,13 @@ function uploadPage() {
           if (mirror) { ctx.translate(cw, 0); ctx.scale(-1, 1); }
           ctx.drawImage(cam, 0, 0, cw, ch);
           ctx.restore();
+          if (vignetteGradient) {
+            // The gradient is a look, not part of the colour grade itself —
+            // drawing it under the same ctx.filter would re-tint it too.
+            ctx.filter = "none";
+            ctx.fillStyle = vignetteGradient;
+            ctx.fillRect(0, 0, cw, ch);
+          }
           canvasRaf = requestAnimationFrame(drawFrame);
         };
         drawFrame();
