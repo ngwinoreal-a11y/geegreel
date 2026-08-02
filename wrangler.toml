@@ -19,6 +19,17 @@ database_id = "bd2c9e85-462a-42c7-839e-1850b6065625"
 binding = "MEDIA"
 bucket_name = "video-app-media"
 
+# Durable Objects — one LiveRoom instance per live session, holding its
+# WebSocket connections for signaling (join requests, WebRTC offer/answer/ICE
+# relay, chat, gift events). SQLite-backed, free on the Workers Free plan.
+[[durable_objects.bindings]]
+name = "LIVE_ROOMS"
+class_name = "LiveRoom"
+
+[[migrations]]
+tag = "v1-live-rooms"
+new_sqlite_classes = ["LiveRoom"]
+
 [vars]
 MAX_UPLOAD_BYTES = "104857600"
 # Public half of the VAPID keypair used to sign Web Push requests — safe to
