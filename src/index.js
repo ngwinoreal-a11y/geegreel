@@ -401,7 +401,7 @@ const FEED_SQL = `
     ru.username AS repost_of_username,
     (SELECT COUNT(*) FROM likes    l WHERE l.video_id = v.id) AS like_count,
     (SELECT COUNT(*) FROM comments c WHERE c.video_id = v.id) AS comment_count,
-    (SELECT COUNT(*) FROM shares   s WHERE s.video_id = v.id) AS share_count,
+    (SELECT COUNT(*) FROM shares   s WHERE s.video_id = v.id AND s.completed = 1) AS share_count,
     (SELECT COUNT(*) FROM videos   r WHERE r.repost_of = v.id) AS repost_count,
     (SELECT COALESCE(SUM(g.coins), 0) FROM gifts g WHERE g.video_id = v.id) AS gift_coins,
     EXISTS(SELECT 1 FROM likes l WHERE l.video_id = v.id AND l.user_id = ?) AS liked,
@@ -1391,16 +1391,42 @@ async function handle(request, env, ctx) {
   if (shareMatch && method === "POST") {
     requireUser(user);
     const shareId = uid();
+    // Row starts uncompleted — this only means a share link was generated,
+    // not that it went anywhere. The count below (and everywhere else that
+    // shows a share count) only counts completed=1, so tapping Share and
+    // then cancelling the native share sheet — or never picking an app in
+    // the "More" sheet — doesn't move the number. POST /shares/:id/complete
+    // is what actually counts it, once the share genuinely happens.
     await env.DB.prepare(
-      "INSERT INTO shares (id, video_id, user_id, created_at) VALUES (?, ?, ?, ?)"
+      "INSERT INTO shares (id, video_id, user_id, created_at, completed) VALUES (?, ?, ?, ?, 0)"
     ).bind(shareId, shareMatch[1], user.id, now()).run();
 
     const c = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM shares WHERE video_id = ?"
+      "SELECT COUNT(*) AS n FROM shares WHERE video_id = ? AND completed = 1"
     ).bind(shareMatch[1]).first();
     // ?s= is this specific share event, not just the video — it's how the
     // person who opens the link finds out who sent it to them.
-    return json({ count: c.n, url: `${url.origin}/v/${shareMatch[1]}?s=${shareId}` });
+    return json({ count: c.n, shareId, url: `${url.origin}/v/${shareMatch[1]}?s=${shareId}` });
+  }
+
+  // Marks a share as having actually reached somewhere — navigator.share
+  // resolved without being cancelled, a clipboard copy succeeded, or a
+  // share-app deep link was opened. Idempotent, and checks ownership so
+  // only the person who generated the link can complete it.
+  const shareCompleteMatch = /^\/api\/shares\/([\w-]+)\/complete$/.exec(path);
+  if (shareCompleteMatch && method === "POST") {
+    requireUser(user);
+    const share = await env.DB.prepare(
+      "SELECT video_id, user_id FROM shares WHERE id = ?"
+    ).bind(shareCompleteMatch[1]).first();
+    if (!share) return err("Share not found", 404);
+    if (share.user_id !== user.id) return err("That isn't your share", 403);
+
+    await env.DB.prepare("UPDATE shares SET completed = 1 WHERE id = ?").bind(shareCompleteMatch[1]).run();
+    const c = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM shares WHERE video_id = ? AND completed = 1"
+    ).bind(share.video_id).first();
+    return json({ count: c.n });
   }
 
   // Resolves a share link's ?s= token to who actually sent it, so the
@@ -1487,15 +1513,25 @@ async function handle(request, env, ctx) {
     if (dupe) return err("You already reposted this", 409);
 
     const id = uid();
-    // Reposts point at the same R2 object — no file is copied.
-    await env.DB.prepare(`
-      INSERT INTO videos (id, user_id, r2_key, thumb_key, caption, song, width, height, duration, repost_of, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      id, user.id, original.r2_key, original.thumb_key,
-      original.caption, original.song, original.width, original.height,
-      original.duration, original.id, now()
-    ).run();
+    try {
+      // Reposts point at the same R2 object — no file is copied.
+      await env.DB.prepare(`
+        INSERT INTO videos (id, user_id, r2_key, thumb_key, caption, song, width, height, duration, repost_of, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        id, user.id, original.r2_key, original.thumb_key,
+        original.caption, original.song, original.width, original.height,
+        original.duration, original.id, now()
+      ).run();
+    } catch (e) {
+      // The check above isn't atomic with the insert — two taps within the
+      // same instant (the rail's repost icon and the "More" sheet's Repost
+      // row both call this) can both pass it. idx_videos_unique_repost is
+      // the real guard; this just turns its rejection into the same
+      // friendly message as the check above instead of a raw 500.
+      if (String(e.message || "").includes("UNIQUE")) return err("You already reposted this", 409);
+      throw e;
+    }
 
     const row = await env.DB.prepare(FEED_SQL + " WHERE v.id = ?").bind(user.id, user.id, id).first();
     return json({ video: shapeVideo(row) }, 201);

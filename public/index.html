@@ -237,7 +237,7 @@ function slide(v) {
   const el = $(`
     <div class="slide" data-id="${v.id}">
       <video src="${v.videoUrl}" data-src="${v.videoUrl}" loop playsinline
-             preload="auto" ${v.thumbUrl ? `poster="${v.thumbUrl}"` : ""}></video>
+             preload="none" ${v.thumbUrl ? `poster="${v.thumbUrl}"` : ""}></video>
       <div class="overlay">
         <div class="author">
           <button class="aav" data-user="${esc(v.user.username)}">${avatarInner(v.user)}</button>
@@ -257,11 +257,11 @@ function slide(v) {
         <button class="cmt">${I.comment}<span class="n">${fmt(v.counts.comments)}</span></button>
         <button class="rep">${I.repost}<span class="n">${fmt(v.counts.reposts)}</span></button>
         <button class="shr">${I.share}<span class="n">${fmt(v.counts.shares)}</span></button>
-        <button class="more"><i></i><i></i><i></i></button>
         ${mine ? "" : `<button class="gift">${I.gift}<span class="n">${fmt(v.giftCoins || 0)}</span></button>`}
+        <button class="more"><i></i><i></i><i></i></button>
+        ${v.soundId ? `<button class="sound-disc" data-sound="${v.soundId}">${v.thumbUrl ? `<img src="${v.thumbUrl}" alt="">` : "♪"}</button>` : ""}
       </div>
       <i class="pause-glyph"></i>
-      ${v.soundId ? `<button class="sound-disc" data-sound="${v.soundId}">${v.thumbUrl ? `<img src="${v.thumbUrl}" alt="">` : "♪"}</button>` : ""}
       <div class="scrub" data-video="${v.id}">
         <i class="scrub-fill"></i>
         <i class="scrub-knob"></i>
@@ -428,22 +428,41 @@ function slide(v) {
 
   el.querySelector(".cmt").addEventListener("click", (e) => { e.stopPropagation(); openComments(v, el); });
 
-  el.querySelector(".rep").addEventListener("click", async (e) => {
-    e.stopPropagation();
-    const btn = e.currentTarget;
-    if (btn.classList.contains("working") || btn.classList.contains("on")) return;
-    btn.classList.add("working", "on-dark");
+  // Shared by the rail's repost icon and the "More" sheet's Repost row —
+  // both hit the same endpoint, so both need to agree on whether it already
+  // happened. Without this, doing it from one place left the other unaware,
+  // so a second tap there fired a real second request instead of a no-op.
+  const repBtn = el.querySelector(".rep");
+  let repostBusy = false;
+  const doRepost = async () => {
+    if (repostBusy || repBtn.classList.contains("on")) return repBtn.classList.contains("on");
+    repostBusy = true;
+    repBtn.classList.add("working", "on-dark");
     try {
       await api(`/videos/${v.id}/repost`, { method: "POST" });
       toast("Reposted to your profile");
-      btn.querySelector(".n").textContent = fmt(v.counts.reposts + 1);
-      btn.classList.add("on", "did");
+      repBtn.querySelector(".n").textContent = fmt(v.counts.reposts + 1);
+      repBtn.classList.add("on", "did");
+      return true;
     } catch (err) {
+      if (err.message === "You already reposted this") {
+        // Already reposted via the other path — that's success, not an error.
+        repBtn.querySelector(".n").textContent = fmt(v.counts.reposts + 1);
+        repBtn.classList.add("on", "did");
+        return true;
+      }
       toast(err.message);
+      return false;
     } finally {
-      btn.classList.remove("working", "on-dark");
+      repostBusy = false;
+      repBtn.classList.remove("working", "on-dark");
     }
-  });
+  };
+  repBtn.addEventListener("click", (e) => { e.stopPropagation(); doRepost(); });
+  // Exposed so the "More" sheet's Repost row (built by openMoreOptions,
+  // outside this closure) shares the same guarded call instead of firing
+  // its own independent request.
+  el._doRepost = doRepost;
 
   el.querySelector(".shr").addEventListener("click", async (e) => {
     e.stopPropagation();
@@ -455,10 +474,14 @@ function slide(v) {
     const btn = e.currentTarget;
     try {
       const r = await api(`/videos/${v.id}/share`, { method: "POST" });
-      const cnt = btn?.querySelector(".n");
-      if (cnt) cnt.textContent = fmt(r.count);
+      // The count only moves once the share actually completes below — not
+      // just because a link was generated, so cancelling the native share
+      // sheet (or a clipboard write that never got used) doesn't count.
       if (navigator.share) await navigator.share({ url: r.url, title: v.caption || "Video" });
       else { await navigator.clipboard.writeText(r.url); toast("Link copied"); }
+      const c = await api(`/shares/${r.shareId}/complete`, { method: "POST" });
+      const cnt = btn?.querySelector(".n");
+      if (cnt) cnt.textContent = fmt(c.count);
     } catch (err) { if (err.name !== "AbortError") toast(err.message); }
   });
 
@@ -600,38 +623,55 @@ function openMoreOptions(v, slideEl) {
 
   sheet.querySelector('[data-a="repost"]').onclick = async () => {
     close();
-    try {
-      await api(`/videos/${v.id}/repost`, { method: "POST" });
-      toast("Reposted to your profile");
-      const cnt = slideEl?.querySelector(".rep .n");
-      if (cnt) cnt.textContent = fmt(v.counts.reposts + 1);
-    } catch (err) { toast(err.message); }
+    // Goes through the same guarded call the rail's repost icon uses, so
+    // reposting from here and reposting from there agree on whether it
+    // already happened instead of each firing its own request.
+    if (slideEl?._doRepost) await slideEl._doRepost();
+    else {
+      try {
+        await api(`/videos/${v.id}/repost`, { method: "POST" });
+        toast("Reposted to your profile");
+        const cnt = slideEl?.querySelector(".rep .n");
+        if (cnt) cnt.textContent = fmt(v.counts.reposts + 1);
+      } catch (err) { toast(err.message); }
+    }
   };
 
   // Share links get built lazily, off the same share endpoint the rail's
-  // share button uses, so the URL and its counted share both stay real.
-  let shareUrl = null;
+  // share button uses. The count only moves once markShared() below runs —
+  // generating the link/opening the sheet isn't a share by itself.
+  let shareUrl = null, shareId = null;
   const getShareUrl = async () => {
     if (shareUrl) return shareUrl;
     const r = await api(`/videos/${v.id}/share`, { method: "POST" });
     shareUrl = r.url;
-    const cnt = slideEl?.querySelector(".shr .n");
-    if (cnt) cnt.textContent = fmt(r.count);
+    shareId = r.shareId;
     return shareUrl;
+  };
+  const markShared = async () => {
+    if (!shareId) return;
+    try {
+      const c = await api(`/shares/${shareId}/complete`, { method: "POST" });
+      const cnt = slideEl?.querySelector(".shr .n");
+      if (cnt) cnt.textContent = fmt(c.count);
+    } catch {}
   };
 
   sheet.querySelector('[data-app="whatsapp"]').onclick = async () => {
     const url = await getShareUrl();
     window.open(`https://wa.me/?text=${encodeURIComponent((v.caption || "Check this out") + " " + url)}`, "_blank", "noopener");
+    markShared();
   };
   sheet.querySelector('[data-app="facebook"]').onclick = async () => {
     const url = await getShareUrl();
     window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`, "_blank", "noopener");
+    markShared();
   };
   sheet.querySelector('[data-app="copy"]').onclick = async () => {
     const url = await getShareUrl();
     await navigator.clipboard.writeText(url);
     toast("Link copied");
+    markShared();
   };
 
   // Send-to-friend: recent conversations, same list the inbox shows.

@@ -322,12 +322,19 @@
 /* State (b) only: the spinning disc that means "this sound is a place you
    can go". Never show it in state (a). */
 .sound.is-link { cursor: pointer; }
+/* Lives inside .rail now, as the last item under the ••• button, instead of
+   floating separately below it — the two read as one group, the way the
+   reference app pairs them. .rail button already sets display:flex on it
+   (compound selector, higher specificity than .sound-disc alone), so the
+   grid centring below needs the same boost to actually win. */
+.rail .sound-disc {
+  display: grid; place-items: center;
+  flex-shrink: 0; margin-top: 2px;
+}
 .sound-disc {
-  position: absolute; right: 12px; bottom: 88px;
-  width: 46px; height: 46px; border-radius: 50%;
+  width: 42px; height: 42px; border-radius: 50%;
   background: linear-gradient(145deg,#2a2a2e,#111);
   border: 3px solid rgba(255,255,255,.14);
-  display: grid; place-items: center;
   animation: spin-disc 7s linear infinite;
   overflow: hidden;
 }
