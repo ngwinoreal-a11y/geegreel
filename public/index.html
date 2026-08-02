@@ -1089,6 +1089,24 @@ function authScreen() {
   return el;
 }
 
+// Colour/beauty presets for the camera. Real CSS filter strings, applied two
+// places: instantly on the live <video> preview (cheap, GPU-composited, zero
+// cost while just looking through the lens), and baked into the actual
+// recorded frames via a canvas's 2D context (same string, ctx.filter) only
+// while a take is actually rolling — so the exported video carries the look,
+// not just the preview. "Smooth" is a cheap slight-blur-plus-lift, the usual
+// budget stand-in for real skin smoothing without a face-tracking model.
+const FILTERS = [
+  { key: "none",   label: "Original",  swatch: "#8E8E93", css: "none" },
+  { key: "smooth", label: "Smooth",    swatch: "#F3D9C4", css: "brightness(1.06) contrast(0.96) saturate(1.05) blur(0.5px)" },
+  { key: "glow",   label: "Glow",      swatch: "#FFE29A", css: "brightness(1.12) saturate(1.15) contrast(1.03)" },
+  { key: "pink",   label: "Soft Pink", swatch: "#F5A9C7", css: "saturate(1.25) brightness(1.08) hue-rotate(-6deg) contrast(0.98)" },
+  { key: "warm",   label: "Warm",      swatch: "#E3A85A", css: "sepia(0.18) saturate(1.25) brightness(1.05)" },
+  { key: "cool",   label: "Cool",      swatch: "#9AC7E8", css: "saturate(1.1) hue-rotate(8deg) brightness(1.02)" },
+  { key: "vivid",  label: "Vivid",     swatch: "#F5A623", css: "saturate(1.4) contrast(1.15)" },
+  { key: "bw",     label: "B&W",       swatch: "#BEBEC2", css: "grayscale(1) contrast(1.1)" },
+];
+
 function uploadPage() {
   // Two steps: "camera" (record or pick) then "post" (describe and publish).
   const el = $(`<div class="page" style="padding:0;background:#000"></div>`);
@@ -1111,12 +1129,17 @@ function uploadPage() {
   let startedAt = 0;
   let captured = null;       // { blob, url, duration }
   let soundEl = null;        // hidden <audio> playing `sound`, only while recording with one
+  let activeFilter = "none";
+  let torchOn = false;
+  let canvasRaf = null;      // draw-loop handle, only running while actually recording
 
   const stop = () => {
     if (recorder && recorder.state !== "inactive") recorder.stop();
     stream?.getTracks().forEach(t => t.stop());
     stream = null;
     soundEl?.pause();
+    cancelAnimationFrame(canvasRaf);
+    canvasRaf = null;
     clearInterval(ticker);
   };
 
@@ -1292,11 +1315,18 @@ function uploadPage() {
           ${I.x}
         </button>
 
-        <button id="flip" style="position:absolute;top:16px;right:16px;width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.4);color:#fff;display:grid;place-items:center;z-index:2">
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
-          </svg>
-        </button>
+        <div style="position:absolute;top:16px;right:16px;display:flex;flex-direction:column;gap:10px;z-index:2">
+          <button id="flip" style="width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.4);color:#fff;display:grid;place-items:center">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
+            </svg>
+          </button>
+          <button id="flash" style="width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.4);color:#fff;display:grid;place-items:center">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/>
+            </svg>
+          </button>
+        </div>
 
         <div id="timer" style="position:absolute;top:18px;left:50%;transform:translateX(-50%);background:#FF3B30;color:#fff;font-family:var(--mono);font-size:12px;padding:4px 10px;border-radius:12px;display:none;z-index:2">
           0:00
@@ -1313,6 +1343,16 @@ function uploadPage() {
         ` : ""}
 
         <div style="position:absolute;bottom:0;left:0;right:0;padding-bottom:22px;z-index:2">
+          <div id="filters" style="display:flex;gap:14px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 20px 14px;scrollbar-width:none">
+            ${FILTERS.map(f => `
+              <button class="filt tap-sm ${f.key === activeFilter ? "on" : ""}" data-f="${f.key}"
+                style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;background:none;border:none">
+                <i style="width:44px;height:44px;border-radius:50%;background:${f.swatch};display:block;
+                  border:2px solid ${f.key === activeFilter ? "#fff" : "transparent"}"></i>
+                <span style="color:#fff;font-size:10px;font-weight:600;text-shadow:0 1px 4px rgba(0,0,0,.6)">${f.label}</span>
+              </button>`).join("")}
+          </div>
+
           <div id="modes" style="display:flex;justify-content:center;gap:18px;margin-bottom:16px">
             ${[["10m", 600], ["60s", 60], ["15s", 15]].map(([l, s]) =>
               `<button data-s="${s}" class="mode ${s === 60 ? "on" : ""}"
@@ -1365,6 +1405,33 @@ function uploadPage() {
       el.querySelector("#soundStrip")?.remove();
       start();
     });
+
+    // The live preview gets the filter as plain CSS — instant, GPU-composited,
+    // costs nothing while just looking through the lens. beginRecording()
+    // re-applies the same string to a canvas's 2D context so it's actually
+    // baked into the exported video, not just how it looked on screen.
+    el.querySelectorAll(".filt").forEach(b => b.onclick = () => {
+      el.querySelectorAll(".filt").forEach(x => {
+        x.classList.remove("on");
+        x.querySelector("i").style.borderColor = "transparent";
+      });
+      b.classList.add("on");
+      b.querySelector("i").style.borderColor = "#fff";
+      activeFilter = b.dataset.f;
+      cam.style.filter = FILTERS.find(f => f.key === activeFilter)?.css || "none";
+    });
+
+    const flashBtn = el.querySelector("#flash");
+    flashBtn.onclick = async () => {
+      const track = stream?.getVideoTracks()[0];
+      const caps = track?.getCapabilities?.();
+      if (!caps || !caps.torch) { toast("Flash isn't available on this camera"); return; }
+      try {
+        torchOn = !torchOn;
+        await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+        flashBtn.style.color = torchOn ? "#F5A623" : "#fff";
+      } catch { toast("Couldn't switch the flash"); }
+    };
 
     el.querySelectorAll(".mode").forEach(b => b.onclick = () => {
       el.querySelectorAll(".mode").forEach(x => {
@@ -1428,6 +1495,16 @@ function uploadPage() {
         cam.srcObject = stream;
         // Selfie view is mirrored, as every camera app does
         cam.style.transform = facing === "user" ? "scaleX(-1)" : "none";
+        // Reapplies whatever filter was already picked — start() reruns on
+        // flip and after clearing a sound, both of which rebuild the stream
+        // but shouldn't reset a choice the person already made.
+        cam.style.filter = FILTERS.find(f => f.key === activeFilter)?.css || "none";
+        // A fresh getUserMedia call means a fresh track — torch never
+        // carries over, so the toggle's own state and its button shouldn't
+        // pretend it did.
+        torchOn = false;
+        const flashBtn = el.querySelector("#flash");
+        if (flashBtn) flashBtn.style.color = "#fff";
       } catch (e) {
         if (e.name === "NotAllowedError") {
           showDenied("Camera access is blocked. Allow it in your browser settings, or pick a video from your gallery.");
@@ -1450,24 +1527,61 @@ function uploadPage() {
       const types = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
       const mime = types.find(t => MediaRecorder.isTypeSupported(t)) || "";
 
-      // With a sound selected, the recorded stream is the camera's video
-      // track plus the sound's own audio track (captured off the preloaded
-      // <audio>), not the camera stream's audio — there isn't one, since
-      // start() requested audio:false in that case.
-      let recordStream = stream;
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings?.() || {};
+      const cw = settings.width || 1080, ch = settings.height || 1920;
+      const mirror = facing === "user";
+
+      // Bake the picked filter into the actual recording rather than just
+      // the on-screen preview: redraw every frame onto an offscreen canvas
+      // with the same CSS filter string applied to its 2D context, at the
+      // camera's own resolution so nothing is downscaled, then record THAT
+      // canvas's stream. Runs only while a take is rolling — idle preview
+      // stays pure CSS, so this costs nothing before the shutter is pressed.
+      let videoTrackForRecording = track;
+      if (typeof HTMLCanvasElement.prototype.captureStream === "function") {
+        const canvas = document.createElement("canvas");
+        canvas.width = cw; canvas.height = ch;
+        const ctx = canvas.getContext("2d");
+        const filterCss = FILTERS.find(f => f.key === activeFilter)?.css || "none";
+
+        const drawFrame = () => {
+          ctx.filter = filterCss;
+          ctx.save();
+          if (mirror) { ctx.translate(cw, 0); ctx.scale(-1, 1); }
+          ctx.drawImage(cam, 0, 0, cw, ch);
+          ctx.restore();
+          canvasRaf = requestAnimationFrame(drawFrame);
+        };
+        drawFrame();
+        videoTrackForRecording = canvas.captureStream(30).getVideoTracks()[0];
+      } else if (activeFilter !== "none") {
+        // Old Safari lacks canvas.captureStream — the filter still shows
+        // live but can't be burned into the file, so say so once rather
+        // than silently shipping an unfiltered video after a filtered preview.
+        toast("This browser can't save the filter into the video — recording without it");
+      }
+
+      // With a sound selected, the recording's audio track is the sound's
+      // own audio (captured off the preloaded <audio>), not the camera
+      // stream's — there isn't one, since start() requested audio:false
+      // in that case.
+      let audioTracks = stream.getAudioTracks();
       if (sound && soundEl) {
         soundEl.currentTime = 0;
         soundEl.play().catch(() => {});
         const capture = soundEl.captureStream || soundEl.mozCaptureStream;
-        const soundStream = capture.call(soundEl);
-        recordStream = new MediaStream([...stream.getVideoTracks(), ...soundStream.getAudioTracks()]);
+        audioTracks = capture.call(soundEl).getAudioTracks();
       }
+      const recordStream = new MediaStream([videoTrackForRecording, ...audioTracks]);
 
       recorder = new MediaRecorder(recordStream, mime ? { mimeType: mime } : undefined);
 
       recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
       recorder.onstop = () => {
         clearInterval(ticker);
+        cancelAnimationFrame(canvasRaf);
+        canvasRaf = null;
         timer.style.display = "none";
         soundEl?.pause();
         const blob = new Blob(chunks, { type: chunks[0]?.type || "video/webm" });
