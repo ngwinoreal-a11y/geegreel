@@ -2739,19 +2739,32 @@ async function handle(request, env, ctx) {
     requireUser(user);
     const session = await env.DB.prepare("SELECT * FROM live_sessions WHERE id = ?").bind(liveChunkMatch[1]).first();
     if (!session) return err("Live not found", 404);
-    if (session.host_user_id !== user.id) return err("That isn't your live", 403);
     if (session.status !== "live") return err("This live has ended", 409);
+
+    // The host can always speak. Anyone else needs to be an approved guest —
+    // set when the host accepts their request-join over the WebSocket.
+    const isHost = session.host_user_id === user.id;
+    if (!isHost) {
+      const guest = await env.DB.prepare(
+        "SELECT 1 FROM live_guests WHERE session_id = ? AND user_id = ?"
+      ).bind(session.id, user.id).first();
+      if (!guest) return err("You're not approved to speak in this live", 403);
+    }
 
     const form = await request.formData();
     const file = form.get("chunk");
     const seq = parseInt(form.get("seq"));
     if (!file || typeof file === "string" || !Number.isInteger(seq)) return err("A chunk and its sequence number are required");
 
-    const key = `live/${session.id}/${String(seq).padStart(8, "0")}.webm`;
-    await env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type || "video/webm" } });
+    // seq is scoped to (session, speaker), not just session — a host and a
+    // guest uploading at the same time both counting from 0 would otherwise
+    // collide in the same sequence space. The R2 key includes the speaker id
+    // so two people's audio never collides on disk either.
+    const key = `live/${session.id}/${user.id}/${String(seq).padStart(8, "0")}.webm`;
+    await env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type || "audio/webm" } });
     await env.DB.prepare(
-      "INSERT INTO live_chunks (id, session_id, seq, r2_key, created_at) VALUES (?, ?, ?, ?, ?)"
-    ).bind(uid(), session.id, seq, key, now()).run();
+      "INSERT INTO live_chunks (id, session_id, seq, r2_key, speaker_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(uid(), session.id, seq, key, user.id, now()).run();
 
     return json({ ok: true }, 201);
   }
@@ -2759,10 +2772,13 @@ async function handle(request, env, ctx) {
   const liveChunksMatch = /^\/api\/live\/([\w-]+)\/chunks$/.exec(path);
   if (liveChunksMatch && method === "GET") {
     const after = parseInt(url.searchParams.get("after") || "-1");
+    const speaker = url.searchParams.get("speaker"); // required now — each listener polls each active speaker separately
+    if (!speaker) return err("A speaker id is required — poll each active speaker separately");
     const { results } = await env.DB.prepare(
-      "SELECT seq, r2_key FROM live_chunks WHERE session_id = ? AND seq > ? ORDER BY seq ASC LIMIT 20"
-    ).bind(liveChunksMatch[1], after).all();
+      "SELECT seq, r2_key FROM live_chunks WHERE session_id = ? AND speaker_user_id = ? AND seq > ? ORDER BY seq ASC LIMIT 20"
+    ).bind(liveChunksMatch[1], speaker, after).all();
     return json({
+      speaker,
       chunks: results.map(c => ({ seq: c.seq, url: `/api/media/${c.r2_key}` })),
     });
   }
@@ -2864,6 +2880,11 @@ export class LiveRoom {
       return new Response("ok");
     }
 
+    // Needed by the approve/revoke handlers below to write to live_guests —
+    // this object has no other way to know which session it's serving.
+    const sessionMatch = /\/api\/live\/([\w-]+)\/socket/.exec(url.pathname);
+    if (sessionMatch) this.sessionId = sessionMatch[1];
+
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected a WebSocket", { status: 426 });
     }
@@ -2901,14 +2922,6 @@ export class LiveRoom {
     const info = ws.deserializeAttachment();
     if (!info) return;
 
-    // WebRTC offer/answer/ICE candidates, relayed to one specific peer —
-    // this object never looks inside `data`, it's opaque to it.
-    if (msg.type === "signal" && msg.to) {
-      const target = this.state.getWebSockets().find(s => s.deserializeAttachment()?.id === msg.to);
-      if (target) target.send(JSON.stringify({ type: "signal", from: info.id, data: msg.data }));
-      return;
-    }
-
     if (msg.type === "request-join") {
       const host = this.state.getWebSockets().find(s => s.deserializeAttachment()?.isHost);
       if (host) host.send(JSON.stringify({ type: "request-join", user: this.publicInfo(info) }));
@@ -2923,9 +2936,34 @@ export class LiveRoom {
         const tInfo = target.deserializeAttachment();
         tInfo.role = "guest";
         target.serializeAttachment(tInfo);
+        // Record the approval so POST /api/live/:id/chunk will accept audio
+        // from them — that endpoint has no socket to check role against.
+        if (this.sessionId) {
+          await this.env.DB.prepare(
+            "INSERT OR IGNORE INTO live_guests (session_id, user_id, approved_at) VALUES (?, ?, ?)"
+          ).bind(this.sessionId, tInfo.id, Date.now()).run();
+        }
         this.broadcast({ type: "roleChanged", id: tInfo.id, role: "guest" });
       }
       target.send(JSON.stringify({ type: msg.type === "approve" ? "approved" : "declined" }));
+      return;
+    }
+
+    // Host can send someone back to the audience mid-live.
+    if (msg.type === "revoke" && info.isHost) {
+      const target = this.state.getWebSockets().find(s => s.deserializeAttachment()?.id === msg.userId);
+      if (this.sessionId) {
+        await this.env.DB.prepare(
+          "DELETE FROM live_guests WHERE session_id = ? AND user_id = ?"
+        ).bind(this.sessionId, msg.userId).run();
+      }
+      if (target) {
+        const tInfo = target.deserializeAttachment();
+        tInfo.role = "viewer";
+        target.serializeAttachment(tInfo);
+        target.send(JSON.stringify({ type: "revoked" }));
+      }
+      this.broadcast({ type: "roleChanged", id: msg.userId, role: "viewer" });
       return;
     }
 
@@ -2959,6 +2997,14 @@ export class LiveRoom {
 
   async webSocketClose(ws) {
     const info = ws.deserializeAttachment();
+    // A disconnected guest shouldn't still be able to speak — POST
+    // /api/live/:id/chunk checks live_guests, not socket state, so this row
+    // has to go the moment their connection does.
+    if (info?.role === "guest" && this.sessionId) {
+      await this.env.DB.prepare(
+        "DELETE FROM live_guests WHERE session_id = ? AND user_id = ?"
+      ).bind(this.sessionId, info.id).run().catch(() => {});
+    }
     this.broadcast({ type: "left", id: info?.id });
     this.broadcastViewerCount();
   }
