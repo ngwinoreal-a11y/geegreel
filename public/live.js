@@ -213,7 +213,7 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
           $("#live-vcount").textContent = msg.count;
           break;
         case "chat":
-          addChatLine(`<b>${escapeHtml(msg.user.displayName || msg.user.username)}</b> ${escapeHtml(msg.body)}`);
+          addChatLine(`<b>@${escapeHtml(msg.user.username)}</b> ${escapeHtml(msg.body)}`);
           break;
         case "gift": {
           const from = msg.user.displayName || msg.user.username;
@@ -317,9 +317,25 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
       addChatLine("Microphone access is blocked — allow it in your browser settings", { sys: true });
       return;
     }
-    $("#live-mic-btn").classList.add("on");
+    // { mimeType: "" } is not "let the browser pick" — it's an invalid
+    // value that makes the constructor throw, synchronously, with nothing
+    // here to catch it. That's a silent, total failure: no recorder, no
+    // chunks, ever, on any browser that supports neither of these two types
+    // (every iOS Safari, and several in-app browsers — WhatsApp's embedded
+    // one among them). Omitting mimeType entirely is what actually means
+    // "browser default".
     const mime = ["audio/webm;codecs=opus", "audio/webm"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
-    state.recorder = new MediaRecorder(state.micStream, { mimeType: mime, audioBitsPerSecond: AUDIO_BITRATE });
+    try {
+      state.recorder = new MediaRecorder(state.micStream, mime
+        ? { mimeType: mime, audioBitsPerSecond: AUDIO_BITRATE }
+        : { audioBitsPerSecond: AUDIO_BITRATE });
+    } catch (err) {
+      addChatLine("This browser can't record audio here — try Chrome or Safari directly, not an in-app browser", { sys: true });
+      $("#live-mic-btn").classList.remove("on");
+      state.micStream.getTracks().forEach((t) => t.stop());
+      state.micStream = null;
+      return;
+    }
     state.recSeq = 0;
     state.recorder.ondataavailable = async (e) => {
       if (!e.data || !e.data.size) return;
@@ -377,14 +393,52 @@ export function mountLive(container, { sessionId, isHost, me, token, apiBase = "
       playNext(speakerId);
     } catch { /* miss a poll, catch up next tick */ }
   }
+  // Browsers block audio.play() from running without a real user gesture
+  // behind it — a poll timer doesn't count. That rejection was previously
+  // swallowed with nothing shown: every chunk would silently fail to play,
+  // forever, which looks exactly like "there's no audio" with no error
+  // anywhere. If that's the failure, this shows one tap-to-unlock banner;
+  // once the browser has seen ANY play() succeed from a real click, it
+  // keeps allowing programmatic playback for the rest of the page's life,
+  // so this only ever needs to fire once per visit.
+  let audioBlocked = false;
+  function showUnlockBanner() {
+    if (audioBlocked || $("#live-unlock-audio")) return;
+    audioBlocked = true;
+    const btn = document.createElement("button");
+    btn.id = "live-unlock-audio";
+    btn.textContent = "🔊 Tap to hear the live";
+    btn.style.cssText = "position:absolute;top:64px;left:50%;transform:translateX(-50%);z-index:9;" +
+      "background:var(--accent,#F5A623);color:#111;font-weight:700;font-size:13px;border:none;" +
+      "border-radius:20px;padding:10px 18px;box-shadow:0 4px 16px rgba(0,0,0,.4)";
+    btn.onclick = () => {
+      audioBlocked = false;
+      btn.remove();
+      // A silent, muted play — purely to register as the real user gesture
+      // browsers require — then every real speaker's queued/future audio
+      // resumes through the normal playNext() path.
+      const unlock = new Audio();
+      unlock.muted = true;
+      unlock.play().catch(() => {}).finally(() => {
+        state.players.forEach((_, id) => playNext(id));
+      });
+    };
+    container.appendChild(btn);
+  }
+
   function playNext(speakerId) {
     const p = state.players.get(speakerId);
     if (!p || p.playing || !p.queue.length) return;
+    if (audioBlocked) return; // wait for the tap — retried from the unlock button itself
     const chunk = p.queue.shift();
     const audio = new Audio(chunk.url);
     p.playing = true;
     audio.onended = audio.onerror = () => { p.playing = false; playNext(speakerId); };
-    audio.play().catch(() => { p.playing = false; playNext(speakerId); });
+    audio.play().catch((err) => {
+      p.playing = false;
+      if (err?.name === "NotAllowedError") { p.queue.unshift(chunk); showUnlockBanner(); return; }
+      playNext(speakerId);
+    });
   }
 
   // ---------- lifecycle ----------

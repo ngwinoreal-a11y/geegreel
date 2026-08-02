@@ -98,6 +98,17 @@
      time on the right edge. Raised to clear it, roughly where the rail's
      own bottom edge (132px) leaves room. */
   .sound-disc { bottom: 146px; }
+
+  /* design-live.css never positions #live-requests itself — only the
+     .live-request card inside it — and its own doc comment says these
+     should "stack above the composer". Every sibling around it
+     (.live-topbar, .live-stage, .live-chat) is position:absolute, so
+     without this it falls back to static flow and renders pinned to the
+     very top of the screen, behind the topbar, instead of where the file's
+     own comment says it belongs. */
+  #live-requests {
+    position: absolute; left: 0; right: 0; bottom: 68px; z-index: 5;
+  }
 </style>
 </head>
 <body>
