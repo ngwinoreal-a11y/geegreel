@@ -87,13 +87,15 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Chat threads, the conversation list, and the feed listing: try the
-  // network so the data stays current, but keep a copy so the same request
-  // works with no signal. The feed listing matters here too — caching a
-  // watched video's bytes (below) is useless offline if the JSON that
-  // points the feed at it can't load in the first place.
+  // Chat threads, the conversation list, the feed listing, and a looked-up
+  // profile: try the network so the data stays current, but keep a copy so
+  // the same request works with no signal. /api/users/:handle matters here
+  // for a reason that isn't obvious — tapping a name in the inbox resolves
+  // it to a full user object before opening the chat screen, so without
+  // this cached too, opening an already-cached conversation still failed
+  // offline: the failure was in getting there, not in the thread itself.
   const isCachedApi = url.pathname === "/api/messages" || /^\/api\/messages\/[\w-]+$/.test(url.pathname)
-    || url.pathname === "/api/feed";
+    || url.pathname === "/api/feed" || /^\/api\/users\/[\w.]+$/.test(url.pathname);
   if (isCachedApi) {
     event.respondWith((async () => {
       try {

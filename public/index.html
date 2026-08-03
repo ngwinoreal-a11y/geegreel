@@ -120,6 +120,18 @@
   </div>
 </div>
 
+<!-- Sibling of #app, not a child — render()'s innerHTML wipe on every
+     navigation would otherwise clear this along with everything else.
+     One consistent "No internet connection" indicator app-wide instead of
+     each page writing its own offline wording; toggled purely by the
+     online/offline listeners near the bottom of the script, independent
+     of whatever page happens to be showing. -->
+<div id="offlineBanner" style="display:none;position:fixed;top:0;left:50%;transform:translateX(-50%);
+  z-index:9999;margin-top:10px;background:rgba(28,28,30,.95);color:#fff;font-size:13px;font-weight:600;
+  padding:8px 16px;border-radius:20px;box-shadow:0 4px 16px rgba(0,0,0,.4);pointer-events:none">
+  No internet connection
+</div>
+
 <script type="module">
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
 const app = document.getElementById("app");
@@ -2718,7 +2730,12 @@ function profilePage() {
       state.page = "chat";
       render();
     });
-  }).catch(e => { el.innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+  }).catch(e => {
+    // /api/users/:handle is cached by sw.js, so this only hits when this
+    // particular profile has never loaded on this device before — the
+    // global offline banner already explains why, if that's the cause.
+    el.innerHTML = `<p class="empty">${esc(e.status === undefined ? "This profile hasn't loaded on this device yet." : e.message)}</p>`;
+  });
 
   return el;
 }
@@ -3124,12 +3141,13 @@ function chatPage() {
       renderThread(r);
     } catch (e) {
       // e.status is only set when a real response came back (see api()) —
-      // undefined means the request never reached the network at all. If
-      // nothing was cached either, that's the one case worth naming
-      // plainly; if we already rendered from cache, leave it showing
-      // rather than replacing real (if stale) content with an error.
+      // undefined means the request never reached the network at all; the
+      // offline banner (see the online/offline listeners near the bottom
+      // of this file) already says why, so this just needs to say what.
+      // If we already rendered from cache, leave it showing rather than
+      // replacing real (if stale) content with an error.
       if (!fromCache) {
-        thread.innerHTML = `<p class="empty">${esc(e.status === undefined ? "You're offline — this conversation hasn't loaded on this device yet." : e.message)}</p>`;
+        thread.innerHTML = `<p class="empty">${esc(e.status === undefined ? "This conversation hasn't loaded on this device yet." : e.message)}</p>`;
       }
     }
   };
@@ -3440,15 +3458,27 @@ function messagesPage() {
       <div id="threads">${normal.length ? normal.map(threadRow).join("")
         : `<div class="empty" style="color:#8A8A8E"><div class="empty-icon" style="background:#F6F6F7;border-color:#EDEDED">${I.mail}</div>No messages yet.<p class="empty-sub" style="color:#8A8A8E">Tap + to find friends.</p></div>`}</div>`;
 
-    // The thread list carries usernames; the chat screen needs the id, so
-    // resolve it on tap rather than widening the messages payload.
+    // The thread list carries usernames; the chat screen wants the id too,
+    // so resolve it on tap rather than widening the messages payload —
+    // sw.js caches this lookup (see the isCachedApi list there), so it
+    // still works offline for anyone already messaged before. If even that
+    // fails (never cached, no signal), fall back to what the inbox already
+    // had in hand: chatPage()/its /api/messages/:id calls all accept a
+    // username in place of a real id (every such route matches "id = ? OR
+    // username = ?" — see src/index.js), so a thin object with no real id
+    // still opens the conversation instead of the tap just failing.
+    const withByUsername = new Map(r.threads.map(t => [t.with.username, t.with]));
     const openChat = async (username) => {
       try {
         const p = await api(`/users/${encodeURIComponent(username)}`);
         state.chatWith = p.user;
-        state.page = "chat";
-        render();
-      } catch (e) { toast(e.message); }
+      } catch (e) {
+        const fallback = withByUsername.get(username);
+        if (!fallback) { toast(e.message); return; }
+        state.chatWith = { id: username, ...fallback };
+      }
+      state.page = "chat";
+      render();
     };
     el.querySelectorAll(".thread-row").forEach(row => row.onclick = () => openChat(row.dataset.u));
     el.querySelector("#reqRow")?.addEventListener("click", () => { state.page = "message-requests"; render(); });
@@ -3471,7 +3501,7 @@ function messagesPage() {
       renderInbox(r);
     } catch (e) {
       if (!fromCache) {
-        el.innerHTML = `<p class="empty">${esc(e.status === undefined ? "You're offline — showing nothing saved yet for your inbox." : e.message)}</p>`;
+        el.innerHTML = `<p class="empty">${esc(e.status === undefined ? "Nothing saved yet for your inbox." : e.message)}</p>`;
       }
     }
   })();
@@ -4767,6 +4797,17 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") startUnreadPolling();
   else stopUnreadPolling();
 });
+
+// One banner, app-wide, instead of every page inventing its own offline
+// wording. Purely a signal that the network is down right now — it says
+// nothing about whether any given screen has cached content to fall back
+// on (that's each page's own job, same as before), just that the reason
+// something might be stale or empty is "no connection", consistently.
+const offlineBanner = document.getElementById("offlineBanner");
+const syncOfflineBanner = () => { offlineBanner.style.display = navigator.onLine ? "none" : "block"; };
+window.addEventListener("online", syncOfflineBanner);
+window.addEventListener("offline", syncOfflineBanner);
+syncOfflineBanner();
 
 // Verify the stored session is still valid before showing the app
 (async () => {
