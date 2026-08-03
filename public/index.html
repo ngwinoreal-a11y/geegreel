@@ -189,7 +189,16 @@ async function api(path, opts = {}) {
     body: opts.body instanceof FormData ? opts.body : opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Request failed");
+  if (!res.ok) {
+    // .status only exists when a real response came back — a genuine
+    // network failure (offline, DNS, the service worker throwing because
+    // nothing was cached) rejects fetch() itself, above, with no .status
+    // at all. That distinction is what stops the bootstrap check below
+    // from treating "no signal right now" as "this session is invalid."
+    const e = new Error(data.error || "Request failed");
+    e.status = res.status;
+    throw e;
+  }
   return data;
 }
 
@@ -221,6 +230,19 @@ const toast = (msg) => {
   setTimeout(() => t.remove(), 1800);
 };
 
+// Guests can watch the feed with no account — this is what any action that
+// actually needs one (like, comment, follow, message, upload...) calls
+// first. Returns false so a caller can `if (!requireLogin()) return;` in
+// one line. state.authPrompt is what tells renderInner() to show
+// authScreen even though state.page itself is one of the guest-ok pages.
+function requireLogin(msg) {
+  if (store.token) return true;
+  toast(msg || "Log in to continue");
+  state.authPrompt = true;
+  render();
+  return false;
+}
+
 // The big heart that pops at (x, y) inside `container` and fades on its own.
 const burstHeart = (container, x, y) => {
   const h = $(`<div class="heart-burst">${I.heartFill}</div>`);
@@ -242,7 +264,11 @@ let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: nu
               // A sound picked on a sound page's "Use this sound", carried
               // into the upload flow. Cleared after posting or leaving upload.
               selectedSound: null,
-              soundId: null };
+              soundId: null,
+              // Set by requireLogin() when a guest taps something that
+              // needs an account — tells renderInner() to show authScreen
+              // even on a page a guest can otherwise browse.
+              authPrompt: false };
 
 // ---------- feed ----------
 function slide(v) {
@@ -307,6 +333,7 @@ function slide(v) {
   el.querySelectorAll(".follow-btn").forEach(btn => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
+      if (!requireLogin("Log in to follow")) return;
       const uid = btn.dataset.uid;
       const wasOn = btn.classList.contains("done");
       syncFollow(uid, !wasOn);
@@ -399,7 +426,7 @@ function slide(v) {
       const rect = el.getBoundingClientRect();
       burstHeart(el, e.clientX - rect.left, e.clientY - rect.top);
       const likeBtn = el.querySelector(".like");
-      if (!likeBtn.classList.contains("liked")) {
+      if (!likeBtn.classList.contains("liked") && requireLogin()) {
         likeBtn.classList.add("liked");
         api(`/videos/${v.id}/like`, { method: "POST" })
           .then(r => { likeBtn.querySelector(".n").textContent = fmt(r.count); })
@@ -415,6 +442,7 @@ function slide(v) {
 
   el.querySelector(".like").addEventListener("click", async (e) => {
     e.stopPropagation();
+    if (!requireLogin()) return;
     const btn = e.currentTarget;
     const on = btn.classList.contains("liked");
     btn.classList.toggle("liked");
@@ -449,6 +477,7 @@ function slide(v) {
   const repBtn = el.querySelector(".rep");
   let repostBusy = false;
   const doRepost = async () => {
+    if (!requireLogin()) return false;
     if (repostBusy || repBtn.classList.contains("on")) return repBtn.classList.contains("on");
     repostBusy = true;
     repBtn.classList.add("working", "on-dark");
@@ -486,6 +515,7 @@ function slide(v) {
     // the screenshot: share always threw here before ever reaching
     // navigator.share/clipboard, so nothing after this line ever ran.
     const btn = e.currentTarget;
+    if (!requireLogin("Log in to share")) return;
     try {
       const r = await api(`/videos/${v.id}/share`, { method: "POST" });
       // The count only moves once the share actually completes below — not
@@ -511,7 +541,7 @@ function slide(v) {
 
   el.querySelector(".gift")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (!store.token) return toast("Log in to send gifts");
+    if (!requireLogin("Log in to send gifts")) return;
     openGifts(v, el);
   });
 
@@ -633,10 +663,15 @@ function openMoreOptions(v, slideEl) {
 
   sheet.querySelector('[data-a="save"]').onclick = () => { close(); downloadVideo(v); };
   sheet.querySelector('[data-a="speed"]').onclick = () => { close(); openSpeedSheet(v, slideEl); };
-  sheet.querySelector('[data-a="report"]').onclick = () => { close(); openReportSheet(v); };
+  sheet.querySelector('[data-a="report"]').onclick = () => {
+    close();
+    if (!requireLogin("Log in to report a video")) return;
+    openReportSheet(v);
+  };
 
   sheet.querySelector('[data-a="repost"]').onclick = async () => {
     close();
+    if (!requireLogin()) return;
     // Goes through the same guarded call the rail's repost icon uses, so
     // reposting from here and reposting from there agree on whether it
     // already happened instead of each firing its own request.
@@ -657,6 +692,7 @@ function openMoreOptions(v, slideEl) {
   let shareUrl = null, shareId = null;
   const getShareUrl = async () => {
     if (shareUrl) return shareUrl;
+    if (!requireLogin("Log in to share")) return null;
     const r = await api(`/videos/${v.id}/share`, { method: "POST" });
     shareUrl = r.url;
     shareId = r.shareId;
@@ -673,23 +709,29 @@ function openMoreOptions(v, slideEl) {
 
   sheet.querySelector('[data-app="whatsapp"]').onclick = async () => {
     const url = await getShareUrl();
+    if (!url) return;
     window.open(`https://wa.me/?text=${encodeURIComponent((v.caption || "Check this out") + " " + url)}`, "_blank", "noopener");
     markShared();
   };
   sheet.querySelector('[data-app="facebook"]').onclick = async () => {
     const url = await getShareUrl();
+    if (!url) return;
     window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`, "_blank", "noopener");
     markShared();
   };
   sheet.querySelector('[data-app="copy"]').onclick = async () => {
     const url = await getShareUrl();
+    if (!url) return;
     await navigator.clipboard.writeText(url);
     toast("Link copied");
     markShared();
   };
 
-  // Send-to-friend: recent conversations, same list the inbox shows.
-  api("/messages").then(r => {
+  // Send-to-friend: recent conversations, same list the inbox shows. Guests
+  // have no conversations to send into — skip the fetch and just don't
+  // show the section rather than 401ing.
+  if (!store.token) { sheet.querySelector("#sendList").innerHTML = ""; }
+  else api("/messages").then(r => {
     const list = sheet.querySelector("#sendList");
     list.innerHTML = r.threads.length ? r.threads.slice(0, 10).map(t => `
       <div class="send-row">
@@ -943,6 +985,7 @@ function openComments(v, slideEl) {
   const post = async () => {
     const text = input.value.trim();
     if (!text) return;
+    if (!requireLogin("Log in to comment")) return;
     send.disabled = true;
     try {
       await api(`/videos/${v.id}/comments`, {
@@ -2698,7 +2741,12 @@ function chatPage() {
       thread.scrollTop = thread.scrollHeight;
       pollUnread();
     } catch (e) {
-      thread.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+      // e.status is only set when a real response came back (see api()) —
+      // undefined means the request never reached the network at all and
+      // nothing for this thread was cached either. That's the one case
+      // worth naming plainly; anything else keeps whatever the server
+      // actually said.
+      thread.innerHTML = `<p class="empty">${esc(e.status === undefined ? "You're offline — this conversation hasn't loaded on this device yet." : e.message)}</p>`;
     }
   };
   load();
@@ -2712,7 +2760,7 @@ function chatPage() {
       await load();
     } catch (e) {
       input.value = body; // don't lose what they typed
-      toast(e.message);
+      toast(e.status === undefined ? "Couldn't send — check your connection" : e.message);
     }
   };
 
@@ -2818,7 +2866,9 @@ function messagesPage() {
         render();
       } catch (e) { toast(e.message); }
     });
-  }).catch(e => { el.innerHTML = `<p class="empty">${e.message}</p>`; });
+  }).catch(e => {
+    el.innerHTML = `<p class="empty">${esc(e.status === undefined ? "You're offline — showing nothing saved yet for your inbox." : e.message)}</p>`;
+  });
   return el;
 }
 
@@ -3718,7 +3768,20 @@ function renderInner() {
   [...app.children].forEach(c => c.dispatchEvent(new Event("screen-exit")));
   app.innerHTML = "";
 
-  if (!store.token) { app.appendChild(authScreen()); return; }
+  // Watching videos needs no account — only acting on them does (like,
+  // comment, follow, message, upload...). Everything reachable without a
+  // token is read-only: the feed itself, someone else's profile, search,
+  // a sound's videos. Any other page — or your OWN profile, which a guest
+  // can't have — falls through to the login/signup screen. requireLogin()
+  // (used throughout the feed's action handlers) sets state.authPrompt to
+  // force this same screen from inside an action rather than a page.
+  const GUEST_PAGES = new Set([null, "search", "sound", "userfeed"]);
+  const guestOnProfile = state.page === "profile" && state.viewUser;
+  if (!store.token && state.authPrompt) { app.appendChild(authScreen()); return; }
+  if (!store.token && !GUEST_PAGES.has(state.page) && !guestOnProfile) {
+    app.appendChild(authScreen());
+    return;
+  }
 
   if (state.page === "upload") { app.appendChild(uploadPage()); return; }
   if (state.page === "friends") { app.appendChild(friendsPage()); return; }
@@ -3755,12 +3818,25 @@ function renderInner() {
       </div>
     </div>`));
 
-  app.querySelector("#me").onclick = () => { state.viewUser = null; state.tab = "profile"; state.page = "profile"; render(); };
+  app.querySelector("#me").onclick = () => {
+    if (!requireLogin("Log in to see your profile")) return;
+    state.viewUser = null; state.tab = "profile"; state.page = "profile"; render();
+  };
   app.querySelector("#search").onclick = () => { state.tab = "search"; state.page = "search"; render(); };
-  app.querySelector("#notifBell").onclick = () => { state.page = "notifications"; render(); };
-  app.querySelector("#settings").onclick = () => { state.page = "settings"; render(); };
+  app.querySelector("#notifBell").onclick = () => {
+    if (!requireLogin("Log in to see notifications")) return;
+    state.page = "notifications"; render();
+  };
+  app.querySelector("#settings").onclick = () => {
+    if (!requireLogin()) return;
+    state.page = "settings"; render();
+  };
 
   if (isMsg) {
+    // Defense in depth — the nav tab click already gates this (see
+    // attachNav), but state.tab can also arrive here already set to
+    // "messages" from before a logout.
+    if (!store.token) { app.appendChild(authScreen()); return; }
     app.appendChild(messagesPage());
   } else {
     app.appendChild($(`
@@ -3771,6 +3847,7 @@ function renderInner() {
     app.appendChild($(`<div class="feed"></div>`));
 
     app.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+      if (b.dataset.t === "following" && !requireLogin("Log in to see videos from people you follow")) return;
       state.feedTab = b.dataset.t; render(); loadFeed(true);
     });
 
@@ -3903,6 +3980,7 @@ function attachNav(container, active) {
 
   nav.querySelector("#fab").onclick = () => { state.page = isMsg ? "friends" : "upload"; render(); };
   nav.querySelectorAll("button[data-tab]").forEach(b => b.onclick = () => {
+    if (b.dataset.tab === "messages" && !requireLogin("Log in to see messages")) return;
     state.tab = b.dataset.tab;
     state.page = null; // both tabs render on the home surface
     render();
@@ -4037,8 +4115,20 @@ document.addEventListener("visibilitychange", () => {
   }
 
   if (store.token) {
-    try { const r = await api("/auth/me"); store.user = r.user; }
-    catch { store.token = null; store.user = null; }
+    try {
+      const r = await api("/auth/me");
+      store.user = r.user;
+    } catch (e) {
+      // Only a real "this token is no good" answer from the server (401)
+      // should sign someone out. Opening the app with no signal made
+      // api() reject with no .status at all (see api()'s comment) — that
+      // used to hit this same catch and wipe the session, which is what
+      // "the app logs itself out on its own" was: it wasn't logging out,
+      // it was mistaking no signal for an invalid session. Keep whatever
+      // store.user was last set to and let the person read cached content;
+      // the very next successful request re-confirms the session anyway.
+      if (e.status === 401) { store.token = null; store.user = null; }
+    }
   }
   render();
 
