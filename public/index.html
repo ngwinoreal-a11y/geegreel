@@ -118,18 +118,6 @@
   </div>
 </div>
 
-<!-- Sibling of #app, not a child — render()'s innerHTML wipe on every
-     navigation would otherwise clear this along with everything else.
-     One consistent "No internet connection" indicator app-wide instead of
-     each page writing its own offline wording; toggled purely by the
-     online/offline listeners near the bottom of the script, independent
-     of whatever page happens to be showing. -->
-<div id="offlineBanner" style="display:none;position:fixed;top:0;left:50%;transform:translateX(-50%);
-  z-index:9999;margin-top:10px;background:rgba(28,28,30,.95);color:#fff;font-size:13px;font-weight:600;
-  padding:8px 16px;border-radius:20px;box-shadow:0 4px 16px rgba(0,0,0,.4);pointer-events:none">
-  No internet connection
-</div>
-
 <script type="module">
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
 const app = document.getElementById("app");
@@ -4806,16 +4794,23 @@ document.addEventListener("visibilitychange", () => {
   else stopUnreadPolling();
 });
 
-// One banner, app-wide, instead of every page inventing its own offline
-// wording. Purely a signal that the network is down right now — it says
-// nothing about whether any given screen has cached content to fall back
-// on (that's each page's own job, same as before), just that the reason
-// something might be stale or empty is "no connection", consistently.
-const offlineBanner = document.getElementById("offlineBanner");
-const syncOfflineBanner = () => { offlineBanner.style.display = navigator.onLine ? "none" : "block"; };
-window.addEventListener("online", syncOfflineBanner);
-window.addEventListener("offline", syncOfflineBanner);
-syncOfflineBanner();
+// One consistent "No internet connection" notice app-wide instead of every
+// page inventing its own offline wording — reuses the existing toast()
+// rather than a persistent banner, which on a real device sat right on top
+// of the chat header's own name/back button (a fixed top:0 element and a
+// sticky top:0 header can't both live there). A toast already does exactly
+// what's wanted here: appears, then goes on its own a couple seconds later,
+// without competing with per-page chrome for the same few pixels.
+//
+// Coming back online also re-renders the current page — this is the fix
+// for stale content silently sticking around: loadFeed()/chatPage()/
+// messagesPage() only refresh on their own when something re-invokes them,
+// and a page that quietly failed its "real" fetch while offline (leaving
+// whatever was cached, however old, on screen with no error shown — see
+// each page's own fromCache handling) had no reason to try again once the
+// connection actually came back, until now.
+window.addEventListener("offline", () => toast("No internet connection"));
+window.addEventListener("online", () => { toast("Back online"); render(); });
 
 // Verify the stored session is still valid before showing the app
 (async () => {
@@ -4851,6 +4846,7 @@ syncOfflineBanner();
     }
   }
   render();
+  if (!navigator.onLine) setTimeout(() => toast("No internet connection"), 300); // after render(), so #app exists
 
   // A shared video's link is /v/:id (see POST /videos/:id/share) — nothing
   // read that path before now, so opening a shared link just showed the
