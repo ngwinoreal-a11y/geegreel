@@ -12,6 +12,7 @@
 const API_CACHE = "geereel-api-v1";
 const VIDEO_CACHE = "geereel-offline-videos-v1";
 const SHELL_CACHE = "geereel-shell-v1";
+const THUMB_CACHE = "geereel-thumbs-v1";
 
 // Without the app shell itself cached, "offline support" only ever worked
 // for someone who was already inside the app when the connection dropped —
@@ -40,7 +41,7 @@ self.addEventListener("activate", (event) => {
     await self.clients.claim();
     // Drop any cache from a previous version name so a future redesign of
     // this file doesn't leave orphaned entries behind forever.
-    const keep = new Set([API_CACHE, VIDEO_CACHE, SHELL_CACHE]);
+    const keep = new Set([API_CACHE, VIDEO_CACHE, SHELL_CACHE, THUMB_CACHE]);
     const names = await caches.keys();
     await Promise.all(names.filter(n => n.startsWith("geereel-") && !keep.has(n)).map(n => caches.delete(n)));
   })());
@@ -111,19 +112,34 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Video/photo bytes. Never written here — see cacheVideoForOffline in
-  // index.html, which deliberately caches the full file (no Range) only
-  // once a video has actually been watched. Serving THIS request from that
-  // cache works even though it carries a Range header: browsers slice a
-  // stored full 200 response to satisfy a ranged request automatically.
+  // Video/photo bytes. A <video> streams with a Range header — those
+  // responses are deliberately NOT written here; caching every byte-range
+  // chunk separately would balloon storage for no real benefit. A video's
+  // full bytes are only ever proactively cached by cacheVideoForOffline()
+  // in index.html, once it's actually been watched — serving THIS request
+  // from that cache works even though it carries a Range header: browsers
+  // slice a stored full 200 response to satisfy a ranged request
+  // automatically.
+  //
+  // A thumbnail or avatar is different — <img> always requests the whole
+  // file, no Range, so there's no chunking problem, and these are small.
+  // Without caching them too, a profile's video GRID (all thumbnails, no
+  // playback) stayed blank offline even when the grid's own listing
+  // (GET /api/users/:handle, cached above) loaded fine — the list of
+  // videos was there, just nothing to actually show for each one.
   if (url.pathname.startsWith("/api/media/")) {
-    event.respondWith(
-      fetch(req).catch(async () => {
+    const ranged = req.headers.has("Range");
+    event.respondWith((async () => {
+      try {
+        const res = await fetch(req);
+        if (res.ok && !ranged) (await caches.open(THUMB_CACHE)).put(req, res.clone());
+        return res;
+      } catch {
         const cached = await caches.match(req);
         if (cached) return cached;
         throw new Error("offline");
-      })
-    );
+      }
+    })());
   }
 });
 
