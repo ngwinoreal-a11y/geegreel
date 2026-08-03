@@ -292,7 +292,8 @@ function slide(v) {
           </button>`}
         </div>
         ${v.repostOf ? `<p class="tap-sm repost-badge" data-user="${esc(v.user.username)}" style="color:#bbb;font-size:12px;margin:0 0 4px">Reposted by @${esc(v.user.username)}</p>` : ""}
-        <p class="caption">${esc(v.caption || "")}</p>
+        <p class="caption clamped">${esc(v.caption || "")}</p>
+        <button class="caption-toggle tap-sm" style="display:none">more</button>
         ${v.soundId
           ? `<button class="sound is-link" data-sound="${v.soundId}"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${displayUser.username}`)}</span></button>`
           : `<p class="sound"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${displayUser.username}`)}</span></p>`}
@@ -362,6 +363,21 @@ function slide(v) {
     if (soundName && soundName.scrollWidth > soundName.clientWidth) {
       soundName.closest(".sound")?.classList.add("scrolls");
     }
+  });
+
+  // Same idea for a long caption: only show "more" if the 3-line clamp is
+  // actually cutting something off.
+  const captionEl = el.querySelector(".caption");
+  const captionToggle = el.querySelector(".caption-toggle");
+  requestAnimationFrame(() => {
+    if (captionEl && captionEl.scrollHeight > captionEl.clientHeight + 2) {
+      captionToggle.style.display = "";
+    }
+  });
+  captionToggle?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const stillClamped = captionEl.classList.toggle("clamped");
+    captionToggle.textContent = stillClamped ? "more" : "less";
   });
 
   // ---- scrubber: drag-to-seek ----
@@ -1988,56 +2004,86 @@ function uploadPage() {
 function friendsPage() {
   const el = $(`
     <div class="page">
-      <div class="pagehead"><button id="back">${I.back}</button><h2>Add friends</h2></div>
-      <div class="field"><input id="q" placeholder="Search by username" autocapitalize="none"></div>
+      <div class="pagehead"><button id="back">${I.back}</button><h2>Friends</h2></div>
+      <div class="seg" style="margin-bottom:14px">
+        <button class="friend-tab on" data-t="following">Following</button>
+        <button class="friend-tab" data-t="followers">Followers</button>
+        <button class="friend-tab" data-t="friends">Friends</button>
+        <button class="friend-tab" data-t="suggested">Suggested</button>
+      </div>
       <div id="list"><div class="spin"></div></div>
     </div>`);
   el.querySelector("#back").onclick = () => history.back();
   const list = el.querySelector("#list");
+  const me = store.user.username;
 
-  const rowFor = (u, following) => {
+  // subtitle defaults to the @username; dismissible adds an X that only
+  // removes the row from view (Suggested has no real "dismiss" on the
+  // backend to persist against — this is a soft, per-visit hide).
+  const rowFor = (u, { subtitle, dismissible, followLabel = "Follow" } = {}) => {
+    const following = !!u.following;
     const r = $(`
       <div class="row">
-        <div class="av">${avatarInner(u)}</div>
-        <div style="flex:1;min-width:0">
-          <p style="margin:0;font-size:14px;font-weight:600">${esc(u.displayName || u.username)}</p>
-          <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">${esc(u.username)}</p>
+        <div class="tap" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0" data-user="${esc(u.username)}">
+          <div class="av">${avatarInner(u)}</div>
+          <div style="flex:1;min-width:0">
+            <p style="margin:0;font-size:14px;font-weight:600">${esc(u.displayName || u.username)}</p>
+            <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">${esc(subtitle || u.username)}</p>
+          </div>
         </div>
-        <button style="background:${following ? "none" : "#fff"};border:${following ? "1px solid var(--border)" : "none"};color:${following ? "var(--muted)" : "#000"};border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600">
-          ${following ? "Following" : "Follow"}
-        </button>
+        <button class="foll-btn tap-sm ${following ? "done" : ""}">${following ? "Following" : followLabel}</button>
+        ${dismissible ? `<button class="tap-sm dismiss" style="color:var(--muted);padding:4px 0 4px 10px">${I.x}</button>` : ""}
       </div>`);
-    const btn = r.querySelector("button");
-    btn.onclick = async () => {
-      const on = btn.textContent.trim() === "Following";
-      try {
-        await api(`/users/${u.id}/follow`, { method: on ? "DELETE" : "POST" });
-        btn.textContent = on ? "Follow" : "Following";
-        btn.style.background = on ? "#fff" : "none";
-        btn.style.color = on ? "#000" : "var(--muted)";
-        btn.style.border = on ? "none" : "1px solid var(--border)";
-      } catch (e) { toast(e.message); }
+    r.querySelector("[data-user]").onclick = () => { state.viewUser = u.username; state.page = "profile"; render(); };
+    const btn = r.querySelector(".foll-btn");
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const on = btn.classList.contains("done");
+      btn.classList.toggle("done", !on);
+      btn.textContent = on ? followLabel : "Following";
+      try { await api(`/users/${u.id}/follow`, { method: on ? "DELETE" : "POST" }); }
+      catch (err) { btn.classList.toggle("done", on); btn.textContent = on ? "Following" : followLabel; toast(err.message); }
     };
+    r.querySelector(".dismiss")?.addEventListener("click", (e) => { e.stopPropagation(); r.remove(); });
     return r;
   };
 
-  const load = async (q = "") => {
+  const load = async (tab) => {
     list.innerHTML = `<div class="spin"></div>`;
     try {
-      const users = q
-        ? (await api(`/search?q=${encodeURIComponent(q)}`)).accounts
-        : (await api("/friends/suggested")).users;
-      list.innerHTML = "";
-      if (!users.length) { list.appendChild($(`<p class="empty">No accounts found.</p>`)); return; }
-      users.forEach(u => list.appendChild(rowFor(u, false)));
-    } catch (e) { list.innerHTML = `<p class="empty">${e.message}</p>`; }
+      if (tab === "following") {
+        const r = await api(`/users/${encodeURIComponent(me)}/following`);
+        list.innerHTML = "";
+        if (!r.users.length) { list.appendChild($(`<p class="empty">Not following anyone yet.</p>`)); return; }
+        r.users.forEach(u => list.appendChild(rowFor({ ...u, following: true })));
+      } else if (tab === "followers") {
+        const r = await api(`/users/${encodeURIComponent(me)}/followers`);
+        list.innerHTML = "";
+        if (!r.users.length) { list.appendChild($(`<p class="empty">No followers yet.</p>`)); return; }
+        r.users.forEach(u => list.appendChild(rowFor(u, { subtitle: u.following ? undefined : "Follows you", followLabel: "Follow back" })));
+      } else if (tab === "friends") {
+        // No separate "friends" concept on the backend — a mutual is
+        // anyone in my followers who I also follow back.
+        const r = await api(`/users/${encodeURIComponent(me)}/followers`);
+        const mutual = r.users.filter(u => u.following);
+        list.innerHTML = "";
+        if (!mutual.length) { list.appendChild($(`<p class="empty">No mutual friends yet.</p>`)); return; }
+        mutual.forEach(u => list.appendChild(rowFor({ ...u, following: true })));
+      } else {
+        const r = await api("/friends/suggested");
+        list.innerHTML = "";
+        if (!r.users.length) { list.appendChild($(`<p class="empty">No suggestions right now.</p>`)); return; }
+        r.users.forEach(u => list.appendChild(rowFor(u, { subtitle: "Suggested for you", dismissible: true })));
+      }
+    } catch (e) { list.innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
   };
 
-  let t;
-  el.querySelector("#q").addEventListener("input", e => {
-    clearTimeout(t); t = setTimeout(() => load(e.target.value.trim()), 300);
+  el.querySelectorAll(".friend-tab").forEach(b => b.onclick = () => {
+    el.querySelectorAll(".friend-tab").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    load(b.dataset.t);
   });
-  load();
+  load("following");
   return el;
 }
 
@@ -2667,7 +2713,8 @@ function chatPage() {
         </div>
       </div>
       <div id="thread" style="flex:1;overflow-y:auto;padding:14px 16px"><div class="spin"></div></div>
-      <div style="position:sticky;bottom:0;background:var(--bg);padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">
+      <div id="reqBanner" style="display:none;padding:12px 16px;border-top:1px solid var(--border);text-align:center"></div>
+      <div id="composer" style="position:sticky;bottom:0;background:var(--bg);padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">
         <input id="msg" placeholder="Message..." maxlength="1000" style="flex:1;background:var(--surface);
           border:1px solid var(--border);border-radius:20px;padding:11px 16px;color:#fff;
           outline:none;font-size:14px">
@@ -2740,6 +2787,42 @@ function chatPage() {
         : `<p class="empty">No messages yet. Say hello.</p>`;
       thread.scrollTop = thread.scrollHeight;
       pollUnread();
+
+      const banner = el.querySelector("#reqBanner");
+      const composer = el.querySelector("#composer");
+      if (r.requestStatus === "pending" && r.requestedByMe) {
+        // I sent the first message — nothing more to send until they act.
+        composer.style.display = "none";
+        banner.style.display = "block";
+        banner.innerHTML = `
+          <p style="margin:0;font-size:13px;font-weight:600">Message request sent</p>
+          <p style="margin:4px 0 0;font-size:12px;color:var(--muted)">You can send more messages after ${esc(who.username)} replies.</p>`;
+      } else if (r.requestStatus === "pending" && !r.requestedByMe) {
+        // They messaged me first — I decide before this becomes a real chat.
+        composer.style.display = "none";
+        banner.style.display = "block";
+        banner.innerHTML = `
+          <p style="margin:0 0 10px;font-size:13px;color:var(--muted)">${esc(who.username)} wants to message you.</p>
+          <div style="display:flex;gap:8px;justify-content:center">
+            <button id="acceptReq" style="background:#fff;color:#000;border-radius:20px;padding:8px 20px;font-weight:600;font-size:13px">Accept</button>
+            <button id="declineReq" style="color:var(--muted);border:1px solid var(--border);border-radius:20px;padding:8px 20px;font-weight:600;font-size:13px">Decline</button>
+          </div>`;
+        banner.querySelector("#acceptReq").onclick = async () => {
+          try { await api(`/messages/${who.id}/accept`, { method: "POST" }); await load(); }
+          catch (err) { toast(err.message); }
+        };
+        banner.querySelector("#declineReq").onclick = async () => {
+          try { await api(`/messages/${who.id}/decline`, { method: "POST" }); await load(); }
+          catch (err) { toast(err.message); }
+        };
+      } else if (r.requestStatus === "declined") {
+        composer.style.display = "none";
+        banner.style.display = "block";
+        banner.innerHTML = `<p style="margin:0;font-size:12px;color:var(--muted)">You can't reply to this conversation.</p>`;
+      } else {
+        banner.style.display = "none";
+        composer.style.display = "flex";
+      }
     } catch (e) {
       // e.status is only set when a real response came back (see api()) —
       // undefined means the request never reached the network at all and
@@ -2770,6 +2853,26 @@ function chatPage() {
   return el;
 }
 
+// Recent searches live only on this device (localStorage), not the
+// account — there's no backend for this, and it doesn't need one. Most
+// recent first, capped so it can't grow forever.
+const RECENT_SEARCHES_KEY = "recentSearches";
+const RECENT_SEARCHES_CAP = 20;
+const getRecentSearches = () => {
+  try { return JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY)) || []; }
+  catch { return []; }
+};
+const saveRecentSearches = (list) => localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list));
+// entry: { type: "text" | "account", value, user? }
+const addRecentSearch = (entry) => {
+  const list = getRecentSearches().filter(e =>
+    e.type === "account" ? !(entry.type === "account" && e.user.username === entry.user.username)
+                          : !(entry.type === "text" && e.value === entry.value)
+  );
+  list.unshift(entry);
+  saveRecentSearches(list.slice(0, RECENT_SEARCHES_CAP));
+};
+
 function searchPage() {
   const el = $(`
     <div class="page">
@@ -2780,16 +2883,58 @@ function searchPage() {
     </div>`);
   el.querySelector("#back").onclick = () => history.back();
   const res = el.querySelector("#res");
+  const input = el.querySelector("#q");
+
+  const drawRecent = () => {
+    const recent = getRecentSearches();
+    if (!recent.length) { res.innerHTML = ""; return; }
+    res.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:8px 0">
+        <span style="font-size:14px;font-weight:700">Recent searches</span>
+        <span class="tap-sm" id="clearAll" style="font-size:13px;color:var(--muted)">Clear all</span>
+      </div>
+      ${recent.map((e, i) => `
+        <div class="row recent-row" data-i="${i}">
+          <div class="tap" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0" data-open="${i}">
+            ${e.type === "account"
+              ? `<div class="av">${avatarInner(e.user)}</div>`
+              : `<div class="av" style="background:none;display:grid;place-items:center">${I.search}</div>`}
+            <div style="flex:1;min-width:0">
+              <p style="margin:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                ${e.type === "account" ? esc(e.user.displayName || e.user.username) : esc(e.value)}
+              </p>
+              ${e.type === "account" ? `<p style="margin:2px 0 0;font-size:12px;color:var(--muted)">@${esc(e.user.username)}</p>` : ""}
+            </div>
+          </div>
+          <button class="tap-sm remove-recent" data-i="${i}" style="color:var(--muted);padding:4px">${I.x}</button>
+        </div>`).join("")}`;
+
+    res.querySelector("#clearAll").onclick = () => { saveRecentSearches([]); drawRecent(); };
+    res.querySelectorAll(".remove-recent").forEach(btn => btn.onclick = (e) => {
+      e.stopPropagation();
+      const list = getRecentSearches();
+      list.splice(parseInt(btn.dataset.i), 1);
+      saveRecentSearches(list);
+      drawRecent();
+    });
+    res.querySelectorAll("[data-open]").forEach(row => row.onclick = () => {
+      const e = recent[parseInt(row.dataset.open)];
+      if (e.type === "account") { state.viewUser = e.user.username; state.page = "profile"; render(); }
+      else { input.value = e.value; input.dispatchEvent(new Event("input")); }
+    });
+  };
+  drawRecent();
 
   let t;
-  el.querySelector("#q").addEventListener("input", e => {
+  input.addEventListener("input", e => {
     clearTimeout(t);
     const q = e.target.value.trim();
-    if (!q) { res.innerHTML = ""; return; }
+    if (!q) { drawRecent(); return; }
     t = setTimeout(async () => {
       res.innerHTML = `<div class="spin"></div>`;
       try {
         const r = await api(`/search?q=${encodeURIComponent(q)}`);
+        if (r.accounts.length || r.videos.length) addRecentSearch({ type: "text", value: q });
         res.innerHTML = `
           ${r.accounts.length ? `<p style="font-size:13px;font-weight:600;margin:8px 0">Accounts</p>` : ""}
           ${r.accounts.map(u => `
@@ -2805,6 +2950,8 @@ function searchPage() {
           ${!r.accounts.length && !r.videos.length ? `<p class="empty">Nothing found.</p>` : ""}`;
 
         res.querySelectorAll(".acct").forEach(row => row.onclick = () => {
+          const u = r.accounts.find(a => a.username === row.dataset.user);
+          if (u) addRecentSearch({ type: "account", user: { username: u.username, displayName: u.displayName, avatarUrl: u.avatarUrl } });
           state.viewUser = row.dataset.user;
           state.page = "profile";
           render();
@@ -2831,44 +2978,104 @@ function messagesPage() {
   // the other one.
   prefetchInBackground(`/feed?tab=${state.feedTab}&limit=15`);
   api("/messages").then(r => {
+    // A request someone else sent me needs Accept/Decline before it's a
+    // real conversation — kept out of the normal list so it can't be
+    // mistaken for an ongoing chat. A request I sent stays in the normal
+    // list (I already know I sent it) with a small "Requested" tag instead.
+    const requests = r.threads.filter(m => m.requestStatus === "pending" && !m.requestedByMe);
+    const normal = r.threads.filter(m => !(m.requestStatus === "pending" && !m.requestedByMe));
+
+    const threadRow = (m) => `
+      <div class="thread-row row tap" data-u="${esc(m.with.username)}">
+        <div class="tav has-dot">
+          ${m.with.avatarUrl ? `<img src="${m.with.avatarUrl}" alt="">` : esc((m.with.username || "?")[0].toUpperCase())}
+          ${m.with.online ? `<i class="dot"></i>` : ""}
+        </div>
+        <div style="flex:1;min-width:0">
+          <p class="thread-name">${esc(m.with.displayName || m.with.username)}</p>
+          <p class="thread-preview">${m.requestStatus === "pending" && m.requestedByMe ? "Message request sent" : `${m.outgoing ? "You: " : ""}${esc(m.body || "Sent a video")}`}</p>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+          <span class="thread-time">${ago(m.createdAt)}</span>
+          ${m.unreadCount ? `<span class="badge">${m.unreadCount > 9 ? "9+" : m.unreadCount}</span>` : ""}
+        </div>
+      </div>`;
+
     el.innerHTML = `
       <div style="margin-bottom:14px">
         <h2 style="margin:0">Inbox</h2>
       </div>
-      <div id="threads"></div>`;
-
-    const list = el.querySelector("#threads");
-    list.innerHTML = r.threads.length
-      ? r.threads.map(m => `
-          <div class="thread-row row tap" data-u="${esc(m.with.username)}">
-            <div class="tav has-dot">
-              ${m.with.avatarUrl ? `<img src="${m.with.avatarUrl}" alt="">` : esc((m.with.username || "?")[0].toUpperCase())}
-              ${m.with.online ? `<i class="dot"></i>` : ""}
-            </div>
-            <div style="flex:1;min-width:0">
-              <p class="thread-name">${esc(m.with.displayName || m.with.username)}</p>
-              <p class="thread-preview">${m.outgoing ? "You: " : ""}${esc(m.body || "Sent a video")}</p>
-            </div>
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
-              <span class="thread-time">${ago(m.createdAt)}</span>
-              ${m.unreadCount ? `<span class="badge">${m.unreadCount > 9 ? "9+" : m.unreadCount}</span>` : ""}
-            </div>
-          </div>`).join("")
-      : `<div class="empty" style="color:#8A8A8E"><div class="empty-icon" style="background:#F6F6F7;border-color:#EDEDED">${I.mail}</div>No messages yet.<p class="empty-sub" style="color:#8A8A8E">Tap + to find friends.</p></div>`;
+      ${requests.length ? `
+        <div class="row tap" id="reqRow" style="color:#111">
+          <div class="tav" style="background:#FEE2E2;color:#DC2626;display:grid;place-items:center">${I.mail}</div>
+          <div style="flex:1;min-width:0">
+            <p class="thread-name">Message requests</p>
+            <p class="thread-preview">${requests.length} waiting for your response</p>
+          </div>
+        </div>` : ""}
+      <div id="threads">${normal.length ? normal.map(threadRow).join("")
+        : `<div class="empty" style="color:#8A8A8E"><div class="empty-icon" style="background:#F6F6F7;border-color:#EDEDED">${I.mail}</div>No messages yet.<p class="empty-sub" style="color:#8A8A8E">Tap + to find friends.</p></div>`}</div>`;
 
     // The thread list carries usernames; the chat screen needs the id, so
     // resolve it on tap rather than widening the messages payload.
-    el.querySelectorAll(".thread-row").forEach(row => row.onclick = async () => {
+    const openChat = async (username) => {
       try {
-        const p = await api(`/users/${encodeURIComponent(row.dataset.u)}`);
+        const p = await api(`/users/${encodeURIComponent(username)}`);
         state.chatWith = p.user;
         state.page = "chat";
         render();
       } catch (e) { toast(e.message); }
-    });
+    };
+    el.querySelectorAll(".thread-row").forEach(row => row.onclick = () => openChat(row.dataset.u));
+    el.querySelector("#reqRow")?.addEventListener("click", () => { state.page = "message-requests"; render(); });
   }).catch(e => {
     el.innerHTML = `<p class="empty">${esc(e.status === undefined ? "You're offline — showing nothing saved yet for your inbox." : e.message)}</p>`;
   });
+  return el;
+}
+
+function messageRequestsPage() {
+  const el = $(`<div class="page"><div class="pagehead"><button id="back">${I.back}</button><h2>Message requests</h2></div><div id="reqBody"><div class="spin"></div></div></div>`);
+  el.querySelector("#back").onclick = () => history.back();
+
+  api("/messages").then(r => {
+    const requests = r.threads.filter(m => m.requestStatus === "pending" && !m.requestedByMe);
+    const body = el.querySelector("#reqBody");
+    body.innerHTML = requests.length ? requests.map(m => `
+      <div class="row" data-u="${esc(m.with.username)}">
+        <div class="tap" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0" data-open>
+          <div class="av">${m.with.avatarUrl ? `<img src="${m.with.avatarUrl}" alt="">` : esc((m.with.username || "?")[0].toUpperCase())}</div>
+          <div style="flex:1;min-width:0">
+            <p style="margin:0;font-size:14px;font-weight:600">${esc(m.with.displayName || m.with.username)}</p>
+            <p style="margin:2px 0 0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.body || "Sent a video")}</p>
+          </div>
+        </div>
+        <button class="tap-sm accept-req" style="background:#fff;color:#000;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;margin-right:6px">Accept</button>
+        <button class="tap-sm decline-req" style="color:var(--muted);font-size:12px;font-weight:600">Decline</button>
+      </div>`).join("") : `<p class="empty">No pending requests.</p>`;
+
+    body.querySelectorAll("[data-open]").forEach(el2 => el2.addEventListener("click", async () => {
+      const username = el2.closest(".row").dataset.u;
+      const p = await api(`/users/${encodeURIComponent(username)}`).catch(() => null);
+      if (!p) return;
+      state.chatWith = p.user;
+      state.page = "chat";
+      render();
+    }));
+    body.querySelectorAll(".accept-req, .decline-req").forEach(btn => btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const row = btn.closest(".row");
+      const username = row.dataset.u;
+      const action = btn.classList.contains("accept-req") ? "accept" : "decline";
+      try {
+        const p = await api(`/users/${encodeURIComponent(username)}`);
+        await api(`/messages/${p.user.id}/${action}`, { method: "POST" });
+        row.remove();
+        toast(action === "accept" ? "Request accepted" : "Request declined");
+      } catch (err) { toast(err.message); }
+    }));
+  }).catch(e => { el.querySelector("#reqBody").innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+
   return el;
 }
 
@@ -3799,6 +4006,7 @@ function renderInner() {
   if (state.page === "admin") { app.appendChild(adminPage()); return; }
   if (state.page === "userfeed") { app.appendChild(userFeedPage()); return; }
   if (state.page === "chat") { app.appendChild(chatPage()); return; }
+  if (state.page === "message-requests") { app.appendChild(messageRequestsPage()); return; }
   if (state.page === "follow-list") { app.appendChild(followListPage()); return; }
   if (state.page === "wallet") { app.appendChild(walletPage()); return; }
   if (state.page === "wallet-history") { app.appendChild(walletHistoryPage()); return; }

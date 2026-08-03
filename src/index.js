@@ -53,6 +53,21 @@ async function resolveContentId(env, videoId) {
   return row?.repost_of || videoId;
 }
 
+// Message requests: the first message between two people who've never
+// talked creates a pending conversation_status row. The sender can't send
+// a second message until either the recipient replies (which accepts it
+// implicitly) or explicitly accepts/declines from the inbox. pairKey()
+// keeps the two people's ids in a fixed order so both directions of a
+// conversation land on the same row.
+const pairKey = (a, b) => a < b ? [a, b] : [b, a];
+
+async function getConversationStatus(env, userA, userB) {
+  const [a, b] = pairKey(userA, userB);
+  return env.DB.prepare(
+    "SELECT * FROM conversation_status WHERE user_a = ? AND user_b = ?"
+  ).bind(a, b).first();
+}
+
 // ---------- sessions ----------
 
 const SESSION_TTL = 1000 * 60 * 60 * 24 * 30; // 30 days
@@ -1900,6 +1915,7 @@ async function handle(request, env, ctx) {
       )
       SELECT m.id, m.sender_id, m.recipient_id, m.body, m.created_at,
              u.username, u.display_name, u.avatar_key, u.last_active_at,
+             cs.status AS req_status, cs.requested_by AS req_by,
              (SELECT COUNT(*) FROM messages um
                WHERE um.recipient_id = ? AND um.read = 0
                  AND um.sender_id = CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END
@@ -1908,6 +1924,7 @@ async function handle(request, env, ctx) {
       JOIN messages m ON ((m.sender_id = c.a AND m.recipient_id = c.b) OR (m.sender_id = c.b AND m.recipient_id = c.a))
                       AND m.created_at = c.last_at
       JOIN users u ON u.id = CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END
+      LEFT JOIN conversation_status cs ON cs.user_a = c.a AND cs.user_b = c.b
       ORDER BY m.created_at DESC LIMIT 50
     `).bind(user.id, user.id, user.id, user.id, user.id).all();
 
@@ -1924,6 +1941,10 @@ async function handle(request, env, ctx) {
           online: !!(m.last_active_at && now() - m.last_active_at < 120000),
         },
         outgoing: m.sender_id === user.id,
+        // "pending" + I'm the one who sent the request → waiting on them.
+        // "pending" + they sent it → it's a request I need to accept/decline.
+        requestStatus: m.req_status || "accepted", // no row = predates this feature, grandfathered in
+        requestedByMe: m.req_by === user.id,
       })),
     });
   }
@@ -1966,6 +1987,8 @@ async function handle(request, env, ctx) {
       ORDER BY created_at ASC LIMIT 200
     `).bind(user.id, them.id, them.id, user.id).all();
 
+    const convo = await getConversationStatus(env, user.id, them.id);
+
     return json({
       with: {
         id: them.id,
@@ -1974,6 +1997,8 @@ async function handle(request, env, ctx) {
         avatarUrl: them.avatar_key ? `/api/media/${them.avatar_key}` : null,
         online: !!(them.last_active_at && now() - them.last_active_at < 120000),
       },
+      requestStatus: convo?.status || "accepted",
+      requestedByMe: convo ? convo.requested_by === user.id : false,
       messages: results.map(m => ({
         id: m.id,
         body: m.body,
@@ -2010,6 +2035,29 @@ async function handle(request, env, ctx) {
       if (!follows) return err("Only people they follow can message them", 403);
     }
 
+    if (them.id !== user.id) {
+      const convo = await getConversationStatus(env, user.id, them.id);
+      if (!convo) {
+        // First message ever between these two — starts the conversation as
+        // a pending request.
+        const [a, b] = pairKey(user.id, them.id);
+        await env.DB.prepare(
+          "INSERT INTO conversation_status (user_a, user_b, requested_by, status, created_at) VALUES (?, ?, ?, 'pending', ?)"
+        ).bind(a, b, user.id, now()).run();
+      } else if (convo.status === "pending") {
+        if (convo.requested_by === user.id) {
+          return err("You've already sent a message request — you can send more once they reply", 409);
+        }
+        // The recipient of the original request is replying — that's an
+        // implicit accept, same as tapping Accept in the inbox would do.
+        await env.DB.prepare(
+          "UPDATE conversation_status SET status = 'accepted' WHERE user_a = ? AND user_b = ?"
+        ).bind(...pairKey(user.id, them.id)).run();
+      } else if (convo.status === "declined") {
+        return err("This person isn't accepting messages from you", 403);
+      }
+    }
+
     const id = uid();
     await env.DB.prepare(`
       INSERT INTO messages (id, sender_id, recipient_id, body, video_id, created_at)
@@ -2017,6 +2065,23 @@ async function handle(request, env, ctx) {
     `).bind(id, user.id, them.id, body?.trim() || null, videoId || null, now()).run();
 
     return json({ ok: true, id }, 201);
+  }
+
+  // Accept or decline a pending message request. Only the person who
+  // DIDN'T send the first message can act on it.
+  const requestActionMatch = /^\/api\/messages\/([\w-]+)\/(accept|decline)$/.exec(path);
+  if (requestActionMatch && method === "POST") {
+    requireUser(user);
+    const [, otherId, action] = requestActionMatch;
+    const convo = await getConversationStatus(env, user.id, otherId);
+    if (!convo || convo.status !== "pending") return err("No pending request from this person", 404);
+    if (convo.requested_by === user.id) return err("You sent this request — nothing to accept", 400);
+
+    await env.DB.prepare(
+      "UPDATE conversation_status SET status = ? WHERE user_a = ? AND user_b = ?"
+    ).bind(action === "accept" ? "accepted" : "declined", ...pairKey(user.id, otherId)).run();
+
+    return json({ status: action === "accept" ? "accepted" : "declined" });
   }
 
   // ----- wallet, coins, gifts -----

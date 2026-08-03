@@ -219,6 +219,16 @@ button:active { transform: scale(.9); opacity: .85; }
   text-shadow: 0 1px 8px rgba(0,0,0,.7);
 }
 .caption { font-size: 14px; line-height: 1.4; margin: 0; }
+.caption.clamped {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.caption-toggle {
+  display: block; margin: 2px 0 0; padding: 0;
+  background: none; border: none;
+  color: rgba(255,255,255,.7); font-size: 13px; font-weight: 600;
+  text-shadow: 0 1px 8px rgba(0,0,0,.7);
+}
 
 /* Right-hand action rail: like, comment, repost, share, gift, more, sound. */
 .rail {
