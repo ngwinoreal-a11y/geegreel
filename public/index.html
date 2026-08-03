@@ -193,6 +193,19 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// Warms sw.js's API_CACHE for a screen the person isn't on yet, so
+// switching to it later reads from cache instantly instead of waiting on
+// the network — see loadFeed() and messagesPage(), which each prefetch the
+// other. Deliberately delayed and silent: it's a nice-to-have, not
+// something that should compete with whatever the current screen is
+// actually waiting on, or surface an error if it fails.
+function prefetchInBackground(path) {
+  if (!store.token) return;
+  setTimeout(() => {
+    fetch(`/api${path}`, { headers: { Authorization: `Bearer ${store.token}` } }).catch(() => {});
+  }, 2000);
+}
+
 const fmt = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n ?? 0);
 
 // Photo if the user has one, first initial if not. Used by every avatar circle.
@@ -233,24 +246,30 @@ let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: nu
 
 // ---------- feed ----------
 function slide(v) {
-  const mine = v.user.id === store.user?.id;
+  // A repost's content — everyone's engagement, the sound credit, the
+  // profile a tap should land on — belongs to whoever actually made it,
+  // not whoever reposted it. v.user stays available as a small "Reposted
+  // by" line below; displayUser is what gets the main avatar/name/Follow
+  // treatment.
+  const displayUser = v.repostOf || v.user;
+  const mine = displayUser.id === store.user?.id;
   const el = $(`
     <div class="slide cover" data-id="${v.id}">
       <video src="${v.videoUrl}" data-src="${v.videoUrl}" loop playsinline
              preload="none" ${v.thumbUrl ? `poster="${v.thumbUrl}"` : ""}></video>
       <div class="overlay">
         <div class="author">
-          <button class="aav" data-user="${esc(v.user.username)}">${avatarInner(v.user)}</button>
-          <span class="aname tap-sm" data-user="${esc(v.user.username)}">${esc(v.user.username)}</span>
-          ${mine ? "" : `<button class="follow-btn ${v.following ? "done" : ""}" data-uid="${v.user.id}">
+          <button class="aav" data-user="${esc(displayUser.username)}">${avatarInner(displayUser)}</button>
+          <span class="aname tap-sm" data-user="${esc(displayUser.username)}">${esc(displayUser.username)}</span>
+          ${mine ? "" : `<button class="follow-btn ${v.following ? "done" : ""}" data-uid="${displayUser.id}">
             ${v.following ? "Following" : "Follow"}
           </button>`}
         </div>
-        ${v.repostOf ? `<p style="color:#bbb;font-size:12px;margin:0 0 4px">reposted @${esc(v.repostOf.username)}</p>` : ""}
+        ${v.repostOf ? `<p class="tap-sm repost-badge" data-user="${esc(v.user.username)}" style="color:#bbb;font-size:12px;margin:0 0 4px">Reposted by @${esc(v.user.username)}</p>` : ""}
         <p class="caption">${esc(v.caption || "")}</p>
         ${v.soundId
-          ? `<button class="sound is-link" data-sound="${v.soundId}"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${v.user.username}`)}</span></button>`
-          : `<p class="sound"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${v.user.username}`)}</span></p>`}
+          ? `<button class="sound is-link" data-sound="${v.soundId}"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${displayUser.username}`)}</span></button>`
+          : `<p class="sound"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${displayUser.username}`)}</span></p>`}
       </div>
       <div class="rail">
         <button class="like ${v.liked ? "liked" : ""}">${I.heart}<span class="n">${fmt(v.counts.likes)}</span></button>
@@ -278,8 +297,10 @@ function slide(v) {
       b.textContent = on ? "Following" : "Follow";
     });
     // Both lists can be on screen across a session, so keep them both honest.
+    // Matches on the displayed identity — the original creator for a
+    // repost, same as the Follow button itself targets.
     [...state.videos, ...state.userVideos].forEach(x => {
-      if (x.user.id === uid) x.following = on;
+      if ((x.repostOf?.id || x.user.id) === uid) x.following = on;
     });
   };
 
@@ -479,7 +500,7 @@ function slide(v) {
   });
 
   // Avatar and name both lead to the same place — whichever the thumb lands on.
-  el.querySelectorAll(".aav[data-user], .aname[data-user]").forEach(t => {
+  el.querySelectorAll(".aav[data-user], .aname[data-user], .repost-badge[data-user]").forEach(t => {
     t.addEventListener("click", (e) => {
       e.stopPropagation();
       state.viewUser = t.dataset.user;
@@ -989,6 +1010,9 @@ async function loadFeed(reset = true) {
 
   try {
     const r = await api(`/feed?${qs}`);
+    // Warm the Messages tab in the background so switching to it later is
+    // instant — only on the initial page, not every "load more" scroll.
+    if (reset) prefetchInBackground("/messages");
 
     // Something's already on screen from the cache — just bring state up to
     // date for pagination/tab-switching; don't yank the feed out from under
@@ -1100,7 +1124,16 @@ function observePlayback() {
           // within one settle — re-scanning every slide's warm state three
           // times for no change is exactly the kind of per-scroll work that
           // adds up into a laggy feed as the list grows.
-          if (idx !== lastWarmIndex) { lastWarmIndex = idx; warmNeighbours(idx, slides); }
+          if (idx !== lastWarmIndex) {
+            lastWarmIndex = idx; warmNeighbours(idx, slides);
+            // A snap that only relies on scroll-snap's own easing reads as
+            // soft — this quick, springy scale (same overshoot curve as a
+            // button press) is what makes landing on a slide feel like it
+            // arrived with force instead of just drifting to a stop.
+            en.target.classList.remove("landed");
+            void en.target.offsetWidth; // restart the animation if it's already mid-play
+            en.target.classList.add("landed");
+          }
         }
 
         // Count a view/impression once, and only after it's genuinely been
@@ -2745,6 +2778,10 @@ const skRow = () => `
 
 function messagesPage() {
   const el = $(`<div class="page msgs-page" style="padding-top:62px">${skRow().repeat(6)}</div>`);
+  // Warm the feed tab in the background, same idea as loadFeed() warming
+  // Messages — whichever screen someone's actually on gets prefetched by
+  // the other one.
+  prefetchInBackground(`/feed?tab=${state.feedTab}&limit=15`);
   api("/messages").then(r => {
     el.innerHTML = `
       <div style="margin-bottom:14px">

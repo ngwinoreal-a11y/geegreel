@@ -1,22 +1,46 @@
-// Push notifications, plus best-effort offline reads for two things: chat
-// threads and videos someone has actually watched. This is NOT a full
-// offline-first app — posting, liking, uploading etc. all still require a
-// connection. The goal is narrower: open the app with no signal and still
-// see the messages and videos you already loaded, instead of a blank/error
-// screen.
+// Push notifications, plus best-effort offline reads for: the app shell
+// itself, chat threads, the feed listing, and videos someone has actually
+// watched. This is NOT a full offline-first app — posting, liking,
+// uploading etc. all still require a connection. The goal is narrower:
+// open the app with no signal and still see the app plus the messages and
+// videos you already loaded, instead of a blank tab or a browser error.
 
 // Cache Storage is shared per-origin, not per-context — index.html's
-// loadFeed() opens this same cache by this same literal name to render the
-// first feed page instantly on app open (stale-while-revalidate) instead of
+// loadFeed() opens API_CACHE by this same literal name to render the first
+// feed page instantly on app open (stale-while-revalidate) instead of
 // waiting on the network. If this name changes, update it there too.
 const API_CACHE = "geereel-api-v1";
 const VIDEO_CACHE = "geereel-offline-videos-v1";
+const SHELL_CACHE = "geereel-shell-v1";
+
+// Without the app shell itself cached, "offline support" only ever worked
+// for someone who was already inside the app when the connection dropped —
+// closing the tab and reopening with no signal had nothing to load at all,
+// browser-error-page territory. These rarely change, so precache them on
+// install rather than waiting for a request to happen to hit them first.
+const SHELL_FILES = [
+  "/", "/index.html",
+  "/design.css", "/design-2.css", "/design-3.css", "/design-4.css", "/design-5.css",
+];
+
+self.addEventListener("install", (event) => {
+  // Take over immediately on the NEXT activate rather than waiting for
+  // every open tab to close — without this, a freshly deployed sw.js can
+  // sit "waiting" for a long time and whoever's testing right after a
+  // deploy is still running whatever service worker (or none) was
+  // registered before it, silently testing the wrong version.
+  self.skipWaiting();
+  event.waitUntil(
+    caches.open(SHELL_CACHE).then(cache => cache.addAll(SHELL_FILES)).catch(() => {})
+  );
+});
 
 self.addEventListener("activate", (event) => {
-  // Drop any cache from a previous version name so a future redesign of
-  // this file doesn't leave orphaned entries behind forever.
   event.waitUntil((async () => {
-    const keep = new Set([API_CACHE, VIDEO_CACHE]);
+    await self.clients.claim();
+    // Drop any cache from a previous version name so a future redesign of
+    // this file doesn't leave orphaned entries behind forever.
+    const keep = new Set([API_CACHE, VIDEO_CACHE, SHELL_CACHE]);
     const names = await caches.keys();
     await Promise.all(names.filter(n => n.startsWith("geereel-") && !keep.has(n)).map(n => caches.delete(n)));
   })());
@@ -27,6 +51,41 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return; // writes always need a real connection
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+
+  // Navigating to the app (opening it fresh, or reopening after it was
+  // fully closed) with no signal — serve the last cached index.html rather
+  // than letting the browser show its own offline error page.
+  if (req.mode === "navigate") {
+    event.respondWith((async () => {
+      try {
+        const res = await fetch(req);
+        if (res.ok) (await caches.open(SHELL_CACHE)).put("/index.html", res.clone());
+        return res;
+      } catch {
+        const cached = await caches.match("/index.html");
+        if (cached) return cached;
+        throw new Error("offline");
+      }
+    })());
+    return;
+  }
+
+  // The design*.css files: same network-first-with-cache-fallback pattern
+  // as the app shell above, kept fresh but still available offline.
+  if (/^\/design(-[2-5])?\.css$/.test(url.pathname)) {
+    event.respondWith((async () => {
+      try {
+        const res = await fetch(req);
+        if (res.ok) (await caches.open(SHELL_CACHE)).put(req, res.clone());
+        return res;
+      } catch {
+        const cached = await caches.match(req);
+        if (cached) return cached;
+        throw new Error("offline");
+      }
+    })());
+    return;
+  }
 
   // Chat threads, the conversation list, and the feed listing: try the
   // network so the data stays current, but keep a copy so the same request

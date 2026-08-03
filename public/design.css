@@ -195,6 +195,17 @@ button:active { transform: scale(.9); opacity: .85; }
   contain: layout paint;
 }
 
+/* Landing on a slide gets a quick, springy punch — same overshoot curve as
+   --press — so the swipe reads as forceful and decisive rather than a soft
+   drift to a stop. Triggered in observePlayback() the instant a slide
+   becomes the active one. */
+@keyframes slideImpact {
+  0%   { transform: scale(.97); }
+  55%  { transform: scale(1.008); }
+  100% { transform: scale(1); }
+}
+.slide.landed { animation: slideImpact .24s cubic-bezier(.34,1.56,.64,1); }
+
 /* Video keeps its own aspect ratio: 9:16 fills edge to edge, other ratios
    letterbox against black. */
 .slide video {

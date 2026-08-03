@@ -431,15 +431,18 @@ const FEED_SQL = `
     v.id, v.caption, v.song, v.r2_key, v.thumb_key, v.width, v.height,
     v.duration, v.views, v.created_at, v.repost_of, v.sound_id,
     u.id AS user_id, u.username, u.display_name, u.avatar_key,
-    ru.username AS repost_of_username,
+    ru.id AS repost_of_user_id, ru.username AS repost_of_username,
+    ru.display_name AS repost_of_display_name, ru.avatar_key AS repost_of_avatar_key,
     (SELECT COUNT(*) FROM likes    l WHERE l.video_id = COALESCE(v.repost_of, v.id)) AS like_count,
     (SELECT COUNT(*) FROM comments c WHERE c.video_id = COALESCE(v.repost_of, v.id)) AS comment_count,
     (SELECT COUNT(*) FROM shares   s WHERE s.video_id = COALESCE(v.repost_of, v.id) AND s.completed = 1) AS share_count,
     (SELECT COUNT(*) FROM videos   r WHERE r.repost_of = COALESCE(v.repost_of, v.id)) AS repost_count,
     (SELECT COALESCE(SUM(g.coins), 0) FROM gifts g WHERE g.video_id = COALESCE(v.repost_of, v.id)) AS gift_coins,
     EXISTS(SELECT 1 FROM likes l WHERE l.video_id = COALESCE(v.repost_of, v.id) AND l.user_id = ?) AS liked,
+    -- A repost's "author" for follow purposes is the original creator, not
+    -- whoever reposted it — see shapeVideo's displayUser.
     EXISTS(SELECT 1 FROM follows f
-            WHERE f.follower_id = ? AND f.followee_id = v.user_id
+            WHERE f.follower_id = ? AND f.followee_id = COALESCE(ru.id, u.id)
               AND f.status = 'accepted')                        AS following
   FROM videos v
   JOIN users u ON u.id = v.user_id
@@ -464,13 +467,22 @@ const shapeVideo = r => ({
   duration: r.duration,
   views: r.views,
   createdAt: r.created_at,
+  // The person who made this row exist — for a repost, that's whoever
+  // reposted it, not the creator. The frontend shows this as a small
+  // "Reposted by" line; the creator (repostOf below, when present) is what
+  // gets the main avatar/name/profile-link treatment instead.
   user: {
     id: r.user_id,
     username: r.username,
     displayName: r.display_name,
     avatarUrl: r.avatar_key ? `/api/media/${r.avatar_key}` : null,
   },
-  repostOf: r.repost_of ? { id: r.repost_of, username: r.repost_of_username } : null,
+  repostOf: r.repost_of ? {
+    id: r.repost_of,
+    username: r.repost_of_username,
+    displayName: r.repost_of_display_name,
+    avatarUrl: r.repost_of_avatar_key ? `/api/media/${r.repost_of_avatar_key}` : null,
+  } : null,
   counts: {
     likes: r.like_count,
     comments: r.comment_count,
