@@ -142,6 +142,8 @@ const I = {
   home: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>`,
   bell: `<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
   user: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>`,
+  more: `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`,
+  send: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2 21 22 12 2 3l0 7 13 2-13 2z"/></svg>`,
 };
 
 // "8h", "5d" — matches how TikTok stamps comments
@@ -2275,7 +2277,7 @@ function settingsPage() {
 
       <p class="lbl">Bio</p>
       <textarea id="bio" rows="2" maxlength="160" placeholder="Tell people about yourself"
-        style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;color:#fff;font-size:14px;resize:none;outline:none">${u.bio || ""}</textarea>
+        style="width:100%;background:var(--surface);border-radius:10px;padding:12px;color:#fff;font-size:14px;resize:none;outline:none">${u.bio || ""}</textarea>
 
       <p class="lbl" style="margin-top:12px">Email</p>
       <div class="field"><input id="email" value="${u.email}" autocapitalize="none"></div>
@@ -2850,19 +2852,25 @@ function followListPage() {
   return el;
 }
 
+// Good enough for chat text — doesn't need to be a full RFC3986 parser.
+const CHAT_URL_RE = /\bhttps?:\/\/[^\s<]+[^\s<.,:;"')\]]/i;
+const linkPreviewCache = new Map(); // url -> preview data | null, for this page load
+
 function chatPage() {
   const who = state.chatWith;
   if (!who) { state.page = null; render(); return $(`<div></div>`); }
+  let chatAudioEl = null; // one <audio>, reused across every voice note tap
 
   const el = $(`
     <div class="page" style="padding:0;display:flex;flex-direction:column">
       <div style="position:sticky;top:0;z-index:2;background:var(--bg);display:flex;align-items:center;gap:10px;padding:16px 16px 12px;border-bottom:1px solid var(--border)">
         <button id="back">${I.back}</button>
         <div class="av has-dot" id="chatAv" style="width:34px;height:34px">${avatarInner(who)}</div>
-        <div style="flex:1;min-width:0">
+        <div style="flex:1;min-width:0" class="tap" id="chatHeaderInfo">
           <p style="margin:0;font-size:14px;font-weight:600">${esc(who.displayName || who.username)}</p>
           <span class="last-seen" id="chatStatus">${esc(who.username)}</span>
         </div>
+        <button id="chatMenu">${I.more || "⋮"}</button>
       </div>
       <div id="thread" style="flex:1;overflow-y:auto;padding:14px 16px"><div class="spin"></div></div>
       <div id="reqBanner" style="display:none;padding:12px 16px;border-top:1px solid var(--border);text-align:center"></div>
@@ -2870,8 +2878,21 @@ function chatPage() {
         <input id="msg" placeholder="Message..." maxlength="1000" style="flex:1;background:var(--surface);
           border:1px solid var(--border);border-radius:20px;padding:11px 16px;color:#fff;
           outline:none;font-size:14px">
-        <button id="send" style="background:#fff;color:#000;border-radius:20px;padding:0 16px;
-          height:38px;font-weight:600;font-size:13px">Send</button>
+        <input type="file" id="imgFile" accept="image/*" hidden>
+        <button id="attachBtn" title="Send a photo" style="width:38px;height:38px;border-radius:50%;background:var(--surface);color:#fff;display:grid;place-items:center;flex-shrink:0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <button id="micBtn" title="Record a voice note" style="width:38px;height:38px;border-radius:50%;background:var(--surface);color:#fff;display:grid;place-items:center;flex-shrink:0">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
+        </button>
+        <button id="send" style="display:none;background:#fff;color:#000;border-radius:20px;padding:0 16px;
+          height:38px;font-weight:600;font-size:13px;flex-shrink:0">Send</button>
+      </div>
+      <div id="voiceBar" style="display:none;position:sticky;bottom:0;background:var(--bg);padding:10px 12px;border-top:1px solid var(--border);align-items:center;gap:10px">
+        <button id="cancelVoice" style="color:var(--muted)">${I.x}</button>
+        <span style="width:8px;height:8px;border-radius:50%;background:#FF3B30;animation:pulse 1s ease infinite"></span>
+        <span id="voiceTimer" style="font-family:var(--mono);font-size:14px;flex:1">0:00</span>
+        <button id="sendVoice" style="background:#fff;color:#000;border-radius:50%;width:38px;height:38px;display:grid;place-items:center">${I.send || "➤"}</button>
       </div>
     </div>
   `);
@@ -2899,6 +2920,10 @@ function chatPage() {
     history.back();
   };
 
+  // Leaving any other way (nav-bar tap, back gesture) skips the #back
+  // handler above — stop playback/recording regardless of how we leave.
+  el.addEventListener("screen-exit", () => chatAudioEl?.pause());
+
   // Read receipt: a single check once it's sent, a second (blue) once the
   // other person has actually opened the thread — the same escalation
   // WhatsApp uses, so it reads as familiar rather than invented.
@@ -2906,10 +2931,15 @@ function chatPage() {
     ? `<span class="ticks ${m.read ? "read" : ""}">${m.read ? "✓✓" : "✓"}</span>`
     : "";
 
-  const load = async () => {
-    try {
-      const r = await api(`/messages/${who.id}`);
+  // Read by the 3-dot menu (Block/Unblock label) and set by renderThread()
+  // every time the thread reloads.
+  let isBlocked = false;
 
+  // Split out of load() so a cached copy (see load() below) and a fresh
+  // fetch both go through the exact same rendering — no separate "instant"
+  // vs "real" code path to keep in sync.
+  const renderThread = (r) => {
+      isBlocked = !!r.blocked;
       const statusEl = el.querySelector("#chatStatus");
       if (statusEl) {
         statusEl.className = r.with.online ? "online-tag" : "last-seen";
@@ -2927,12 +2957,29 @@ function chatPage() {
         const day = new Date(m.createdAt).toDateString();
         const sep = day !== lastDay ? `<div class="day-sep"><span>${dayLabel(m.createdAt)}</span></div>` : "";
         lastDay = day;
+        const linkUrl = m.body && CHAT_URL_RE.exec(m.body)?.[0];
+
+        let inner;
+        if (m.imageUrl) {
+          inner = `<img src="${m.imageUrl}" style="display:block;max-width:220px;max-height:280px;border-radius:14px;object-fit:cover" alt="">`;
+        } else if (m.audioUrl) {
+          const mins = Math.floor((m.audioDuration || 0) / 60), secs = Math.round((m.audioDuration || 0) % 60);
+          inner = `
+            <div class="voice-msg tap" data-audio="${esc(m.audioUrl)}" style="display:flex;align-items:center;gap:10px;min-width:150px">
+              <button class="voice-play" style="width:32px;height:32px;border-radius:50%;background:${m.outgoing ? "#000" : "#fff"};color:${m.outgoing ? "#fff" : "#000"};display:grid;place-items:center;flex-shrink:0;padding:0">${I.play}</button>
+              <div style="flex:1;height:2px;background:${m.outgoing ? "rgba(0,0,0,.25)" : "rgba(255,255,255,.25)"};border-radius:2px"></div>
+              <span style="font-size:11px;opacity:.7;font-family:var(--mono)">${mins}:${String(secs).padStart(2, "0")}</span>
+            </div>`;
+        } else {
+          inner = `<span style="font-size:14px;line-height:1.35;word-break:break-word">${esc(m.body || "")}</span>`
+            + (linkUrl ? `<div class="link-preview" data-url="${esc(linkUrl)}" style="margin-top:8px;min-width:180px"></div>` : "");
+        }
+
         return `${sep}
         <div style="display:flex;justify-content:${m.outgoing ? "flex-end" : "flex-start"};margin-bottom:8px">
-          <div style="max-width:78%;min-width:0;background:${m.outgoing ? "#fff" : "var(--surface)"};
-                      color:${m.outgoing ? "#000" : "#fff"};border-radius:18px;padding:8px 14px">
-            <span style="font-size:14px;line-height:1.35;word-break:break-word">${esc(m.body || "")}</span>
-            <span style="font-size:10px;opacity:.5;margin-left:8px;white-space:nowrap">${ago(m.createdAt)}${checks(m)}</span>
+          <div style="max-width:78%;min-width:0;${m.imageUrl ? "" : `background:${m.outgoing ? "#fff" : "var(--surface)"};color:${m.outgoing ? "#000" : "#fff"};border-radius:18px;padding:8px 14px`}">
+            ${inner}
+            <span style="font-size:10px;opacity:.5;margin-left:8px;white-space:nowrap;${m.imageUrl ? `color:${m.outgoing ? "#000" : "#fff"}` : ""}">${ago(m.createdAt)}${checks(m)}</span>
           </div>
         </div>`;
       }).join("")
@@ -2940,9 +2987,55 @@ function chatPage() {
       thread.scrollTop = thread.scrollHeight;
       pollUnread();
 
+      // One <audio> reused across taps, so starting a new note stops
+      // whatever was already playing rather than layering sound on sound.
+      thread.querySelectorAll(".voice-play").forEach(btn => {
+        btn.onclick = () => {
+          const src = btn.closest(".voice-msg").dataset.audio;
+          if (chatAudioEl && !chatAudioEl.paused && chatAudioEl.src.endsWith(src)) { chatAudioEl.pause(); return; }
+          if (!chatAudioEl) chatAudioEl = new Audio();
+          chatAudioEl.src = src;
+          chatAudioEl.play().catch(() => {});
+        };
+      });
+
+      // Link previews render after the fast text pass — fetched once per
+      // URL for the life of this screen (linkPreviewCache), so switching
+      // away and back to a thread doesn't refetch the same links.
+      thread.querySelectorAll(".link-preview").forEach(async (box) => {
+        const linkUrl = box.dataset.url;
+        let data = linkPreviewCache.get(linkUrl);
+        if (data === undefined) {
+          try { data = await api(`/link-preview?url=${encodeURIComponent(linkUrl)}`); }
+          catch { data = null; }
+          linkPreviewCache.set(linkUrl, data);
+        }
+        if (!data || !box.isConnected) return;
+        box.innerHTML = `
+          <a href="${esc(data.url)}" target="_blank" rel="noopener" style="display:block;border-radius:10px;overflow:hidden;background:rgba(0,0,0,.06);text-decoration:none;color:inherit">
+            ${data.image ? `<img src="${esc(data.image)}" style="width:100%;height:110px;object-fit:cover;display:block" alt="">` : ""}
+            <div style="padding:8px 10px">
+              <p style="margin:0;font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(data.title)}</p>
+              ${data.siteName ? `<p style="margin:2px 0 0;font-size:11px;opacity:.6">${esc(data.siteName)}</p>` : ""}
+            </div>
+          </a>`;
+      });
+
       const banner = el.querySelector("#reqBanner");
       const composer = el.querySelector("#composer");
-      if (r.requestStatus === "pending" && r.requestedByMe) {
+      if (r.blockedByThem) {
+        composer.style.display = "none";
+        banner.style.display = "block";
+        banner.innerHTML = `<p style="margin:0;font-size:12px;color:var(--muted)">You can't message this person.</p>`;
+      } else if (r.blocked) {
+        composer.style.display = "none";
+        banner.style.display = "block";
+        banner.innerHTML = `<p style="margin:0;font-size:12px;color:var(--muted)">You've blocked ${esc(who.username)}. <span id="unblockLink" class="tap-sm" style="color:#fff;text-decoration:underline">Unblock</span></p>`;
+        banner.querySelector("#unblockLink").onclick = async () => {
+          try { await api(`/users/${who.id}/block`, { method: "DELETE" }); toast("Unblocked"); await load(); }
+          catch (err) { toast(err.message); }
+        };
+      } else if (r.requestStatus === "pending" && r.requestedByMe) {
         // I sent the first message — nothing more to send until they act.
         composer.style.display = "none";
         banner.style.display = "block";
@@ -2975,13 +3068,35 @@ function chatPage() {
         banner.style.display = "none";
         composer.style.display = "flex";
       }
+  };
+
+  // Same instant-from-cache idea as loadFeed(): sw.js's API_CACHE may
+  // already have this exact thread from a previous visit (it caches every
+  // successful GET /api/messages/:id — see sw.js). Render that immediately
+  // instead of a spinner, then let the real fetch below quietly refresh it
+  // — same rendering path either way, via renderThread().
+  const load = async () => {
+    let fromCache = false;
+    if ("caches" in window) {
+      try {
+        const cache = await caches.open("geereel-api-v1");
+        const cached = await cache.match(new Request(`${location.origin}/api/messages/${who.id}`));
+        const r = cached && await cached.clone().json();
+        if (r?.messages) { renderThread(r); fromCache = true; }
+      } catch {}
+    }
+    try {
+      const r = await api(`/messages/${who.id}`);
+      renderThread(r);
     } catch (e) {
       // e.status is only set when a real response came back (see api()) —
-      // undefined means the request never reached the network at all and
-      // nothing for this thread was cached either. That's the one case
-      // worth naming plainly; anything else keeps whatever the server
-      // actually said.
-      thread.innerHTML = `<p class="empty">${esc(e.status === undefined ? "You're offline — this conversation hasn't loaded on this device yet." : e.message)}</p>`;
+      // undefined means the request never reached the network at all. If
+      // nothing was cached either, that's the one case worth naming
+      // plainly; if we already rendered from cache, leave it showing
+      // rather than replacing real (if stale) content with an error.
+      if (!fromCache) {
+        thread.innerHTML = `<p class="empty">${esc(e.status === undefined ? "You're offline — this conversation hasn't loaded on this device yet." : e.message)}</p>`;
+      }
     }
   };
   load();
@@ -2990,17 +3105,139 @@ function chatPage() {
     const body = input.value.trim();
     if (!body) return;
     input.value = "";
+    swapComposerIcons();
     try {
       await api("/messages", { method: "POST", body: { recipientId: who.id, body } });
       await load();
     } catch (e) {
       input.value = body; // don't lose what they typed
+      swapComposerIcons();
       toast(e.status === undefined ? "Couldn't send — check your connection" : e.message);
     }
   };
 
-  el.querySelector("#send").onclick = send;
+  // Typing shows Send; an empty box shows attach-photo + record-voice
+  // instead, same as the reference.
+  const sendBtn = el.querySelector("#send");
+  const attachBtn = el.querySelector("#attachBtn");
+  const micBtn = el.querySelector("#micBtn");
+  const swapComposerIcons = () => {
+    const typing = input.value.trim().length > 0;
+    sendBtn.style.display = typing ? "" : "none";
+    attachBtn.style.display = typing ? "none" : "";
+    micBtn.style.display = typing ? "none" : "";
+  };
+  input.addEventListener("input", swapComposerIcons);
+
+  sendBtn.onclick = send;
   input.addEventListener("keydown", e => e.key === "Enter" && send());
+
+  // ---- photo attach ----
+  const imgFile = el.querySelector("#imgFile");
+  attachBtn.onclick = () => imgFile.click();
+  imgFile.addEventListener("change", async () => {
+    const file = imgFile.files[0];
+    imgFile.value = "";
+    if (!file) return;
+    try {
+      const fd = new FormData();
+      fd.append("recipientId", who.id);
+      fd.append("kind", "image");
+      fd.append("file", file);
+      await api("/messages/media", { method: "POST", body: fd });
+      await load();
+    } catch (e) { toast(e.message); }
+  });
+
+  // ---- voice notes: tap mic to start, tap again (or the send-voice
+  // button) to stop and send, X to discard ----
+  const voiceBar = el.querySelector("#voiceBar");
+  const voiceTimer = el.querySelector("#voiceTimer");
+  let voiceRecorder = null, voiceChunks = [], voiceStream = null, voiceStarted = 0, voiceTick = null;
+  el.addEventListener("screen-exit", () => {
+    if (voiceRecorder?.state !== "inactive") voiceRecorder?.stop();
+    voiceStream?.getTracks().forEach(t => t.stop());
+    clearInterval(voiceTick);
+  });
+
+  const stopVoiceUi = () => {
+    clearInterval(voiceTick);
+    voiceStream?.getTracks().forEach(t => t.stop());
+    voiceStream = null;
+    voiceBar.style.display = "none";
+    el.querySelector("#composer").style.display = "flex";
+  };
+
+  micBtn.onclick = async () => {
+    try {
+      voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch { toast("Couldn't access the microphone"); return; }
+    voiceChunks = [];
+    voiceRecorder = new MediaRecorder(voiceStream);
+    voiceRecorder.ondataavailable = e => { if (e.data.size) voiceChunks.push(e.data); };
+    voiceRecorder.start();
+    voiceStarted = Date.now();
+    el.querySelector("#composer").style.display = "none";
+    voiceBar.style.display = "flex";
+    voiceTimer.textContent = "0:00";
+    voiceTick = setInterval(() => {
+      const s = Math.floor((Date.now() - voiceStarted) / 1000);
+      voiceTimer.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    }, 250);
+  };
+
+  el.querySelector("#cancelVoice").onclick = () => {
+    if (voiceRecorder?.state !== "inactive") voiceRecorder?.stop();
+    voiceRecorder = null;
+    stopVoiceUi();
+  };
+
+  el.querySelector("#sendVoice").onclick = () => {
+    if (!voiceRecorder || voiceRecorder.state === "inactive") return;
+    const duration = (Date.now() - voiceStarted) / 1000;
+    voiceRecorder.onstop = async () => {
+      stopVoiceUi();
+      const blob = new Blob(voiceChunks, { type: voiceChunks[0]?.type || "audio/webm" });
+      if (blob.size < 500) return; // too short to be a real note
+      try {
+        const fd = new FormData();
+        fd.append("recipientId", who.id);
+        fd.append("kind", "audio");
+        fd.append("duration", duration);
+        fd.append("file", blob, "voice.webm");
+        await api("/messages/media", { method: "POST", body: fd });
+        await load();
+      } catch (e) { toast(e.message); }
+    };
+    voiceRecorder.stop();
+  };
+
+  // ---- 3-dot menu: block / unblock ----
+  el.querySelector("#chatMenu").onclick = () => {
+    const sheet = $(`
+      <div class="sheet" style="height:auto;max-height:40%">
+        <div class="sheet-body" style="padding:8px 0">
+          <button class="row tap" id="blockToggle" style="width:100%;color:${isBlocked ? "inherit" : "#FF3B30"}">
+            <div style="flex:1;text-align:left;font-size:15px;font-weight:600">${isBlocked ? "Unblock" : "Block"} ${esc(who.username)}</div>
+          </button>
+        </div>
+      </div>`);
+    const close = mountSheet(sheet);
+    sheet.querySelector("#blockToggle").onclick = async () => {
+      close();
+      try {
+        await api(`/users/${who.id}/block`, { method: isBlocked ? "DELETE" : "POST" });
+        isBlocked = !isBlocked;
+        toast(isBlocked ? `Blocked ${who.username}` : `Unblocked ${who.username}`);
+        await load();
+      } catch (e) { toast(e.message); }
+    };
+  };
+  el.querySelector("#chatHeaderInfo").onclick = () => {
+    state.viewUser = who.username;
+    state.page = "profile";
+    render();
+  };
 
   return el;
 }
@@ -3129,7 +3366,8 @@ function messagesPage() {
   // Messages — whichever screen someone's actually on gets prefetched by
   // the other one.
   prefetchInBackground(`/feed?tab=${state.feedTab}&limit=15`);
-  api("/messages").then(r => {
+
+  const renderInbox = (r) => {
     // A request someone else sent me needs Accept/Decline before it's a
     // real conversation — kept out of the normal list so it can't be
     // mistaken for an ongoing chat. A request I sent stays in the normal
@@ -3145,7 +3383,7 @@ function messagesPage() {
         </div>
         <div style="flex:1;min-width:0">
           <p class="thread-name">${esc(m.with.displayName || m.with.username)}</p>
-          <p class="thread-preview">${m.requestStatus === "pending" && m.requestedByMe ? "Message request sent" : `${m.outgoing ? "You: " : ""}${esc(m.body || "Sent a video")}`}</p>
+          <p class="thread-preview">${m.requestStatus === "pending" && m.requestedByMe ? "Message request sent" : `${m.outgoing ? "You: " : ""}${esc(m.body || (m.hasImage ? "📷 Photo" : m.hasAudio ? "🎤 Voice message" : "Sent a video"))}`}</p>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
           <span class="thread-time">${ago(m.createdAt)}</span>
@@ -3180,9 +3418,30 @@ function messagesPage() {
     };
     el.querySelectorAll(".thread-row").forEach(row => row.onclick = () => openChat(row.dataset.u));
     el.querySelector("#reqRow")?.addEventListener("click", () => { state.page = "message-requests"; render(); });
-  }).catch(e => {
-    el.innerHTML = `<p class="empty">${esc(e.status === undefined ? "You're offline — showing nothing saved yet for your inbox." : e.message)}</p>`;
-  });
+  };
+
+  // Same instant-from-cache idea as loadFeed()/chatPage() — sw.js's
+  // API_CACHE may already have GET /api/messages from a previous visit.
+  (async () => {
+    let fromCache = false;
+    if ("caches" in window) {
+      try {
+        const cache = await caches.open("geereel-api-v1");
+        const cached = await cache.match(new Request(`${location.origin}/api/messages`));
+        const r = cached && await cached.clone().json();
+        if (r?.threads) { renderInbox(r); fromCache = true; }
+      } catch {}
+    }
+    try {
+      const r = await api("/messages");
+      renderInbox(r);
+    } catch (e) {
+      if (!fromCache) {
+        el.innerHTML = `<p class="empty">${esc(e.status === undefined ? "You're offline — showing nothing saved yet for your inbox." : e.message)}</p>`;
+      }
+    }
+  })();
+
   return el;
 }
 

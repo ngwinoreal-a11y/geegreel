@@ -68,6 +68,52 @@ async function getConversationStatus(env, userA, userB) {
   ).bind(a, b).first();
 }
 
+// Shared by every "send something into a DM" route (text, image, voice
+// note) — checks blocks, then the message-request state, updating it if
+// this send is what accepts a pending request. Throws HttpError to reject;
+// callers don't need their own try/catch, the outer handler already turns
+// a thrown HttpError into the right response.
+async function applyConversationGate(env, senderId, recipientId) {
+  if (senderId === recipientId) return;
+
+  const blocked = await env.DB.prepare(
+    "SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)"
+  ).bind(senderId, recipientId, recipientId, senderId).first();
+  if (blocked) throw new HttpError("You can't message this person", 403);
+
+  const convo = await getConversationStatus(env, senderId, recipientId);
+  if (!convo) {
+    const [a, b] = pairKey(senderId, recipientId);
+    await env.DB.prepare(
+      "INSERT INTO conversation_status (user_a, user_b, requested_by, status, created_at) VALUES (?, ?, ?, 'pending', ?)"
+    ).bind(a, b, senderId, now()).run();
+  } else if (convo.status === "pending") {
+    if (convo.requested_by === senderId) {
+      throw new HttpError("You've already sent a message request — you can send more once they reply", 409);
+    }
+    await env.DB.prepare(
+      "UPDATE conversation_status SET status = 'accepted' WHERE user_a = ? AND user_b = ?"
+    ).bind(...pairKey(senderId, recipientId)).run();
+  } else if (convo.status === "declined") {
+    throw new HttpError("This person isn't accepting messages from you", 403);
+  }
+}
+
+// The "who can message you" setting, shared by every send-a-DM route —
+// enforced here, not just decoration in the settings screen.
+async function checkMessagePermission(env, senderId, them) {
+  if (them.status === "banned") throw new HttpError("That account is banned", 403);
+  if (them.id === senderId) return;
+  const pref = them.allow_messages || "everyone";
+  if (pref === "nobody") throw new HttpError("This person isn't accepting messages", 403);
+  if (pref === "followers") {
+    const follows = await env.DB.prepare(
+      "SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ? AND status = 'accepted'"
+    ).bind(them.id, senderId).first();
+    if (!follows) throw new HttpError("Only people they follow can message them", 403);
+  }
+}
+
 // ---------- sessions ----------
 
 const SESSION_TTL = 1000 * 60 * 60 * 24 * 30; // 30 days
@@ -1913,7 +1959,7 @@ async function handle(request, env, ctx) {
         WHERE sender_id = ? OR recipient_id = ?
         GROUP BY a, b
       )
-      SELECT m.id, m.sender_id, m.recipient_id, m.body, m.created_at,
+      SELECT m.id, m.sender_id, m.recipient_id, m.body, m.image_key, m.audio_key, m.created_at,
              u.username, u.display_name, u.avatar_key, u.last_active_at,
              cs.status AS req_status, cs.requested_by AS req_by,
              (SELECT COUNT(*) FROM messages um
@@ -1932,6 +1978,8 @@ async function handle(request, env, ctx) {
       threads: results.map(m => ({
         id: m.id,
         body: m.body,
+        hasImage: !!m.image_key,
+        hasAudio: !!m.audio_key,
         createdAt: m.created_at,
         unreadCount: m.unread_count,
         with: {
@@ -1982,12 +2030,16 @@ async function handle(request, env, ctx) {
     ).bind(them.id, user.id).run();
 
     const { results } = await env.DB.prepare(`
-      SELECT id, sender_id, body, video_id, created_at, read FROM messages
+      SELECT id, sender_id, body, video_id, image_key, audio_key, audio_duration, created_at, read FROM messages
       WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
       ORDER BY created_at ASC LIMIT 200
     `).bind(user.id, them.id, them.id, user.id).all();
 
-    const convo = await getConversationStatus(env, user.id, them.id);
+    const [convo, iBlockedThem, theyBlockedMe] = await Promise.all([
+      getConversationStatus(env, user.id, them.id),
+      env.DB.prepare("SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = ?").bind(user.id, them.id).first(),
+      env.DB.prepare("SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = ?").bind(them.id, user.id).first(),
+    ]);
 
     return json({
       with: {
@@ -1999,10 +2051,15 @@ async function handle(request, env, ctx) {
       },
       requestStatus: convo?.status || "accepted",
       requestedByMe: convo ? convo.requested_by === user.id : false,
+      blocked: !!iBlockedThem,
+      blockedByThem: !!theyBlockedMe,
       messages: results.map(m => ({
         id: m.id,
         body: m.body,
         videoId: m.video_id,
+        imageUrl: m.image_key ? `/api/media/${m.image_key}` : null,
+        audioUrl: m.audio_key ? `/api/media/${m.audio_key}` : null,
+        audioDuration: m.audio_duration,
         createdAt: m.created_at,
         outgoing: m.sender_id === user.id,
         read: !!m.read,
@@ -2020,43 +2077,9 @@ async function handle(request, env, ctx) {
       "SELECT id, allow_messages, status FROM users WHERE id = ? OR username = ?"
     ).bind(recipientId, recipientId).first();
     if (!them) return err("User not found", 404);
-    if (them.status === "banned") return err("That account is banned", 403);
 
-    // The "who can message you" setting has to be enforced here, or it's just
-    // decoration in the settings screen.
-    const pref = them.allow_messages || "everyone";
-    if (pref === "nobody" && them.id !== user.id) {
-      return err("This person isn't accepting messages", 403);
-    }
-    if (pref === "followers" && them.id !== user.id) {
-      const follows = await env.DB.prepare(`
-        SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ? AND status = 'accepted'
-      `).bind(them.id, user.id).first();
-      if (!follows) return err("Only people they follow can message them", 403);
-    }
-
-    if (them.id !== user.id) {
-      const convo = await getConversationStatus(env, user.id, them.id);
-      if (!convo) {
-        // First message ever between these two — starts the conversation as
-        // a pending request.
-        const [a, b] = pairKey(user.id, them.id);
-        await env.DB.prepare(
-          "INSERT INTO conversation_status (user_a, user_b, requested_by, status, created_at) VALUES (?, ?, ?, 'pending', ?)"
-        ).bind(a, b, user.id, now()).run();
-      } else if (convo.status === "pending") {
-        if (convo.requested_by === user.id) {
-          return err("You've already sent a message request — you can send more once they reply", 409);
-        }
-        // The recipient of the original request is replying — that's an
-        // implicit accept, same as tapping Accept in the inbox would do.
-        await env.DB.prepare(
-          "UPDATE conversation_status SET status = 'accepted' WHERE user_a = ? AND user_b = ?"
-        ).bind(...pairKey(user.id, them.id)).run();
-      } else if (convo.status === "declined") {
-        return err("This person isn't accepting messages from you", 403);
-      }
-    }
+    await checkMessagePermission(env, user.id, them);
+    await applyConversationGate(env, user.id, them.id);
 
     const id = uid();
     await env.DB.prepare(`
@@ -2065,6 +2088,127 @@ async function handle(request, env, ctx) {
     `).bind(id, user.id, them.id, body?.trim() || null, videoId || null, now()).run();
 
     return json({ ok: true, id }, 201);
+  }
+
+  // A photo or voice note in a chat — same permission/request gating as a
+  // text message (applyConversationGate/checkMessagePermission), just a
+  // file instead of (or alongside) a body.
+  if (path === "/api/messages/media" && method === "POST") {
+    requireUser(user);
+    const form = await request.formData();
+    const recipientId = form.get("recipientId");
+    const kind = form.get("kind"); // "image" | "audio"
+    const file = form.get("file");
+    if (!recipientId) return err("recipientId is required");
+    if (!["image", "audio"].includes(kind)) return err("kind must be image or audio");
+    if (!file || typeof file === "string") return err(`A${kind === "audio" ? "n" : ""} ${kind} file is required`);
+    if (kind === "image" && !/^image\//.test(file.type)) return err("That file isn't an image");
+    if (kind === "audio" && !/^audio\//.test(file.type)) return err("That file isn't audio");
+    if (file.size > 20 * 1024 * 1024) return err("File must be under 20MB", 413);
+
+    const them = await env.DB.prepare(
+      "SELECT id, allow_messages, status FROM users WHERE id = ? OR username = ?"
+    ).bind(recipientId, recipientId).first();
+    if (!them) return err("User not found", 404);
+
+    await checkMessagePermission(env, user.id, them);
+    await applyConversationGate(env, user.id, them.id);
+
+    const id = uid();
+    const ext = (file.type.split("/")[1] || (kind === "image" ? "jpg" : "webm")).split(";")[0];
+    const key = `messages/${user.id}/${id}.${ext}`;
+    await env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type } });
+    const duration = kind === "audio" ? (parseFloat(form.get("duration")) || null) : null;
+
+    await env.DB.prepare(`
+      INSERT INTO messages (id, sender_id, recipient_id, body, image_key, audio_key, audio_duration, created_at)
+      VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+    `).bind(
+      id, user.id, them.id,
+      kind === "image" ? key : null, kind === "audio" ? key : null, duration,
+      now()
+    ).run();
+
+    return json({ ok: true, id }, 201);
+  }
+
+  // Block / unblock. Blocking someone also freezes the message-request
+  // state as-is — applyConversationGate checks blocks before it ever looks
+  // at conversation_status, so a blocked person can't message their way
+  // around it by "replying" to accept.
+  const blockMatch = /^\/api\/users\/([\w.-]+)\/block$/.exec(path);
+  if (blockMatch && (method === "POST" || method === "DELETE")) {
+    requireUser(user);
+    const target = await env.DB.prepare(
+      "SELECT id FROM users WHERE id = ? OR username = ?"
+    ).bind(blockMatch[1], blockMatch[1]).first();
+    if (!target) return err("User not found", 404);
+    if (target.id === user.id) return err("You can't block yourself");
+    if (method === "POST") {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)"
+      ).bind(user.id, target.id, now()).run();
+    } else {
+      await env.DB.prepare(
+        "DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?"
+      ).bind(user.id, target.id).run();
+    }
+    return json({ blocked: method === "POST" });
+  }
+
+  // Unfurls a URL sent in a chat message into a title/description/image
+  // card, same idea as WhatsApp/iMessage link previews. Fetched
+  // server-side (the browser can't read another site's HTML across
+  // origins, and this keeps the target's IP hidden from other users).
+  // Cloudflare Workers' own fetch() already can't reach private/internal
+  // IP ranges, which is most of what keeps this from being an SSRF hole.
+  if (path === "/api/link-preview" && method === "GET") {
+    requireUser(user);
+    const target = url.searchParams.get("url");
+    if (!target) return err("url is required");
+    let parsed;
+    try { parsed = new URL(target); } catch { return err("That's not a valid URL"); }
+    if (!["http:", "https:"].includes(parsed.protocol)) return err("Only http/https links can be previewed");
+
+    try {
+      const res = await fetch(parsed.toString(), {
+        signal: AbortSignal.timeout(5000),
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; GEEREELBot/1.0; +link-preview)" },
+      });
+      if (!res.ok) return json({ url: parsed.toString(), title: parsed.hostname });
+
+      // Only the <head> is needed and pages can be large — read a capped
+      // slice rather than the whole body.
+      const reader = res.body.getReader();
+      let html = "", bytes = 0;
+      const decoder = new TextDecoder();
+      while (bytes < 60000) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.length;
+        html += decoder.decode(value, { stream: true });
+        if (/<\/head>/i.test(html)) break;
+      }
+      reader.cancel().catch(() => {});
+
+      const meta = (prop) => {
+        const re = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']*)["']`, "i");
+        return html.match(re)?.[1] || null;
+      };
+      const titleTag = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1];
+
+      return json({
+        url: parsed.toString(),
+        title: (meta("og:title") || titleTag || parsed.hostname).trim().slice(0, 200),
+        description: (meta("og:description") || meta("description") || "").trim().slice(0, 300),
+        image: meta("og:image"),
+        siteName: (meta("og:site_name") || parsed.hostname).trim(),
+      });
+    } catch {
+      // Unreachable, timed out, or refused — the link still sends fine as
+      // plain text, it just won't get a card.
+      return json({ url: parsed.toString(), title: parsed.hostname });
+    }
   }
 
   // Accept or decline a pending message request. Only the person who
