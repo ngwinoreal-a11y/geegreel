@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/design-3.css">
 <link rel="stylesheet" href="/design-4.css">
 <link rel="stylesheet" href="/design-5.css">
+<link rel="stylesheet" href="/design-feed.css">
 <style>
   /* design-4.css's --sk-base (#1C1C1C) on this app's pure #000 page is too
      close in value — on a real screen it reads as "nothing loaded" rather
@@ -48,17 +49,14 @@
     transition: all .28s cubic-bezier(.22,.61,.36,1);
   }
 
-  /* An ad's image/video gets the exact same constrained box as a real
-     post's video (.slide video, design.css) — same fixed top/bottom
-     chrome bands, so it's the same KNOWN, predictable size on every
-     device rather than a full-bleed crop that varies with screen shape.
-     That's what "advertisers know the size in advance, nothing gets
-     hidden" means here — consistency, not exemption. Only object-fit and
-     the img case (videos already inherit position/top/bottom from the
-     general .slide video rule) need stating here. */
-  .ad-slide img { position: absolute; left: 0; right: 0; top: var(--chrome-top); bottom: var(--chrome-bottom);
-    width: 100%; height: auto; object-fit: cover; background: #000; }
-  .ad-slide video { object-fit: cover; }
+  /* Ad sizing (image and video) now lives in design-feed.css's .slide.ad
+     rules — superseded these older .ad-slide ones, since design-feed.css
+     loads last and matches with higher specificity anyway. Kept only the
+     one thing that file's own CSS can't reach: .tabs isn't a sibling or
+     descendant of any .slide (it lives at the #app level), so hiding it
+     for an ad slide needs the small JS toggle in observePlayback() — this
+     is just the class that toggle flips. */
+  .tabs.hide-for-ad { display: none; }
 
   /* Inbox: white, like TikTok's — a deliberate break from the app's dark theme. */
   .page.msgs-page { background: #fff; color: #000; }
@@ -605,11 +603,11 @@ function slide(v) {
 // like/comment rail — it isn't a video post wearing an ad's clothes.
 function adSlide(v) {
   const el = $(`
-    <div class="slide ad-slide" data-id="${v.id}" data-ad="1">
+    <div class="slide ad" data-id="${v.id}" data-ad="1">
       ${v.adType === "video"
         ? `<video src="${v.mediaUrl}" data-src="${v.mediaUrl}" loop playsinline preload="none"></video>`
         : `<img src="${v.mediaUrl}" alt="">`}
-      <div class="rail" style="bottom:${(parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chrome-bottom")) || 150) + 12}px">
+      <div class="rail">
         <button class="like ${v.liked ? "liked" : ""}">${I.heart}<span class="n">${fmt(v.likes)}</span></button>
       </div>
       <div class="overlay">
@@ -1222,6 +1220,16 @@ function observePlayback() {
       // A photo ad has no <video> — it still needs its impression counted,
       // it just never plays or pauses.
       if (!v && !isAd) return;
+
+      // design-feed.css's own rule for this (.slide.ad ~ .tabs) can't
+      // actually match — .tabs lives at the #app level, not as a sibling
+      // or descendant of any .slide, so no pure-CSS selector reaches it
+      // from here. Toggling the same intent from the one place that
+      // already knows which slide is active. Checked for every slide
+      // (not just video ones) so a photo ad hides them too.
+      if (en.isIntersecting && en.intersectionRatio >= 0.25) {
+        document.querySelector(".tabs")?.classList.toggle("hide-for-ad", isAd);
+      }
 
       if (en.isIntersecting && en.intersectionRatio >= 0.25) {
         if (v) {

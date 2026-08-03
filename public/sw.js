@@ -20,7 +20,7 @@ const SHELL_CACHE = "geereel-shell-v1";
 // install rather than waiting for a request to happen to hit them first.
 const SHELL_FILES = [
   "/", "/index.html",
-  "/design.css", "/design-2.css", "/design-3.css", "/design-4.css", "/design-5.css",
+  "/design.css", "/design-2.css", "/design-3.css", "/design-4.css", "/design-5.css", "/design-feed.css",
 ];
 
 self.addEventListener("install", (event) => {
@@ -72,7 +72,7 @@ self.addEventListener("fetch", (event) => {
 
   // The design*.css files: same network-first-with-cache-fallback pattern
   // as the app shell above, kept fresh but still available offline.
-  if (/^\/design(-[2-5])?\.css$/.test(url.pathname)) {
+  if (/^\/design(-[2-5]|-feed)?\.css$/.test(url.pathname)) {
     event.respondWith((async () => {
       try {
         const res = await fetch(req);

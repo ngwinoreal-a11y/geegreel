@@ -1,0 +1,238 @@
+/* ============================================================================
+   design-feed.css — FULL-WIDTH VIDEO, SMALL TOP BAND, CAPTION BAND BELOW
+   ============================================================================
+
+   FOR CLAUDE CODE:
+
+   Save at public/design-feed.css, linked AFTER design-5.css so it wins.
+   This changes the feed slide layout only. No HTML changes needed for the
+   core fix — it re-anchors elements that already exist. One optional markup
+   note is in section F (ads).
+
+   ---------------------------------------------------------------------------
+   WHAT IS WRONG NOW — measured, not a matter of taste
+
+   Today the video is `position: absolute; inset: 0` — it fills the entire
+   screen — and every control floats on top of it:
+
+       top bar      14px pad + 44px avatar     ~  58px sitting over the video
+       feed tabs    at top: 72px               ~  44px more
+       caption      at bottom: 88px
+       nav bar      62px tall + 16px pad       ~  78px over the video
+
+   So the video is centred in the *screen*, but ~100px of its top and ~165px
+   of its bottom sit underneath opaque controls. The part you can actually
+   SEE is not centred — it sits high, with a big black gap below and a small
+   one above. That is the imbalance in the screenshot.
+
+   Second problem: `.slide.cover video { object-fit: cover }` crops 9:16
+   videos to fill while every other ratio letterboxes. Two clips shot on the
+   same phone can display differently depending on whether that class is set
+   — one cropped, one not. That is why videos from outside the app behave
+   differently from ones shot in it.
+
+   ---------------------------------------------------------------------------
+   WHAT THIS DOES INSTEAD
+
+       +-----------------+
+       |  small black    |  <- top bar + feed tabs
+       +-----------------+
+       |                 |
+       |  video, FULL    |  <- edge to edge across, never cropped
+       |  WIDTH          |
+       |                 |
+       +-----------------+
+       |  black + caption|  <- author, caption, nav
+       +-----------------+
+
+   The video spans the full width of the screen. Vertically it sits between a
+   small top band and a taller bottom band that carries the caption — so the
+   black is where you asked for it, and the sides are full.
+
+   THE ONE HONEST CAVEAT, because it is geometry and not a preference:
+
+   A 9:16 video is shorter than a modern phone screen, so something has to
+   give — either a strip of black appears, or the picture gets cropped. This
+   layout chooses black over cropping. On the common tall phones the bands
+   are sized so a portrait video lands at full width with essentially no side
+   black at all:
+
+       412 x 915  ->  side black  2px
+       412 x 950  ->  side black  0px
+
+   On genuinely short screens there isn't enough height to fit a full-width
+   9:16 video AND leave room for the nav bar, so a small side black appears:
+
+       393 x 786  ->  side black 20px
+       360 x 740  ->  side black 16px
+
+   The bands shrink on those screens to keep it that small. Cropping the
+   picture instead would remove it entirely — but then part of every video is
+   lost, which is the thing you said you didn't want.
+
+   ---------------------------------------------------------------------------
+   CONTENTS
+     A. Band sizes
+     B. Video — full width, never cropped
+     C. Top band
+     D. Bottom band — author, caption, fixed avatar
+     E. Action rail
+     F. Ads — no feed tabs, but keep a like button
+   ========================================================================= */
+
+
+/* ============================================================================
+   A. BANDS
+   ---------------------------------------------------------------------------
+   Two numbers drive the layout. The bottom one has to clear the nav (78px)
+   plus the author row and one line of caption. The top one only has to clear
+   the bar and the tabs, so it stays small — which is what keeps the video
+   large and full-width.
+
+   Both shrink on short screens, because there the alternative is a wider
+   strip of black down each side.
+   ========================================================================= */
+:root {
+  --feed-top: 56px;
+  --feed-bottom: 132px;
+}
+
+@media (max-height: 800px) {
+  :root { --feed-top: 40px; --feed-bottom: 116px; }
+}
+@media (max-height: 720px) {
+  :root { --feed-top: 32px; --feed-bottom: 104px; }
+}
+
+
+/* ============================================================================
+   B. VIDEO
+   ---------------------------------------------------------------------------
+   Full width, contained vertically, centred in the space between the bands.
+   Any aspect ratio lands correctly — a portrait clip shot in the app and a
+   landscape one from somewhere else both fit without being cut.
+   ========================================================================= */
+.slide {
+  height: 100%; position: relative; background: #000;
+  scroll-snap-align: start; scroll-snap-stop: always;
+  contain: layout paint;
+}
+
+.slide video {
+  position: absolute;
+  top: var(--feed-top);
+  bottom: var(--feed-bottom);
+  left: 0; right: 0;
+  width: 100%; height: auto;
+  max-height: calc(100% - var(--feed-top) - var(--feed-bottom));
+  object-fit: contain;
+  background: #000;
+}
+
+/* Cropping is off for every ratio. A feed where some videos are cropped and
+   others aren't is the inconsistency described at the top of this file. If a
+   full-bleed look is wanted later it should be a deliberate per-video choice,
+   not a class that happens to be set on some uploads. */
+.slide.cover video { object-fit: contain; }
+
+
+/* ============================================================================
+   C. TOP BAND
+   ---------------------------------------------------------------------------
+   The bar and tabs sit on black rather than over the picture, so they no
+   longer need a heavy shadow to stay readable — it is lightened, not
+   removed, since a wide video's edge can still reach into the band.
+   ========================================================================= */
+.topbar { padding: 10px 16px 0; }
+.me-btn { width: 38px; height: 38px; }
+.chrome-pill button { width: 30px; height: 30px; }
+
+.tabs { top: 14px; }
+.tabs button {
+  font-size: 15px; padding-bottom: 5px;
+  text-shadow: 0 1px 6px rgba(0,0,0,.4);
+}
+
+
+/* ============================================================================
+   D. BOTTOM BAND — author, caption, fixed avatar
+   ---------------------------------------------------------------------------
+   The author row is pinned to a fixed offset from the bottom of the screen,
+   so it stays in exactly the same place on every slide no matter how tall the
+   video is or how long the caption runs. That was the other thing you asked
+   for — the profile picture shouldn't jump between videos.
+
+   The caption is capped at two lines. An uncapped caption is what pushes the
+   author row up and reintroduces the drift, so the cap is doing real work
+   here, not just tidying.
+   ========================================================================= */
+.overlay {
+  position: absolute;
+  left: 16px; right: 76px;   /* clears the rail */
+  bottom: 84px;              /* clears the 78px nav */
+  z-index: 4;
+  text-shadow: 0 1px 8px rgba(0,0,0,.5);
+}
+
+.author { display: flex; align-items: center; gap: 8px; margin: 0 0 5px; }
+.author .aav { width: 44px; height: 44px; font-size: 17px; }
+
+.caption {
+  font-size: 14px; line-height: 1.35; margin: 0;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The sound line sits under the caption and gets one line only. */
+.sound { margin-top: 4px; }
+
+
+/* ============================================================================
+   E. ACTION RAIL
+   ---------------------------------------------------------------------------
+   Anchored above the bottom band so it never collides with the caption or
+   the nav, and tightened slightly so the whole column fits over the picture
+   without reaching the top band.
+   ========================================================================= */
+.rail {
+  position: absolute;
+  right: 10px;
+  bottom: calc(var(--feed-bottom) + 8px);
+  z-index: 4;
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+}
+
+
+/* ============================================================================
+   F. ADS
+   ---------------------------------------------------------------------------
+   An ad isn't a feed you switch between, so the Following / For you tabs are
+   hidden on an ad slide — they'd offer a choice that doesn't apply.
+
+   The like button STAYS. Not as decoration: it is the cheapest honest signal
+   you have about whether an ad is landing or annoying people, and it costs
+   the viewer one tap. Removing it would leave you guessing about the one
+   thing you most need to know.
+
+   MARKUP: add class="ad" to the slide when the feed item has isAd === true.
+   ========================================================================= */
+.slide.ad ~ .tabs,
+.slide.ad .tabs { display: none; }
+
+.slide.ad .rail .cmt,
+.slide.ad .rail .rep,
+.slide.ad .rail .shr,
+.slide.ad .rail .gift,
+.slide.ad .rail .more { display: none; }
+
+/* Ad media follows the same containment rule as everything else, so a
+   sponsor's differently-shaped image is never cropped either — which also
+   means they can see what their placement will actually look like. */
+.slide.ad img, .slide.ad video {
+  position: absolute;
+  top: var(--feed-top); bottom: var(--feed-bottom);
+  left: 0; right: 0;
+  width: 100%; height: auto;
+  max-height: calc(100% - var(--feed-top) - var(--feed-bottom));
+  object-fit: contain; background: #000;
+}
