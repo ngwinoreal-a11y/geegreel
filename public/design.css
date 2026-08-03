@@ -206,21 +206,41 @@ button:active { transform: scale(.9); opacity: .85; }
 }
 .slide.landed { animation: slideImpact .24s cubic-bezier(.34,1.56,.64,1); }
 
+/* The two black chrome bands (top: status bar/topbar/tabs, bottom:
+   author/caption/sound) are a FIXED size, the same on every single slide
+   no matter who posted or how long their caption is — that fixedness is
+   the whole point: it's what lets the video itself be sized to the exact
+   gap between them, instead of a full-bleed video with the bands painted
+   over it hiding whatever was already there. The video's own crop
+   (object-fit: cover) is computed against that real, smaller box, so
+   nothing ends up hidden behind solid black that wasn't already meant to
+   be off-screen. Ads are exempt — see .ad-slide overrides further down —
+   an advertiser needs to know the exact area their creative will render
+   in, and cropping it with these bands isn't ours to decide for them. */
+:root {
+  --chrome-top: 100px;
+  --chrome-bottom: 150px;
+}
+
 /* Video keeps its own aspect ratio: 9:16 fills edge to edge, other ratios
    letterbox against black. */
 .slide video {
-  position: absolute; inset: 0; width: 100%; height: 100%;
+  position: absolute; left: 0; right: 0; width: 100%;
+  top: var(--chrome-top); bottom: var(--chrome-bottom); height: auto;
   object-fit: contain; background: #000;
 }
 .slide.cover video { object-fit: cover; }
 
 /* A real black band under the author/caption/sound block, not floating
-   text over the video — its height is just whatever that content needs,
-   which is why the caption clamps to 3 lines: without a cap here, a long
-   caption would push the band arbitrarily tall. Full width so it reads as
-   a deliberate zone, not a text box. */
+   text over the video. Fixed height (see --chrome-bottom above) — content
+   is top-aligned within it and clipped rather than letting a long caption
+   grow the band, which is also why the caption clamps to 3 lines: between
+   the clamp and this overflow:hidden, the band can never need to be
+   taller than what it was already sized for. Full width so it reads as a
+   deliberate zone, not a text box. */
 .overlay {
-  position: absolute; left: 0; right: 0; bottom: 88px; z-index: 2;
+  position: absolute; left: 0; right: 0; bottom: 0; height: var(--chrome-bottom);
+  z-index: 2; overflow: hidden;
   background: #000; padding: 10px 88px 10px 16px;
 }
 .caption { font-size: 14px; line-height: 1.4; margin: 0; }
@@ -271,7 +291,7 @@ button:active { transform: scale(.9); opacity: .85; }
    5. CHROME — top bar and feed tabs
    ========================================================================= */
 .chrome-backdrop {
-  position: absolute; top: 0; left: 0; right: 0; height: 100px; z-index: 4;
+  position: absolute; top: 0; left: 0; right: 0; height: var(--chrome-top); z-index: 4;
   background: #000; pointer-events: none;
 }
 

@@ -564,6 +564,8 @@ const shapeAd = r => ({
   caption: r.caption,
   ctaText: r.cta_text,
   linkUrl: r.link_url,
+  likes: r.like_count || 0,
+  liked: !!r.liked,
 });
 
 // ---------- routes ----------
@@ -1090,9 +1092,12 @@ async function handle(request, env, ctx) {
       // One ad woven into each batch, a few videos in rather than first thing —
       // never on the (ad-free) following tab.
       if (videos.length >= 3) {
-        const ad = await env.DB.prepare(
-          "SELECT * FROM ads WHERE status = 'active' ORDER BY RANDOM() LIMIT 1"
-        ).first();
+        const ad = await env.DB.prepare(`
+          SELECT a.*,
+            (SELECT COUNT(*) FROM ad_likes WHERE ad_id = a.id) AS like_count,
+            EXISTS(SELECT 1 FROM ad_likes WHERE ad_id = a.id AND user_id = ?) AS liked
+          FROM ads a WHERE a.status = 'active' ORDER BY RANDOM() LIMIT 1
+        `).bind(user?.id || "").first();
         if (ad) videos.splice(Math.min(4, videos.length), 0, shapeAd(ad));
       }
     }
@@ -1113,6 +1118,22 @@ async function handle(request, env, ctx) {
     await env.DB.prepare("UPDATE ads SET clicks = clicks + 1 WHERE id = ?")
       .bind(adClickMatch[1]).run();
     return json({ ok: true });
+  }
+
+  const adLikeMatch = /^\/api\/ads\/([\w-]+)\/like$/.exec(path);
+  if (adLikeMatch && (method === "POST" || method === "DELETE")) {
+    requireUser(user);
+    if (method === "POST") {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO ad_likes (user_id, ad_id, created_at) VALUES (?, ?, ?)"
+      ).bind(user.id, adLikeMatch[1], now()).run();
+    } else {
+      await env.DB.prepare(
+        "DELETE FROM ad_likes WHERE user_id = ? AND ad_id = ?"
+      ).bind(user.id, adLikeMatch[1]).run();
+    }
+    const c = await env.DB.prepare("SELECT COUNT(*) AS n FROM ad_likes WHERE ad_id = ?").bind(adLikeMatch[1]).first();
+    return json({ liked: method === "POST", count: c.n });
   }
 
   // ----- admin: ads -----

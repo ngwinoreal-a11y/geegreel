@@ -48,7 +48,16 @@
     transition: all .28s cubic-bezier(.22,.61,.36,1);
   }
 
-  .ad-slide img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+  /* An ad's image/video gets the exact same constrained box as a real
+     post's video (.slide video, design.css) — same fixed top/bottom
+     chrome bands, so it's the same KNOWN, predictable size on every
+     device rather than a full-bleed crop that varies with screen shape.
+     That's what "advertisers know the size in advance, nothing gets
+     hidden" means here — consistency, not exemption. Only object-fit and
+     the img case (videos already inherit position/top/bottom from the
+     general .slide video rule) need stating here. */
+  .ad-slide img { position: absolute; left: 0; right: 0; top: var(--chrome-top); bottom: var(--chrome-bottom);
+    width: 100%; height: auto; object-fit: cover; background: #000; }
   .ad-slide video { object-fit: cover; }
 
   /* Inbox: white, like TikTok's — a deliberate break from the app's dark theme. */
@@ -588,6 +597,9 @@ function adSlide(v) {
       ${v.adType === "video"
         ? `<video src="${v.mediaUrl}" data-src="${v.mediaUrl}" loop playsinline preload="none"></video>`
         : `<img src="${v.mediaUrl}" alt="">`}
+      <div class="rail" style="bottom:${(parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chrome-bottom")) || 150) + 12}px">
+        <button class="like ${v.liked ? "liked" : ""}">${I.heart}<span class="n">${fmt(v.likes)}</span></button>
+      </div>
       <div class="overlay">
         <span class="sponsor-tag">Sponsored</span>
         <p class="author-name">${esc(v.sponsorName)}</p>
@@ -604,8 +616,26 @@ function adSlide(v) {
     api(`/ads/${v.id}/click`, { method: "POST" }).catch(() => {});
   });
 
+  // A small like — most people won't tap it on an ad, but the option
+  // should still be there for the few who do, same mechanics as a real
+  // video's like (optimistic toggle, revert on failure).
+  el.querySelector(".like").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!requireLogin()) return;
+    const btn = e.currentTarget;
+    const on = btn.classList.contains("liked");
+    btn.classList.toggle("liked");
+    try {
+      const r = await api(`/ads/${v.id}/like`, { method: on ? "DELETE" : "POST" });
+      btn.querySelector(".n").textContent = fmt(r.count);
+    } catch (err) {
+      btn.classList.toggle("liked");
+      toast(err.message);
+    }
+  });
+
   el.addEventListener("click", (e) => {
-    if (e.target.closest(".cta")) return;
+    if (e.target.closest(".cta") || e.target.closest(".rail")) return;
     if (video) video.paused ? video.play() : video.pause();
   });
 
