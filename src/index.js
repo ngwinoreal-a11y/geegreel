@@ -39,6 +39,20 @@ async function verifyPassword(password, stored) {
   return diff === 0;
 }
 
+// A repost points at an existing video rather than duplicating its file —
+// engagement (likes, comments, shares, gifts) belongs to that underlying
+// content, not the repost row, so resharing something already popular
+// doesn't reset it to zero. Every action route resolves the id it's given
+// through this before touching likes/comments/shares/gifts, so liking or
+// commenting on a repost really acts on the original, and a gift's payout
+// reaches the actual creator rather than whoever reposted it.
+// repostVideo() (below) always sets repost_of to a true original, never to
+// another repost, so one hop here is always enough — no chain to walk.
+async function resolveContentId(env, videoId) {
+  const row = await env.DB.prepare("SELECT repost_of FROM videos WHERE id = ?").bind(videoId).first();
+  return row?.repost_of || videoId;
+}
+
 // ---------- sessions ----------
 
 const SESSION_TTL = 1000 * 60 * 60 * 24 * 30; // 30 days
@@ -302,6 +316,7 @@ const NOTIF_TEXT = {
   reply: (name, text) => [`${name} replied to your comment`, text || ""],
   follow: (name) => [`${name} started following you`, ""],
   gift: (name) => [`${name} sent you a gift`, ""],
+  repost: (name) => [`${name} reposted your video`, ""],
 };
 
 // Writes the in-app notification (always) and fires a push (best-effort),
@@ -315,7 +330,7 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
   if (!recipient) return;
 
   const pref = type === "follow" ? recipient.notify_follows
-             : type === "like" ? recipient.notify_likes
+             : type === "like" || type === "repost" ? recipient.notify_likes
              : type === "gift" ? 1
              : recipient.notify_comments; // comment, reply
   if (!pref) return;
@@ -405,18 +420,24 @@ const privateUser = u => ({
 });
 
 // One query returns every video with real counts + whether the viewer liked it.
+// A repost row (v.repost_of IS NOT NULL) has no engagement of its own — likes,
+// comments, shares and gifts are all recorded against the original content
+// (see resolveContentId), so every count below reads through
+// COALESCE(v.repost_of, v.id) rather than v.id. For an original video that's
+// just v.id unchanged; for a repost it's the video it reposts, so a fresh
+// reshare of something popular shows the real numbers instead of zero.
 const FEED_SQL = `
   SELECT
     v.id, v.caption, v.song, v.r2_key, v.thumb_key, v.width, v.height,
     v.duration, v.views, v.created_at, v.repost_of, v.sound_id,
     u.id AS user_id, u.username, u.display_name, u.avatar_key,
     ru.username AS repost_of_username,
-    (SELECT COUNT(*) FROM likes    l WHERE l.video_id = v.id) AS like_count,
-    (SELECT COUNT(*) FROM comments c WHERE c.video_id = v.id) AS comment_count,
-    (SELECT COUNT(*) FROM shares   s WHERE s.video_id = v.id AND s.completed = 1) AS share_count,
-    (SELECT COUNT(*) FROM videos   r WHERE r.repost_of = v.id) AS repost_count,
-    (SELECT COALESCE(SUM(g.coins), 0) FROM gifts g WHERE g.video_id = v.id) AS gift_coins,
-    EXISTS(SELECT 1 FROM likes l WHERE l.video_id = v.id AND l.user_id = ?) AS liked,
+    (SELECT COUNT(*) FROM likes    l WHERE l.video_id = COALESCE(v.repost_of, v.id)) AS like_count,
+    (SELECT COUNT(*) FROM comments c WHERE c.video_id = COALESCE(v.repost_of, v.id)) AS comment_count,
+    (SELECT COUNT(*) FROM shares   s WHERE s.video_id = COALESCE(v.repost_of, v.id) AND s.completed = 1) AS share_count,
+    (SELECT COUNT(*) FROM videos   r WHERE r.repost_of = COALESCE(v.repost_of, v.id)) AS repost_count,
+    (SELECT COALESCE(SUM(g.coins), 0) FROM gifts g WHERE g.video_id = COALESCE(v.repost_of, v.id)) AS gift_coins,
+    EXISTS(SELECT 1 FROM likes l WHERE l.video_id = COALESCE(v.repost_of, v.id) AND l.user_id = ?) AS liked,
     EXISTS(SELECT 1 FROM follows f
             WHERE f.follower_id = ? AND f.followee_id = v.user_id
               AND f.status = 'accepted')                        AS following
@@ -1308,7 +1329,7 @@ async function handle(request, env, ctx) {
   const likeMatch = /^\/api\/videos\/([\w-]+)\/like$/.exec(path);
   if (likeMatch && (method === "POST" || method === "DELETE")) {
     requireUser(user);
-    const videoId = likeMatch[1];
+    const videoId = await resolveContentId(env, likeMatch[1]);
 
     if (method === "POST") {
       await env.DB.prepare(
@@ -1332,6 +1353,7 @@ async function handle(request, env, ctx) {
   const commentMatch = /^\/api\/videos\/([\w-]+)\/comments$/.exec(path);
   if (commentMatch && method === "GET") {
     const viewerId = user?.id || "";
+    const videoId = await resolveContentId(env, commentMatch[1]);
     const { results } = await env.DB.prepare(`
       SELECT c.id, c.body, c.created_at, c.parent_id,
              u.id AS user_id, u.username, u.display_name, u.avatar_key,
@@ -1344,7 +1366,7 @@ async function handle(request, env, ctx) {
       FROM comments c JOIN users u ON u.id = c.user_id
       WHERE c.video_id = ?
       ORDER BY c.created_at ASC LIMIT 300
-    `).bind(viewerId, commentMatch[1]).all();
+    `).bind(viewerId, videoId).all();
 
     const shape = c => ({
       id: c.id,
@@ -1382,13 +1404,14 @@ async function handle(request, env, ctx) {
     const { body, parentId } = await request.json();
     if (!body?.trim()) return err("Write something first");
     if (body.length > 500) return err("Comment must be under 500 characters");
+    const videoId = await resolveContentId(env, commentMatch[1]);
 
     // Respect the video owner's "who can comment" choice. The owner can always
     // comment on their own video; otherwise nobody blocks everyone, and
     // followers limits it to people who follow the owner.
     const vid = await env.DB.prepare(
       "SELECT v.user_id, u.allow_comments FROM videos v JOIN users u ON u.id = v.user_id WHERE v.id = ?"
-    ).bind(commentMatch[1]).first();
+    ).bind(videoId).first();
     if (!vid) return err("Video not found", 404);
     if (vid.user_id !== user.id) {
       const pref = vid.allow_comments || "everyone";
@@ -1409,7 +1432,7 @@ async function handle(request, env, ctx) {
         "SELECT id, parent_id, video_id, user_id FROM comments WHERE id = ?"
       ).bind(parentId).first();
       if (!parent) return err("That comment no longer exists", 404);
-      if (parent.video_id !== commentMatch[1]) return err("Comment doesn't belong to this video");
+      if (parent.video_id !== videoId) return err("Comment doesn't belong to this video");
       rootId = parent.parent_id || parent.id;
       parentAuthorId = parent.user_id;
     }
@@ -1417,16 +1440,16 @@ async function handle(request, env, ctx) {
     const id = uid();
     await env.DB.prepare(
       "INSERT INTO comments (id, video_id, user_id, body, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    ).bind(id, commentMatch[1], user.id, body.trim(), rootId, now()).run();
+    ).bind(id, videoId, user.id, body.trim(), rootId, now()).run();
 
-    await notify(env, ctx, vid.user_id, user.id, "comment", { videoId: commentMatch[1], commentId: id, text: body.trim() });
+    await notify(env, ctx, vid.user_id, user.id, "comment", { videoId, commentId: id, text: body.trim() });
     if (parentAuthorId && parentAuthorId !== vid.user_id) {
-      await notify(env, ctx, parentAuthorId, user.id, "reply", { videoId: commentMatch[1], commentId: id, text: body.trim() });
+      await notify(env, ctx, parentAuthorId, user.id, "reply", { videoId, commentId: id, text: body.trim() });
     }
 
     const c = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM comments WHERE video_id = ?"
-    ).bind(commentMatch[1]).first();
+    ).bind(videoId).first();
 
     return json({
       comment: {
@@ -1518,6 +1541,12 @@ async function handle(request, env, ctx) {
   if (shareMatch && method === "POST") {
     requireUser(user);
     const shareId = uid();
+    // The link stays pointed at whatever the person was actually looking at
+    // (shareMatch[1]) — if that's a repost, the recipient should still see
+    // "reposted by X". The count is attributed to the underlying content
+    // (resolveContentId) so it matches likes/comments/gifts and doesn't
+    // reset to zero for every repost of something already popular.
+    const contentId = await resolveContentId(env, shareMatch[1]);
     // Row starts uncompleted — this only means a share link was generated,
     // not that it went anywhere. The count below (and everywhere else that
     // shows a share count) only counts completed=1, so tapping Share and
@@ -1526,11 +1555,11 @@ async function handle(request, env, ctx) {
     // is what actually counts it, once the share genuinely happens.
     await env.DB.prepare(
       "INSERT INTO shares (id, video_id, user_id, created_at, completed) VALUES (?, ?, ?, ?, 0)"
-    ).bind(shareId, shareMatch[1], user.id, now()).run();
+    ).bind(shareId, contentId, user.id, now()).run();
 
     const c = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM shares WHERE video_id = ? AND completed = 1"
-    ).bind(shareMatch[1]).first();
+    ).bind(contentId).first();
     // ?s= is this specific share event, not just the video — it's how the
     // person who opens the link finds out who sent it to them.
     return json({ count: c.n, shareId, url: `${url.origin}/v/${shareMatch[1]}?s=${shareId}` });
@@ -1631,7 +1660,15 @@ async function handle(request, env, ctx) {
   const repostMatch = /^\/api\/videos\/([\w-]+)\/repost$/.exec(path);
   if (repostMatch && method === "POST") {
     requireUser(user);
-    const original = await env.DB.prepare("SELECT * FROM videos WHERE id = ?").bind(repostMatch[1]).first();
+    const target = await env.DB.prepare("SELECT * FROM videos WHERE id = ?").bind(repostMatch[1]).first();
+    if (!target) return err("Video not found", 404);
+    // Reposting a repost points at the TRUE original, not at that repost —
+    // otherwise reposts could chain, and the engagement-rollup in FEED_SQL
+    // (COALESCE(v.repost_of, v.id), one hop) would stop finding the real
+    // content two hops down.
+    const original = target.repost_of
+      ? await env.DB.prepare("SELECT * FROM videos WHERE id = ?").bind(target.repost_of).first()
+      : target;
     if (!original) return err("Video not found", 404);
 
     const dupe = await env.DB.prepare(
@@ -1659,6 +1696,8 @@ async function handle(request, env, ctx) {
       if (String(e.message || "").includes("UNIQUE")) return err("You already reposted this", 409);
       throw e;
     }
+
+    await notify(env, ctx, original.user_id, user.id, "repost", { videoId: original.id });
 
     const row = await env.DB.prepare(FEED_SQL + " WHERE v.id = ?").bind(user.id, user.id, id).first();
     return json({ video: shapeVideo(row) }, 201);
@@ -2017,11 +2056,15 @@ async function handle(request, env, ctx) {
   // Send a gift on a video.
   if (path === "/api/gifts" && method === "POST") {
     requireUser(user);
-    const { videoId, giftKey } = await request.json();
+    const { videoId: rawVideoId, giftKey } = await request.json();
 
     const gift = giftByKey(giftKey);
     if (!gift) return err("Unknown gift");
 
+    // Gifting a repost has to pay the actual creator, not whoever reposted
+    // it — resolve to the underlying content before anything else touches
+    // videoId.
+    const videoId = await resolveContentId(env, rawVideoId);
     const video = await env.DB.prepare(`
       SELECT v.id, v.user_id, u.status FROM videos v
       JOIN users u ON u.id = v.user_id WHERE v.id = ?

@@ -948,12 +948,37 @@ async function loadFeed(reset = true) {
   state.loading = true;
   if (reset) { state.videos = []; state.cursor = null; }
 
+  const wrap = document.querySelector(".feed");
+  const qs = new URLSearchParams({ tab: state.feedTab, limit: "15" });
+  if (state.cursor) qs.set("cursor", state.cursor);
+
+  // Opening the app shouldn't wait on the network if a recent copy of this
+  // exact page is already sitting in sw.js's API_CACHE — render it right
+  // away, then let the real fetch below quietly refresh state and the
+  // cache for next time. Only for the very first page; pagination always
+  // goes straight to the network since a stale "load more" page would show
+  // videos out of order with what's already on screen.
+  let fromCache = false;
+  if (reset && wrap && "caches" in window) {
+    try {
+      const cache = await caches.open("geereel-api-v1");
+      const cached = await cache.match(new Request(`${location.origin}/api/feed?${qs}`));
+      const r = cached && await cached.clone().json();
+      if (r?.videos?.length) {
+        state.videos = r.videos;
+        wrap.innerHTML = "";
+        r.videos.forEach(v => wrap.appendChild(v.isAd ? adSlide(v) : slide(v)));
+        observePlayback();
+        fromCache = true;
+      }
+    } catch {}
+  }
+
   // Sized and positioned exactly like a real .slide (not design-4.css's
   // generic position:absolute version) so nothing shifts when the real
   // first video swaps in — a skeleton in a different box than its content
   // is the "jump" that made this look broken rather than loading.
-  const wrap = document.querySelector(".feed");
-  if (reset && wrap) wrap.innerHTML = `
+  if (!fromCache && reset && wrap) wrap.innerHTML = `
     <div class="slide">
       <i class="sk sk-video" style="position:absolute;inset:0;border-radius:0"></i>
       <div class="overlay" style="display:flex;align-items:center;gap:10px">
@@ -963,9 +988,13 @@ async function loadFeed(reset = true) {
     </div>`;
 
   try {
-    const qs = new URLSearchParams({ tab: state.feedTab, limit: "15" });
-    if (state.cursor) qs.set("cursor", state.cursor);
     const r = await api(`/feed?${qs}`);
+
+    // Something's already on screen from the cache — just bring state up to
+    // date for pagination/tab-switching; don't yank the feed out from under
+    // someone who may already be scrolling it.
+    if (fromCache) { state.videos = r.videos; state.cursor = r.nextCursor; return; }
+
     state.videos.push(...r.videos);
     state.cursor = r.nextCursor;
 
@@ -979,7 +1008,9 @@ async function loadFeed(reset = true) {
       }
     }
   } catch (e) {
-    if (wrap) wrap.innerHTML = `<p class="empty">${e.message}</p>`;
+    // If we already showed cached content, an offline/failed refresh just
+    // means it stays stale — it must not be replaced with an error screen.
+    if (!fromCache && wrap) wrap.innerHTML = `<p class="empty">${e.message}</p>`;
   } finally { state.loading = false; }
 }
 
@@ -3763,7 +3794,7 @@ function notificationsPage() {
     const rest = {
       like: "liked your video", comment: "commented on your video",
       reply: "replied to your comment", follow: "started following you",
-      gift: "sent you a gift",
+      gift: "sent you a gift", repost: "reposted your video",
     }[n.type] || "did something";
     return `<b>${name}</b> ${rest}`;
   };

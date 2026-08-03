@@ -5,6 +5,10 @@
 // see the messages and videos you already loaded, instead of a blank/error
 // screen.
 
+// Cache Storage is shared per-origin, not per-context — index.html's
+// loadFeed() opens this same cache by this same literal name to render the
+// first feed page instantly on app open (stale-while-revalidate) instead of
+// waiting on the network. If this name changes, update it there too.
 const API_CACHE = "geereel-api-v1";
 const VIDEO_CACHE = "geereel-offline-videos-v1";
 
