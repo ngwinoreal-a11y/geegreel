@@ -1690,6 +1690,18 @@ function uploadPage() {
           transition:opacity .15s ease;
           background:radial-gradient(ellipse at center, rgba(0,0,0,0) 35%, rgba(0,0,0,.85) 100%)"></div>
 
+        <!-- A rough, equal-margin guide for how much of the frame the feed's
+             own top/bottom black bands will end up covering — not a pixel
+             match for design-feed.css's actual (deliberately unequal)
+             --feed-top/--feed-bottom, this screen isn't trying to preview
+             the exact chrome, just give a sense of safe framing so a
+             close-up shot doesn't end up with its subject crowding an edge
+             that's about to sit under a band. Doesn't affect the actual
+             recording — beginRecording()'s canvas draw loop still captures
+             the full, uncropped frame regardless of this overlay. -->
+        <div style="position:absolute;top:0;left:0;right:0;height:8%;z-index:1;pointer-events:none;background:rgba(0,0,0,.4)"></div>
+        <div style="position:absolute;bottom:0;left:0;right:0;height:8%;z-index:1;pointer-events:none;background:rgba(0,0,0,.4)"></div>
+
         <div id="deny" style="position:absolute;inset:0;display:none;place-items:center;padding:0 32px;text-align:center">
           <div>
             <p id="denymsg" style="color:#fff;font-size:14px;line-height:1.5"></p>

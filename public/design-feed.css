@@ -126,6 +126,14 @@
   width: 100%; height: auto;
   max-height: calc(100% - var(--feed-top) - var(--feed-bottom));
   object-fit: contain;
+  /* A 9:16 clip fills this box exactly, so this never shows for those —
+     but anything shot in a rounder ratio (a phone held for a close-up,
+     for instance) doesn't reach the box's full height, and centring it
+     (the object-fit default) splits the leftover space into a gap above
+     AND below the picture. Anchoring to the top instead sends all of
+     that leftover space to the bottom, where it merges into the already-
+     black band there instead of reading as a second, separate gap. */
+  object-position: center top;
   background: #000;
 }
 
@@ -170,6 +178,17 @@
   position: absolute;
   left: 16px; right: 76px;   /* clears the rail */
   bottom: 84px;              /* clears the 78px nav */
+  height: auto;              /* design.css's base rule sets a fixed
+                                 height (--feed-bottom, 132px) sized for a
+                                 full-width black band — left alone here,
+                                 that 132px box stayed under this bottom:
+                                 84px position, and the (shorter) actual
+                                 content sat at its top, leaving a slab of
+                                 unused black between the content and the
+                                 box's own bottom edge — the "black box
+                                 with a small drawer of content inside it"
+                                 look. This box is exactly as tall as its
+                                 content now, nothing more. */
   z-index: 4;
   text-shadow: 0 1px 8px rgba(0,0,0,.5);
 }
@@ -225,14 +244,25 @@
 .slide.ad .rail .gift,
 .slide.ad .rail .more { display: none; }
 
-/* Ad media follows the same containment rule as everything else, so a
-   sponsor's differently-shaped image is never cropped either — which also
-   means they can see what their placement will actually look like. */
+/* An ad's own bottom content (sponsor tag, name, one caption line, the CTA
+   button) is lighter than a real post's (author row, up to two caption
+   lines, sound line) — it doesn't need the full --feed-bottom reserved for
+   that, just enough to clear the nav underneath it and hold its own
+   content. Less black, more of the actual creative visible — which is
+   also just more useful to the advertiser. */
+:root { --ad-bottom: 96px; }
+
+/* Ad media is never cropped either, same reasoning as a real post — a
+   sponsor's differently-shaped image should show what their placement
+   actually looks like, not a crop of it — just against a smaller bottom
+   band. object-position anchors any letterboxing to the top for the same
+   reason as section B: a leftover gap belongs merged into the black band
+   at the bottom, not split into a second one floating above it. */
 .slide.ad img, .slide.ad video {
   position: absolute;
-  top: var(--feed-top); bottom: var(--feed-bottom);
+  top: var(--feed-top); bottom: var(--ad-bottom);
   left: 0; right: 0;
   width: 100%; height: auto;
-  max-height: calc(100% - var(--feed-top) - var(--feed-bottom));
-  object-fit: contain; background: #000;
+  max-height: calc(100% - var(--feed-top) - var(--ad-bottom));
+  object-fit: contain; object-position: center top; background: #000;
 }
