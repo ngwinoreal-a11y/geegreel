@@ -213,10 +213,14 @@ button:active { transform: scale(.9); opacity: .85; }
 }
 .slide.cover video { object-fit: cover; }
 
-/* Caption sits on the video, clear of the rail and the nav. */
+/* A real black band under the author/caption/sound block, not floating
+   text over the video — its height is just whatever that content needs,
+   which is why the caption clamps to 3 lines: without a cap here, a long
+   caption would push the band arbitrarily tall. Full width so it reads as
+   a deliberate zone, not a text box. */
 .overlay {
-  position: absolute; left: 16px; right: 88px; bottom: 88px; z-index: 2;
-  text-shadow: 0 1px 8px rgba(0,0,0,.7);
+  position: absolute; left: 0; right: 0; bottom: 88px; z-index: 2;
+  background: #000; padding: 10px 88px 10px 16px;
 }
 .caption { font-size: 14px; line-height: 1.4; margin: 0; }
 .caption.clamped {
@@ -265,6 +269,11 @@ button:active { transform: scale(.9); opacity: .85; }
 /* ============================================================================
    5. CHROME — top bar and feed tabs
    ========================================================================= */
+.chrome-backdrop {
+  position: absolute; top: 0; left: 0; right: 0; height: 100px; z-index: 4;
+  background: #000; pointer-events: none;
+}
+
 .topbar {
   position: absolute; top: 0; left: 0; right: 0; z-index: 5;
   display: flex; align-items: center; justify-content: space-between;

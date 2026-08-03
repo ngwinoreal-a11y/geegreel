@@ -4168,6 +4168,12 @@ function renderInner() {
 
   const isMsg = state.tab === "messages";
 
+  // A real black band behind the status bar/topbar/tabs, not transparent
+  // chrome floating over the video — matches the caption band at the
+  // bottom (see .overlay). Sits under .topbar/.tabs (z-index 5) but over
+  // the feed's videos.
+  if (!isMsg) app.appendChild($(`<div class="chrome-backdrop"></div>`));
+
   app.appendChild($(`
     <div class="topbar">
       <button class="me-btn" id="me">${avatarInner(store.user)}</button>
