@@ -144,6 +144,10 @@ const I = {
   user: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>`,
   more: `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`,
   send: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2 21 22 12 2 3l0 7 13 2-13 2z"/></svg>`,
+  // "Buy me a coffee"-style branding for anything money/earnings related —
+  // replaces a literal $/wallet glyph so it reads as "support this
+  // creator" rather than a bank icon.
+  coffee: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/></svg>`,
 };
 
 // "8h", "5d" — matches how TikTok stamps comments
@@ -2548,8 +2552,8 @@ function profilePage() {
         </div>
         ${isMe ? `
           <button id="wallet" style="width:38px;height:38px;border-radius:50%;background:var(--surface);
-            border:1px solid var(--border);display:grid;place-items:center;font-size:17px">
-            🪙
+            border:1px solid var(--border);display:grid;place-items:center;color:var(--accent)">
+            ${I.coffee}
           </button>` : ""}
       </div>
 
@@ -3642,7 +3646,10 @@ function walletPage() {
 
       <div style="background:linear-gradient(135deg,#1C1C1E,#0A0A0A);border:1px solid var(--border);
                   border-radius:16px;padding:20px;margin-bottom:18px">
-        <p style="margin:0;font-size:12px;color:var(--muted)">Gift balance</p>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
+          <span style="color:var(--accent)">${I.coffee}</span>
+          <p style="margin:0;font-size:12px;color:var(--muted)">Your revenue</p>
+        </div>
         <p style="margin:6px 0 0;font-family:var(--mono);font-size:32px;color:#fff">${money(w.giftBalanceCents)}</p>
         <p style="margin:8px 0 0;font-size:11px;color:var(--faint)">
           From ${fmt(w.giftsReceived)} gift${w.giftsReceived === 1 ? "" : "s"} ·
@@ -3829,7 +3836,16 @@ function monetizationPage() {
         ${bar("Videos posted", s.videos, s.requirements.videos)}
 
         ${s.eligible && app?.status !== "pending" ? `
-          <p class="sect">Payout method</p>
+          <p class="sect">Payment profile</p>
+          <div style="border:1px dashed var(--border);border-radius:14px;padding:18px;text-align:center;margin-bottom:16px">
+            <div style="width:44px;height:44px;border-radius:50%;background:rgba(245,166,35,.15);color:var(--accent);
+              display:grid;place-items:center;margin:0 auto 10px">${I.coffee || I.gift}</div>
+            <p style="margin:0;font-size:14px;font-weight:700">Set up how you get paid</p>
+            <p style="margin:6px 0 0;font-size:12px;color:var(--muted);line-height:1.5">
+              Choose a method and add your details — this is what we'll use once your
+              balance passes ${money(s.earnings.minPayoutCents)}.
+            </p>
+          </div>
           <div class="seg" id="pm">
             <button data-v="mobile_money" class="on">Mobile Money</button>
             <button data-v="bank">Bank</button>
@@ -3838,7 +3854,7 @@ function monetizationPage() {
           <div class="field" style="margin-top:10px">
             <input id="pd" placeholder="Phone number, account or email">
           </div>
-          <button class="btn-primary" id="apply">Apply for monetization</button>
+          <button class="btn-primary" id="apply" style="background:var(--accent);color:var(--on-accent)">Apply for monetization</button>
           <p class="err" id="err" style="display:none"></p>
         ` : !s.eligible ? `
           <p style="font-size:13px;color:var(--muted);margin-top:20px;line-height:1.5">
