@@ -4,10 +4,21 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- iOS permission prompts. Without these strings the OS kills the app on
+	     first camera/mic/photo access. Camera+mic: recording videos and voice
+	     notes; photo library: picking a video/photo/avatar to upload. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Belople needs the camera to record and post videos.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Belople needs the microphone to record video sound and voice messages.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Belople needs your photos to let you pick a video, photo, or profile picture to share.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Belople saves videos and photos you download to your library.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Belople App</string>
+	<string>Belople</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

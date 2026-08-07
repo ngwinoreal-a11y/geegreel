@@ -5,12 +5,12 @@ import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
+import '../../auth/application/auth_controller.dart';
 import '../data/sound_repository.dart';
 
-/// Ports design-5.css section E (sound page — state (b), now real since the
-/// backend supports it): title/author/use-count, grid of videos using it.
-/// "Use this sound" (feeding into the composer) is deferred until the
-/// composer supports attaching a soundId.
+/// Ports design-5.css section E (sound page): title/author/use-count, a grid
+/// of videos using it, and "Use this sound" — which opens the composer with
+/// this sound attached (the video published there is tagged with it).
 class SoundScreen extends ConsumerWidget {
   const SoundScreen({super.key, required this.soundId});
   final String soundId;
@@ -57,6 +57,26 @@ class SoundScreen extends ConsumerWidget {
                         ),
                       ),
                     ],
+                  ),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.pageHorizontal, 0, AppSpacing.pageHorizontal, 16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        if (ref.read(isLoggedInProvider)) {
+                          context.push('/compose?sound=$soundId');
+                        } else {
+                          context.push('/login');
+                        }
+                      },
+                      icon: const Icon(Icons.videocam, size: 18),
+                      label: const Text('Use this sound'),
+                    ),
                   ),
                 ),
               ),

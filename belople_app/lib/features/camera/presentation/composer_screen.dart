@@ -20,7 +20,11 @@ enum _ComposerMode { video, photo, text }
 /// via the OS camera UI, caption, upload with progress, land in the feed)
 /// end to end against the real backend.
 class ComposerScreen extends ConsumerStatefulWidget {
-  const ComposerScreen({super.key});
+  const ComposerScreen({super.key, this.soundId});
+
+  /// When arriving from a sound page's "Use this sound", the picked video is
+  /// attached to this sound on publish. Locks the composer to video mode.
+  final String? soundId;
 
   @override
   ConsumerState<ComposerScreen> createState() => _ComposerScreenState();
@@ -33,10 +37,13 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
   VideoPlayerController? _previewController;
   final _captionController = TextEditingController();
   bool _uploading = false;
+  bool _soundShareable = false;
   double _progress = 0;
   String? _error;
 
   final _picker = ImagePicker();
+
+  bool get _usingSound => widget.soundId != null;
 
   @override
   void dispose() {
@@ -76,6 +83,8 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
         await repo.uploadVideo(
           file: _videoFile!,
           caption: _captionController.text.trim(),
+          soundId: widget.soundId,
+          soundShareable: _soundShareable,
           onProgress: (sent, total) {
             if (total > 0 && mounted) setState(() => _progress = sent / total);
           },
@@ -126,28 +135,49 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                _ModeChip(
-                  label: 'Video',
-                  selected: _mode == _ComposerMode.video,
-                  onTap: () => setState(() => _mode = _ComposerMode.video),
+            if (_usingSound)
+              Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(AppRadii.lg),
                 ),
-                const SizedBox(width: 8),
-                _ModeChip(
-                  label: 'Photo',
-                  selected: _mode == _ComposerMode.photo,
-                  onTap: () => setState(() => _mode = _ComposerMode.photo),
+                child: Row(
+                  children: [
+                    const Icon(Icons.music_note, color: AppColors.accent, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text('Using this sound',
+                          style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                _ModeChip(
-                  label: 'Text',
-                  selected: _mode == _ComposerMode.text,
-                  onTap: () => setState(() => _mode = _ComposerMode.text),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
+              )
+            else ...[
+              Row(
+                children: [
+                  _ModeChip(
+                    label: 'Video',
+                    selected: _mode == _ComposerMode.video,
+                    onTap: () => setState(() => _mode = _ComposerMode.video),
+                  ),
+                  const SizedBox(width: 8),
+                  _ModeChip(
+                    label: 'Photo',
+                    selected: _mode == _ComposerMode.photo,
+                    onTap: () => setState(() => _mode = _ComposerMode.photo),
+                  ),
+                  const SizedBox(width: 8),
+                  _ModeChip(
+                    label: 'Text',
+                    selected: _mode == _ComposerMode.text,
+                    onTap: () => setState(() => _mode = _ComposerMode.text),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+            ],
 
             if (_mode == _ComposerMode.video) ...[
               if (_previewController != null && _previewController!.value.isInitialized)
@@ -177,6 +207,16 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
                   ),
                 ],
               ),
+              if (!_usingSound && _videoFile != null)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _soundShareable,
+                  onChanged: (v) => setState(() => _soundShareable = v),
+                  title: Text('Let others use this sound',
+                      style: AppTypography.sans(fontSize: 14)),
+                  subtitle: Text('Your audio becomes a sound people can add to their videos',
+                      style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
+                ),
             ] else if (_mode == _ComposerMode.photo) ...[
               if (_imageFile != null)
                 ClipRRect(

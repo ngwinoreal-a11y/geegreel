@@ -124,7 +124,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/compose',
-        builder: (context, state) => const ComposerScreen(),
+        builder: (context, state) =>
+            ComposerScreen(soundId: state.uri.queryParameters['sound']),
       ),
     ],
   );

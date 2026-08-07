@@ -15,11 +15,17 @@ class UploadRepository {
     required File file,
     required String caption,
     String visibility = 'public',
+    String? soundId,
+    bool soundShareable = false,
     void Function(int sent, int total)? onProgress,
   }) async {
     final formData = FormData.fromMap({
       'caption': caption,
       'visibility': visibility,
+      // A video either uses an existing sound OR opts in to become a new
+      // shareable sound — never both (mirrors the /api/videos handler).
+      if (soundId != null) 'soundId': soundId,
+      if (soundId == null && soundShareable) 'soundShareable': '1',
       'video': await MultipartFile.fromFile(file.path, filename: 'upload.mp4'),
     });
     await _dio.post('/videos', data: formData, onSendProgress: onProgress);
