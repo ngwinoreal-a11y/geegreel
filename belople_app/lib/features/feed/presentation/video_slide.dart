@@ -1,0 +1,373 @@
+import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
+import '../../../core/network/api_client.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../core/widgets/app_avatar.dart';
+import '../data/video_model.dart';
+
+/// Ports design-feed.css: full-bleed video (object-fit: cover), no black
+/// band at top, a short black strip at the bottom behind the nav pill/scrub
+/// bar only — author/caption/rail float directly on the picture with a text
+/// shadow, same as the top icons.
+class VideoSlide extends StatefulWidget {
+  const VideoSlide({
+    super.key,
+    required this.video,
+    required this.isActive,
+    this.onLikeTap,
+    this.onFollowTap,
+    this.onAuthorTap,
+    this.onCommentTap,
+    this.onMoreTap,
+    this.onSoundTap,
+    this.onShareTap,
+  });
+
+  final VideoModel video;
+  final bool isActive;
+  final VoidCallback? onLikeTap;
+  final VoidCallback? onFollowTap;
+  final VoidCallback? onAuthorTap;
+  final VoidCallback? onCommentTap;
+  final VoidCallback? onMoreTap;
+  final VoidCallback? onSoundTap;
+  final VoidCallback? onShareTap;
+
+  @override
+  State<VideoSlide> createState() => _VideoSlideState();
+}
+
+class _VideoSlideState extends State<VideoSlide> with WidgetsBindingObserver {
+  VideoPlayerController? _controller;
+  bool _initialized = false;
+  bool _showHeartBurst = false;
+  bool _showPauseGlyph = false;
+  bool _pausedByLifecycle = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _setup();
+  }
+
+  // Backgrounding the app (home button, phone lock, app switch) has no
+  // effect on a plain VideoPlayerController by itself — without this it
+  // kept playing (and making sound) with the screen off. FeedScreen's
+  // RouteAware handles the in-app "navigated to another screen" case;
+  // this handles leaving the app entirely.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_controller == null) return;
+    if (state == AppLifecycleState.resumed) {
+      if (_pausedByLifecycle && widget.isActive) {
+        _controller!.play();
+      }
+      _pausedByLifecycle = false;
+    } else {
+      if (_controller!.value.isPlaying) {
+        _controller!.pause();
+        _pausedByLifecycle = true;
+      }
+    }
+  }
+
+  Future<void> _setup() async {
+    final url = mediaUrl(widget.video.videoUrl);
+    final controller = VideoPlayerController.networkUrl(Uri.parse(url));
+    _controller = controller;
+    await controller.initialize();
+    await controller.setLooping(true);
+    if (!mounted) return;
+    setState(() => _initialized = true);
+    if (widget.isActive) controller.play();
+  }
+
+  @override
+  void didUpdateWidget(covariant VideoSlide oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive != oldWidget.isActive && _controller != null) {
+      widget.isActive ? _controller!.play() : _controller!.pause();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  void _togglePlayPause() {
+    if (_controller == null) return;
+    setState(() {
+      if (_controller!.value.isPlaying) {
+        _controller!.pause();
+        _showPauseGlyph = true;
+      } else {
+        _controller!.play();
+        _showPauseGlyph = false;
+      }
+    });
+  }
+
+  void _onDoubleTap() {
+    if (!widget.video.liked) widget.onLikeTap?.call();
+    setState(() => _showHeartBurst = true);
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _showHeartBurst = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _togglePlayPause,
+      onDoubleTap: _onDoubleTap,
+      child: Stack(
+      fit: StackFit.expand,
+      children: [
+        Container(color: Colors.black),
+        if (_initialized && _controller != null)
+          FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: _controller!.value.size.width,
+              height: _controller!.value.size.height,
+              child: VideoPlayer(_controller!),
+            ),
+          )
+        else if (widget.video.thumbUrl != null)
+          Image.network(mediaUrl(widget.video.thumbUrl!), fit: BoxFit.cover),
+
+        // Pause glyph — design-5.css: faint, only while paused-by-tap.
+        if (_showPauseGlyph)
+          const Center(
+            child: Icon(Icons.pause, color: Colors.white38, size: 62),
+          ),
+
+        // Heart burst — double-tap-to-like feedback.
+        if (_showHeartBurst)
+          Center(
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.4, end: 1.2),
+              duration: const Duration(milliseconds: 350),
+              curve: Curves.elasticOut,
+              builder: (context, scale, child) => Transform.scale(
+                scale: scale,
+                child: child,
+              ),
+              child: const Icon(Icons.favorite, color: Colors.white, size: 100),
+            ),
+          ),
+
+        // C. bottom black strip (nav pill + scrub bar floor only)
+        const Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: 112,
+          child: ColoredBox(color: Colors.black),
+        ),
+
+        // D. author/caption, floating on the picture
+        Positioned(
+          left: 16,
+          right: 76,
+          bottom: 116,
+          child: DefaultTextStyle(
+            style: const TextStyle(
+              shadows: [Shadow(color: Colors.black87, blurRadius: 6)],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    GestureDetector(
+                      onTap: widget.onAuthorTap,
+                      child: AppAvatar(
+                        size: 44,
+                        imageUrl: widget.video.user.avatarUrl != null
+                            ? mediaUrl(widget.video.user.avatarUrl!)
+                            : null,
+                        displayName: widget.video.user.displayName,
+                        borderColor: Colors.white,
+                        borderWidth: 2,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: GestureDetector(
+                      onTap: widget.onAuthorTap,
+                      child: Text(
+                        widget.video.user.displayName,
+                        style: AppTypography.sans(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      ),
+                    ),
+                    if (widget.onFollowTap != null) ...[
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: widget.onFollowTap,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: widget.video.following
+                                ? Colors.white.withValues(alpha: 0.18)
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            widget.video.following ? 'Following' : 'Follow',
+                            style: AppTypography.sans(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: widget.video.following
+                                  ? Colors.white.withValues(alpha: 0.75)
+                                  : AppColors.onChrome,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                if (widget.video.caption.isNotEmpty) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    widget.video.caption,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.sans(fontSize: 14, color: Colors.white),
+                  ),
+                ],
+                if (widget.video.song != null) ...[
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                  onTap: widget.video.soundId != null ? widget.onSoundTap : null,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.music_note, size: 12, color: Colors.white),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          widget.video.song!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.sans(fontSize: 13, color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+
+        // Right-hand action rail
+        Positioned(
+          right: 10,
+          bottom: 116,
+          child: _ActionRail(
+            video: widget.video,
+            onLikeTap: widget.onLikeTap,
+            onCommentTap: widget.onCommentTap,
+            onMoreTap: widget.onMoreTap,
+            onShareTap: widget.onShareTap,
+          ),
+        ),
+      ],
+      ),
+    );
+  }
+}
+
+class _ActionRail extends StatelessWidget {
+  const _ActionRail({
+    required this.video,
+    this.onLikeTap,
+    this.onCommentTap,
+    this.onMoreTap,
+    this.onShareTap,
+  });
+  final VideoModel video;
+  final VoidCallback? onLikeTap;
+  final VoidCallback? onCommentTap;
+  final VoidCallback? onMoreTap;
+  final VoidCallback? onShareTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: onLikeTap,
+          child: _RailButton(
+            icon: video.liked ? Icons.favorite : Icons.favorite_border,
+            color: video.liked ? AppColors.badge : Colors.white,
+            count: video.counts.likes,
+          ),
+        ),
+        const SizedBox(height: 22),
+        GestureDetector(
+          onTap: onCommentTap,
+          child: _RailButton(icon: Icons.mode_comment, color: Colors.white, count: video.counts.comments),
+        ),
+        const SizedBox(height: 22),
+        _RailButton(icon: Icons.repeat_rounded, color: Colors.white, count: video.counts.reposts),
+        const SizedBox(height: 22),
+        GestureDetector(
+          onTap: onShareTap,
+          child: _RailButton(icon: Icons.reply_rounded, color: Colors.white, count: video.counts.shares),
+        ),
+        const SizedBox(height: 22),
+        _RailButton(icon: Icons.card_giftcard, color: AppColors.accent, count: video.giftCoins),
+        const SizedBox(height: 22),
+        GestureDetector(
+          onTap: onMoreTap,
+          child: const Icon(Icons.more_horiz, color: Colors.white, size: 28),
+        ),
+      ],
+    );
+  }
+}
+
+class _RailButton extends StatelessWidget {
+  const _RailButton({required this.icon, required this.color, required this.count});
+  final IconData icon;
+  final Color color;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 30, shadows: const [Shadow(color: Colors.black54, blurRadius: 6)]),
+        const SizedBox(height: 4),
+        Text(
+          _formatCount(count),
+          style: AppTypography.mono(fontSize: 12, color: Colors.white).copyWith(
+            shadows: const [Shadow(color: Colors.black87, blurRadius: 6)],
+          ),
+        ),
+      ],
+    );
+  }
+
+  static String _formatCount(int n) {
+    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
+    return '$n';
+  }
+}

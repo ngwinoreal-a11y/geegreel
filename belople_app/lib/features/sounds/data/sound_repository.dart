@@ -1,0 +1,50 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/network/api_client.dart';
+import '../../feed/data/video_model.dart';
+
+class SoundModel {
+  const SoundModel({required this.id, required this.title, this.author, this.uses = 0});
+  final String id;
+  final String title;
+  final String? author;
+  final int uses;
+
+  factory SoundModel.fromJson(Map<String, dynamic> json) => SoundModel(
+        id: json['id'].toString(),
+        title: json['title'] as String? ?? 'Original sound',
+        author: json['author'] as String?,
+        uses: (json['uses'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class SoundDetail {
+  const SoundDetail({required this.sound, required this.videos});
+  final SoundModel sound;
+  final List<VideoModel> videos;
+}
+
+/// `GET /api/sounds/:id` — see src/index.js.
+class SoundRepository {
+  SoundRepository(this._dio);
+  final Dio _dio;
+
+  Future<SoundDetail> fetch(String id) async {
+    final res = await _dio.get('/sounds/$id');
+    final data = res.data as Map<String, dynamic>;
+    return SoundDetail(
+      sound: SoundModel.fromJson(data['sound'] as Map<String, dynamic>),
+      videos: (data['videos'] as List<dynamic>? ?? [])
+          .map((v) => VideoModel.fromJson(v as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+final soundRepositoryProvider = Provider<SoundRepository>((ref) {
+  return SoundRepository(ref.watch(dioProvider));
+});
+
+final soundProvider = FutureProvider.family.autoDispose<SoundDetail, String>((ref, id) {
+  return ref.watch(soundRepositoryProvider).fetch(id);
+});
