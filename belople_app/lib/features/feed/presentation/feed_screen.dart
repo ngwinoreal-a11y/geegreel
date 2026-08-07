@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +13,7 @@ import '../../../core/widgets/skeleton.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../overlays/presentation/comments_sheet.dart';
 import '../../overlays/presentation/more_options_sheet.dart';
+import '../../wallet/presentation/gift_sheet.dart';
 import '../application/feed_controller.dart';
 import '../data/feed_repository.dart';
 import 'video_slide.dart';
@@ -106,6 +108,26 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
     }
   }
 
+  /// Reposts a video to the caller's profile, surfacing the "already
+  /// reposted" case the backend reports as a 409 (design-4.css copy rule).
+  Future<void> _repost(String videoId) async {
+    try {
+      await ref.read(feedRepositoryProvider).repost(videoId);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Reposted to your profile')));
+      }
+    } on DioException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.response?.statusCode == 409
+              ? 'You already reposted this'
+              : "Couldn't repost — check your connection"),
+        ));
+      }
+    }
+  }
+
   void _onPageChanged(int index) {
     setState(() => _activeIndex = index);
     final state = ref.read(feedControllerProvider(_tab)).valueOrNull;
@@ -169,6 +191,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                         ? () => context.push('/sound/${video.soundId}')
                         : null,
                     onShareTap: () => _share(video.id),
+                    onGiftTap: () =>
+                        _requireLogin(() => showGiftSheet(context, videoId: video.id)),
+                    onRepostTap: () => _requireLogin(() => _repost(video.id)),
                   );
                 },
               );

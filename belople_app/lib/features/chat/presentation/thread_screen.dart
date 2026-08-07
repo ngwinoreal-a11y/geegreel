@@ -158,7 +158,13 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
                   itemCount: thread.messages.length,
                   itemBuilder: (context, i) {
                     final msg = thread.messages[i];
-                    return _Bubble(message: msg, mine: msg.outgoing);
+                    return _Bubble(
+                      message: msg,
+                      mine: msg.outgoing,
+                      onReact: (emoji) => ref
+                          .read(chatThreadControllerProvider(widget.username).notifier)
+                          .react(msg.id, emoji),
+                    );
                   },
                 ),
               ),
@@ -199,47 +205,120 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
 }
 
 class _Bubble extends StatelessWidget {
-  const _Bubble({required this.message, required this.mine});
+  const _Bubble({required this.message, required this.mine, required this.onReact});
   final MessageModel message;
   final bool mine;
+  final ValueChanged<String> onReact;
 
-  @override
-  Widget build(BuildContext context) {
+  static const _reactionEmojis = ['❤️', '😂', '👍', '😮', '😢', '🙏'];
+
+  /// Long-press a bubble to react — opens a compact emoji row (matches the
+  /// web app's message-reaction picker). Tapping an emoji toggles it.
+  void _showReactionPicker(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(borderRadius: AppRadii.sheetTop),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              for (final emoji in _reactionEmojis)
+                GestureDetector(
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    onReact(emoji);
+                  },
+                  child: Text(emoji, style: const TextStyle(fontSize: 30)),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _content(BuildContext context) {
     if (message.audioUrl != null) {
       return _VoiceBubble(message: message, mine: mine);
     }
     if (message.imageUrl != null) {
-      return Align(
-        alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(AppRadii.lg),
-            child: Image.network(
-              mediaUrl(message.imageUrl!),
-              width: 200,
-              fit: BoxFit.cover,
-            ),
-          ),
-        ),
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        child: Image.network(mediaUrl(message.imageUrl!), width: 200, fit: BoxFit.cover),
       );
     }
-    return Align(
-      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
-        decoration: BoxDecoration(
-          color: mine ? AppColors.accent : AppColors.surface,
-          borderRadius: BorderRadius.circular(AppRadii.pill),
-        ),
-        child: Text(
-          message.body ?? '',
-          style: AppTypography.sans(
-            fontSize: 14,
-            color: mine ? AppColors.onAccent : AppColors.text,
-          ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+      decoration: BoxDecoration(
+        color: mine ? AppColors.accent : AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.pill),
+      ),
+      child: Text(
+        message.body ?? '',
+        style: AppTypography.sans(fontSize: 14, color: mine ? AppColors.onAccent : AppColors.text),
+      ),
+    );
+  }
+
+  /// Collapses the per-user reaction list into emoji → count for display.
+  Map<String, int> _groupedReactions() {
+    final counts = <String, int>{};
+    for (final r in message.reactions) {
+      counts[r.emoji] = (counts[r.emoji] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final grouped = _groupedReactions();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Align(
+        alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+        child: Column(
+          crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            GestureDetector(
+              onLongPress: () => _showReactionPicker(context),
+              child: _content(context),
+            ),
+            if (grouped.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Wrap(
+                  spacing: 4,
+                  children: [
+                    for (final entry in grouped.entries)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.border),
+                        ),
+                        child: Text(
+                          entry.value > 1 ? '${entry.key} ${entry.value}' : entry.key,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            if (mine && message.audioUrl == null)
+              Padding(
+                padding: const EdgeInsets.only(right: 4, top: 2),
+                child: Icon(
+                  message.read ? Icons.done_all : Icons.done,
+                  size: 14,
+                  color: message.read ? AppColors.tickRead : AppColors.tickSent,
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -292,19 +371,16 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
   Widget build(BuildContext context) {
     final mine = widget.mine;
     final fg = mine ? AppColors.onAccent : AppColors.text;
-    return Align(
-      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
-        decoration: BoxDecoration(
-          color: mine ? AppColors.accent : AppColors.surface,
-          borderRadius: BorderRadius.circular(AppRadii.pill),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+      decoration: BoxDecoration(
+        color: mine ? AppColors.accent : AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
             GestureDetector(
               onTap: _toggle,
               child: StreamBuilder<PlayerState>(
@@ -325,8 +401,7 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
             Text(_durationLabel(), style: AppTypography.sans(fontSize: 12, color: fg)),
           ],
         ),
-      ),
-    );
+      );
   }
 
   String _durationLabel() {

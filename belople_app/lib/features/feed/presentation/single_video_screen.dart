@@ -1,10 +1,15 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../overlays/presentation/comments_sheet.dart';
+import '../../overlays/presentation/more_options_sheet.dart';
+import '../../wallet/presentation/gift_sheet.dart';
+import '../data/feed_repository.dart';
 import '../data/video_model.dart';
 import 'video_slide.dart';
 
@@ -44,6 +49,52 @@ class SingleVideoScreen extends ConsumerWidget {
                 ref.invalidate(singleVideoProvider(videoId));
               },
               onCommentTap: () => showCommentsSheet(context, videoId: video.id),
+              onAuthorTap: () => context.push('/profile/${video.user.username}'),
+              onGiftTap: () {
+                if (!ref.read(isLoggedInProvider)) {
+                  context.push('/login');
+                } else {
+                  showGiftSheet(context, videoId: video.id);
+                }
+              },
+              onRepostTap: () async {
+                if (!ref.read(isLoggedInProvider)) {
+                  context.push('/login');
+                  return;
+                }
+                try {
+                  await ref.read(feedRepositoryProvider).repost(video.id);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Reposted to your profile')));
+                  }
+                } on DioException catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(e.response?.statusCode == 409
+                          ? 'You already reposted this'
+                          : "Couldn't repost"),
+                    ));
+                  }
+                }
+              },
+              onShareTap: () async {
+                try {
+                  final url = await ref.read(feedRepositoryProvider).share(video.id);
+                  await Clipboard.setData(ClipboardData(text: url));
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(const SnackBar(content: Text('Link copied')));
+                  }
+                } catch (_) {}
+              },
+              onMoreTap: () {
+                if (!ref.read(isLoggedInProvider)) {
+                  context.push('/login');
+                } else {
+                  showMoreOptionsSheet(context, ref, video: video);
+                }
+              },
             ),
             SafeArea(
               child: IconButton(

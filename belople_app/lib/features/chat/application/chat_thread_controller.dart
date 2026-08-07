@@ -82,6 +82,15 @@ class ChatThreadController extends FamilyAsyncNotifier<ThreadData, String>
     }
   }
 
+  Future<void> react(String messageId, String emoji) async {
+    try {
+      await ref.read(chatRepositoryProvider).reactToMessage(messageId: messageId, emoji: emoji);
+      await _poll();
+    } catch (_) {
+      // Reaction is best-effort; the next poll reconciles regardless.
+    }
+  }
+
   Future<void> respond({required bool accept}) async {
     final current = state.valueOrNull;
     if (current == null) return;

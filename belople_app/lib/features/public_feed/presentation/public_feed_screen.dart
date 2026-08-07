@@ -11,7 +11,9 @@ import '../../auth/application/auth_controller.dart';
 import '../../feed/data/feed_repository.dart';
 import '../../feed/data/video_model.dart';
 import '../application/public_feed_controller.dart';
+import '../data/post_comment_repository.dart';
 import '../data/post_model.dart';
+import 'post_comments_sheet.dart';
 
 /// Ports public.js's mountPublic(): an Instagram-like photo feed with one
 /// video spliced in after every 3 photo posts (drawn from the For You feed,
@@ -173,7 +175,25 @@ class _PostCard extends ConsumerWidget {
                   ),
                 ),
                 if (!post.following)
-                  Text('Follow', style: AppTypography.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.verified)),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () async {
+                      if (!ref.read(isLoggedInProvider)) {
+                        context.push('/login');
+                        return;
+                      }
+                      try {
+                        await ref.read(feedRepositoryProvider).setFollowing(post.user.id, true);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Following @${post.user.username}')));
+                        }
+                      } catch (_) {}
+                    },
+                    child: Text('Follow',
+                        style: AppTypography.sans(
+                            fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.verified)),
+                  ),
               ],
             ),
           ),
@@ -212,13 +232,37 @@ class _PostCard extends ConsumerWidget {
                   ]),
                 ),
                 const SizedBox(width: 20),
-                Icon(Icons.mode_comment_outlined, color: AppColors.text, size: 24),
-                const SizedBox(width: 7),
-                Text('${post.comments}', style: AppTypography.mono(fontSize: 15)),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => showPostCommentsSheet(context, postId: post.id),
+                  child: Row(children: [
+                    const Icon(Icons.mode_comment_outlined, color: AppColors.text, size: 24),
+                    const SizedBox(width: 7),
+                    Text('${post.comments}', style: AppTypography.mono(fontSize: 15)),
+                  ]),
+                ),
                 const SizedBox(width: 20),
-                const Icon(Icons.reply_rounded, color: AppColors.text, size: 24),
-                const SizedBox(width: 7),
-                Text('${post.shares}', style: AppTypography.mono(fontSize: 15)),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () async {
+                    if (!ref.read(isLoggedInProvider)) {
+                      context.push('/login');
+                      return;
+                    }
+                    try {
+                      await ref.read(postCommentRepositoryProvider).share(post.id);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context)
+                            .showSnackBar(const SnackBar(content: Text('Shared')));
+                      }
+                    } catch (_) {}
+                  },
+                  child: Row(children: [
+                    const Icon(Icons.reply_rounded, color: AppColors.text, size: 24),
+                    const SizedBox(width: 7),
+                    Text('${post.shares}', style: AppTypography.mono(fontSize: 15)),
+                  ]),
+                ),
               ],
             ),
           ),

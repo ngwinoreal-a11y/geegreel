@@ -7,6 +7,20 @@ import '../../auth/data/user_model.dart';
 /// precomputed `outgoing` boolean (`m.sender_id === user.id`) instead, so
 /// the bubble-alignment check has to use that directly rather than
 /// comparing ids client-side (there's no id to compare against here).
+/// One emoji reaction on a message. `mine` is the server-computed flag for
+/// whether the current user is the one who left it (see the thread fetch's
+/// `reactions` mapping in src/index.js).
+class MessageReaction {
+  const MessageReaction({required this.emoji, required this.mine});
+  final String emoji;
+  final bool mine;
+
+  factory MessageReaction.fromJson(Map<String, dynamic> json) => MessageReaction(
+        emoji: json['emoji'] as String? ?? '',
+        mine: json['mine'] as bool? ?? false,
+      );
+}
+
 class MessageModel {
   const MessageModel({
     required this.id,
@@ -19,6 +33,7 @@ class MessageModel {
     required this.createdAt,
     this.read = false,
     this.deleted = false,
+    this.reactions = const [],
   });
 
   final String id;
@@ -31,6 +46,7 @@ class MessageModel {
   final DateTime createdAt;
   final bool read;
   final bool deleted;
+  final List<MessageReaction> reactions;
 
   factory MessageModel.fromJson(Map<String, dynamic> json) => MessageModel(
         id: json['id'].toString(),
@@ -43,6 +59,9 @@ class MessageModel {
         createdAt: parseTimestamp(json['createdAt']),
         read: json['read'] as bool? ?? false,
         deleted: json['deleted'] as bool? ?? false,
+        reactions: (json['reactions'] as List<dynamic>? ?? [])
+            .map((r) => MessageReaction.fromJson(r as Map<String, dynamic>))
+            .toList(),
       );
 }
 

@@ -113,6 +113,12 @@ class ChatRepository {
 
   Future<void> ping() => _dio.post('/presence/ping');
 
+  /// `POST /api/messages/:messageId/react` with `{emoji}` — toggles: sending
+  /// the same emoji again removes it (matches the server's upsert/delete).
+  Future<void> reactToMessage({required String messageId, required String emoji}) {
+    return _dio.post('/messages/$messageId/react', data: {'emoji': emoji});
+  }
+
   /// `POST /api/messages/:otherId/accept|decline` — `otherId` MUST be the
   /// real user id (from `ThreadData.withUser.id`), not a username; the
   /// backend binds it directly against `conversation_status.user_a/user_b`

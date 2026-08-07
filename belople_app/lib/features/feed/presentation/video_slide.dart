@@ -22,6 +22,8 @@ class VideoSlide extends StatefulWidget {
     this.onMoreTap,
     this.onSoundTap,
     this.onShareTap,
+    this.onGiftTap,
+    this.onRepostTap,
   });
 
   final VideoModel video;
@@ -33,6 +35,8 @@ class VideoSlide extends StatefulWidget {
   final VoidCallback? onMoreTap;
   final VoidCallback? onSoundTap;
   final VoidCallback? onShareTap;
+  final VoidCallback? onGiftTap;
+  final VoidCallback? onRepostTap;
 
   @override
   State<VideoSlide> createState() => _VideoSlideState();
@@ -285,6 +289,8 @@ class _VideoSlideState extends State<VideoSlide> with WidgetsBindingObserver {
             onCommentTap: widget.onCommentTap,
             onMoreTap: widget.onMoreTap,
             onShareTap: widget.onShareTap,
+            onGiftTap: widget.onGiftTap,
+            onRepostTap: widget.onRepostTap,
           ),
         ),
       ],
@@ -300,12 +306,16 @@ class _ActionRail extends StatelessWidget {
     this.onCommentTap,
     this.onMoreTap,
     this.onShareTap,
+    this.onGiftTap,
+    this.onRepostTap,
   });
   final VideoModel video;
   final VoidCallback? onLikeTap;
   final VoidCallback? onCommentTap;
   final VoidCallback? onMoreTap;
   final VoidCallback? onShareTap;
+  final VoidCallback? onGiftTap;
+  final VoidCallback? onRepostTap;
 
   @override
   Widget build(BuildContext context) {
@@ -325,14 +335,20 @@ class _ActionRail extends StatelessWidget {
           child: _RailButton(icon: Icons.mode_comment, color: Colors.white, count: video.counts.comments),
         ),
         const SizedBox(height: 22),
-        _RailButton(icon: Icons.repeat_rounded, color: Colors.white, count: video.counts.reposts),
+        GestureDetector(
+          onTap: onRepostTap,
+          child: _RailButton(icon: Icons.repeat_rounded, color: Colors.white, count: video.counts.reposts),
+        ),
         const SizedBox(height: 22),
         GestureDetector(
           onTap: onShareTap,
           child: _RailButton(icon: Icons.reply_rounded, color: Colors.white, count: video.counts.shares),
         ),
         const SizedBox(height: 22),
-        _RailButton(icon: Icons.card_giftcard, color: AppColors.accent, count: video.giftCoins),
+        GestureDetector(
+          onTap: onGiftTap,
+          child: _RailButton(icon: Icons.card_giftcard, color: AppColors.accent, count: video.giftCoins),
+        ),
         const SizedBox(height: 22),
         GestureDetector(
           onTap: onMoreTap,
