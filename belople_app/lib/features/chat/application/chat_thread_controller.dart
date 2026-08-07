@@ -82,6 +82,11 @@ class ChatThreadController extends FamilyAsyncNotifier<ThreadData, String>
     }
   }
 
+  /// Fire-and-forget typing ping (the UI throttles how often this is called).
+  void notifyTyping() {
+    ref.read(chatRepositoryProvider).sendTyping(_who).ignore();
+  }
+
   Future<void> react(String messageId, String emoji) async {
     try {
       await ref.read(chatRepositoryProvider).reactToMessage(messageId: messageId, emoji: emoji);

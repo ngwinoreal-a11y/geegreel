@@ -8,6 +8,8 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
+import '../../sounds/data/sound_repository.dart';
+import '../../sounds/presentation/sound_picker_sheet.dart';
 import '../data/upload_repository.dart';
 
 enum _ComposerMode { video, photo, text }
@@ -38,12 +40,23 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
   final _captionController = TextEditingController();
   bool _uploading = false;
   bool _soundShareable = false;
+  SoundModel? _pickedSound;
   double _progress = 0;
   String? _error;
 
   final _picker = ImagePicker();
 
+  /// A sound attached from a sound page locks the composer to that sound;
+  /// otherwise the user can search-and-pick one here.
   bool get _usingSound => widget.soundId != null;
+
+  /// The sound id actually sent on publish (page-attached wins over picked).
+  String? get _effectiveSoundId => widget.soundId ?? _pickedSound?.id;
+
+  Future<void> _pickSound() async {
+    final sound = await showSoundPickerSheet(context);
+    if (sound != null) setState(() => _pickedSound = sound);
+  }
 
   @override
   void dispose() {
@@ -83,7 +96,7 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
         await repo.uploadVideo(
           file: _videoFile!,
           caption: _captionController.text.trim(),
-          soundId: widget.soundId,
+          soundId: _effectiveSoundId,
           soundShareable: _soundShareable,
           onProgress: (sent, total) {
             if (total > 0 && mounted) setState(() => _progress = sent / total);
@@ -207,7 +220,36 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
                   ),
                 ],
               ),
-              if (!_usingSound && _videoFile != null)
+              if (!_usingSound) ...[
+                const SizedBox(height: 6),
+                if (_pickedSound == null)
+                  OutlinedButton.icon(
+                    onPressed: _pickSound,
+                    icon: const Icon(Icons.music_note, size: 18),
+                    label: const Text('Add a sound'),
+                  )
+                else
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.music_note, color: AppColors.accent),
+                    title: Text(_pickedSound!.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w600)),
+                    subtitle: _pickedSound!.author != null
+                        ? Text(_pickedSound!.author!,
+                            style: AppTypography.sans(fontSize: 12, color: AppColors.muted))
+                        : null,
+                    trailing: IconButton(
+                      icon: const Icon(Icons.close, color: AppColors.muted),
+                      onPressed: () => setState(() => _pickedSound = null),
+                    ),
+                  ),
+              ],
+              // A video's audio can't both use an existing sound and become a
+              // new shareable one — offer the opt-in only when no sound is
+              // attached.
+              if (!_usingSound && _pickedSound == null && _videoFile != null)
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   value: _soundShareable,

@@ -8,6 +8,7 @@ import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../../auth/application/auth_controller.dart';
+import '../../feed/data/feed_repository.dart';
 import '../data/profile_repository.dart';
 
 /// Ports index.html's profilePage(): avatar/bio/stats, Edit-profile (self)
@@ -89,9 +90,39 @@ class ProfileScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 16),
                       if (!isSelf)
-                        ElevatedButton(
-                          onPressed: () {},
-                          child: Text(profile.following ? 'Following' : 'Follow'),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: () async {
+                                  if (me == null) {
+                                    context.push('/login');
+                                    return;
+                                  }
+                                  try {
+                                    await ref
+                                        .read(feedRepositoryProvider)
+                                        .setFollowing(profile.user.id, !profile.following);
+                                    ref.invalidate(profileProvider(handle));
+                                  } catch (_) {}
+                                },
+                                child: Text(profile.following ? 'Following' : 'Follow'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () {
+                                  if (me == null) {
+                                    context.push('/login');
+                                  } else {
+                                    context.push('/chat/${profile.user.username}');
+                                  }
+                                },
+                                child: const Text('Message'),
+                              ),
+                            ),
+                          ],
                         ),
                       const SizedBox(height: 20),
                     ],

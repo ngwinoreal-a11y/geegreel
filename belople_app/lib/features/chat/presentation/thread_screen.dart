@@ -35,12 +35,27 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
   Duration _recordElapsed = Duration.zero;
   Timer? _recordTimer;
   DateTime? _recordStartedAt;
+  DateTime? _lastTypingPing;
 
   @override
   void initState() {
     super.initState();
-    // Drives the send-icon <-> mic-icon swap in _Composer as the user types.
-    _controller.addListener(() => setState(() {}));
+    // Drives the send-icon <-> mic-icon swap in _Composer as the user types,
+    // and pings the typing endpoint at most once every 3s while composing.
+    _controller.addListener(() {
+      setState(() {});
+      _maybePingTyping();
+    });
+  }
+
+  void _maybePingTyping() {
+    if (_controller.text.trim().isEmpty) return;
+    final now = DateTime.now();
+    if (_lastTypingPing != null && now.difference(_lastTypingPing!).inMilliseconds < 3000) {
+      return;
+    }
+    _lastTypingPing = now;
+    ref.read(chatThreadControllerProvider(widget.username).notifier).notifyTyping();
   }
 
   void _send() {
@@ -140,9 +155,21 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
   Widget build(BuildContext context) {
     final threadAsync = ref.watch(chatThreadControllerProvider(widget.username));
 
+    final isTyping = threadAsync.valueOrNull?.isTyping ?? false;
     return Scaffold(
       backgroundColor: AppColors.bg,
-      appBar: AppBar(title: Text(threadAsync.valueOrNull?.withUser.displayName ?? '@${widget.username}')),
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(threadAsync.valueOrNull?.withUser.displayName ?? '@${widget.username}'),
+            if (isTyping)
+              Text('typing…',
+                  style: AppTypography.sans(fontSize: 12, color: AppColors.online)),
+          ],
+        ),
+      ),
       body: threadAsync.when(
         loading: () => const Center(child: CircularProgressIndicator(color: AppColors.text)),
         error: (e, _) => Center(

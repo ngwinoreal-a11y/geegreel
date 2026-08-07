@@ -14,6 +14,7 @@ class ThreadData {
     this.requestedByMe = false,
     this.blocked = false,
     this.blockedByThem = false,
+    this.isTyping = false,
   });
 
   final UserModel withUser;
@@ -22,6 +23,10 @@ class ThreadData {
   final bool requestedByMe;
   final bool blocked;
   final bool blockedByThem;
+
+  /// The other person has pinged the typing endpoint recently (server-side
+  /// freshness window). Surfaces the "typing…" line in the thread.
+  final bool isTyping;
 
   bool get isPendingRequestToMe => requestStatus == 'pending' && !requestedByMe;
 }
@@ -84,6 +89,7 @@ class ChatRepository {
       requestedByMe: data['requestedByMe'] as bool? ?? false,
       blocked: data['blocked'] as bool? ?? false,
       blockedByThem: data['blockedByThem'] as bool? ?? false,
+      isTyping: data['isTyping'] as bool? ?? false,
     );
   }
 
@@ -112,6 +118,10 @@ class ChatRepository {
   }
 
   Future<void> ping() => _dio.post('/presence/ping');
+
+  /// `POST /api/messages/:who/typing` — fire-and-forget while composing; the
+  /// recipient's next thread poll picks up the freshness window.
+  Future<void> sendTyping(String who) => _dio.post('/messages/$who/typing');
 
   /// `POST /api/messages/:messageId/react` with `{emoji}` — toggles: sending
   /// the same emoji again removes it (matches the server's upsert/delete).

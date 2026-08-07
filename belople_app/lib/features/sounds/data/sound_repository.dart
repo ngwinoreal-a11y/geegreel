@@ -39,6 +39,23 @@ class SoundRepository {
           .toList(),
     );
   }
+
+  /// `GET /api/sounds/search?q=` — for the composer's "Add sound" picker.
+  /// The search response nests author as an object, so map it down to the
+  /// display name SoundModel expects.
+  Future<List<SoundModel>> search(String query) async {
+    final res = await _dio.get('/sounds/search', queryParameters: {'q': query});
+    final data = res.data as Map<String, dynamic>;
+    return (data['sounds'] as List<dynamic>? ?? []).map((s) {
+      final json = s as Map<String, dynamic>;
+      return SoundModel(
+        id: json['id'].toString(),
+        title: json['title'] as String? ?? 'Sound',
+        author: (json['author'] as Map<String, dynamic>?)?['displayName'] as String?,
+        uses: (json['uses'] as num?)?.toInt() ?? 0,
+      );
+    }).toList();
+  }
 }
 
 final soundRepositoryProvider = Provider<SoundRepository>((ref) {
