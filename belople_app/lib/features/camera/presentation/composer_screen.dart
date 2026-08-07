@@ -65,15 +65,27 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
     super.dispose();
   }
 
+  /// Opens the in-app camera (live preview + filters); falls back to nothing
+  /// if the user backs out. Returns via the same preview path as gallery.
+  Future<void> _recordInApp() async {
+    final path = await context.push<String>('/camera');
+    if (path == null) return;
+    await _loadVideoPreview(File(path));
+  }
+
   Future<void> _pickVideo(ImageSource source) async {
     final picked = await _picker.pickVideo(source: source, maxDuration: const Duration(minutes: 1));
     if (picked == null) return;
+    await _loadVideoPreview(File(picked.path));
+  }
+
+  Future<void> _loadVideoPreview(File file) async {
     _previewController?.dispose();
-    final file = File(picked.path);
     final controller = VideoPlayerController.file(file);
     await controller.initialize();
     await controller.setLooping(true);
     controller.play();
+    if (!mounted) return;
     setState(() {
       _videoFile = file;
       _previewController = controller;
@@ -205,7 +217,7 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () => _pickVideo(ImageSource.camera),
+                      onPressed: _recordInApp,
                       icon: const Icon(Icons.videocam),
                       label: const Text('Record'),
                     ),

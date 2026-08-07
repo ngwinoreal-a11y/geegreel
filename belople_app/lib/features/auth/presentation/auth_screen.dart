@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
@@ -43,6 +44,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     _displayNameController.dispose();
     _cityController.dispose();
     super.dispose();
+  }
+
+  /// Opens the Google OAuth WebView. On success it stores the token and
+  /// refreshes auth state, which the `ref.listen` below reacts to by popping
+  /// this screen; on failure/cancel we just surface a message.
+  Future<void> _continueWithGoogle() async {
+    setState(() => _errorText = null);
+    final ok = await context.push<bool>('/google-signin');
+    if (ok == false && mounted) {
+      setState(() => _errorText = "Google sign-in didn't complete. Try again or use email.");
+    }
   }
 
   void _swapMode() {
@@ -204,6 +216,26 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         )
                       : Text(_buttonLabel()),
                 ),
+
+                // Google sign-in — offered on login and the first signup step,
+                // mirroring the web app's auth screen.
+                if (!_isSignup || _step == _Step.basics) ...[
+                  const SizedBox(height: 14),
+                  Row(children: [
+                    const Expanded(child: Divider(color: AppColors.border)),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Text('or', style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
+                    ),
+                    const Expanded(child: Divider(color: AppColors.border)),
+                  ]),
+                  const SizedBox(height: 14),
+                  OutlinedButton.icon(
+                    onPressed: isLoading ? null : _continueWithGoogle,
+                    icon: const Icon(Icons.g_mobiledata, size: 26),
+                    label: const Text('Continue with Google'),
+                  ),
+                ],
 
                 if (_isSignup && _step != _Step.basics) ...[
                   const SizedBox(height: 10),

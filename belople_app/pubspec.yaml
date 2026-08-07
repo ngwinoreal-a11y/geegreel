@@ -49,6 +49,18 @@ dependencies:
   cached_network_image: ^3.4.1
   image_picker: ^1.1.2
 
+  # --- In-app camera capture (live preview + record), with a colour-filter
+  # strip applied to the preview. Recording still writes the raw take (baking
+  # a filter into the file needs ffmpeg, deferred); the OS picker path in the
+  # composer stays as the reliable fallback. ---
+  camera: ^0.11.0+2
+
+  # --- Google sign-in reuses the backend's web OAuth (/api/auth/google/start
+  # -> Google -> callback redirects to /#auth=<token>); a WebView drives that
+  # flow and captures the token from the final redirect. Requires the Worker's
+  # GOOGLE_CLIENT_ID env to be set (the endpoint 501s until then). ---
+  webview_flutter: ^4.10.0
+
   # --- WhatsApp-style instant-render local cache (stale-while-revalidate) ---
   hive: ^2.2.3
   hive_flutter: ^1.1.0

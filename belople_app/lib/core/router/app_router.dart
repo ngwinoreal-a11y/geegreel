@@ -2,6 +2,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../features/auth/presentation/auth_screen.dart';
+import '../../features/auth/presentation/google_signin_screen.dart';
+import '../../features/camera/presentation/camera_capture_screen.dart';
 import '../../features/camera/presentation/composer_screen.dart';
 import '../../features/chat/presentation/inbox_screen.dart';
 import '../../features/chat/presentation/message_requests_screen.dart';
@@ -64,6 +66,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/login',
         builder: (context, state) => const AuthScreen(),
+      ),
+      GoRoute(
+        path: '/google-signin',
+        builder: (context, state) => const GoogleSignInScreen(),
       ),
       GoRoute(
         path: '/profile/:handle',
@@ -136,6 +142,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/compose',
         builder: (context, state) =>
             ComposerScreen(soundId: state.uri.queryParameters['sound']),
+      ),
+      GoRoute(
+        path: '/camera',
+        builder: (context, state) => const CameraCaptureScreen(),
       ),
     ],
   );
