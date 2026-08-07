@@ -103,6 +103,81 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<void> _changePassword(BuildContext context) async {
+    final currentController = TextEditingController();
+    final newController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    var submitting = false;
+    String? error;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          title: const Text('Change password'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: currentController,
+                  obscureText: true,
+                  decoration: const InputDecoration(hintText: 'Current password'),
+                  validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: newController,
+                  obscureText: true,
+                  decoration: const InputDecoration(hintText: 'New password'),
+                  validator: (v) =>
+                      (v == null || v.length < 8) ? 'At least 8 characters' : null,
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 10),
+                  Text(error!, style: const TextStyle(color: AppColors.error, fontSize: 13)),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: submitting ? null : () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: submitting
+                  ? null
+                  : () async {
+                      if (!(formKey.currentState?.validate() ?? false)) return;
+                      setDialogState(() { submitting = true; error = null; });
+                      try {
+                        await ref.read(settingsRepositoryProvider).changePassword(
+                              current: currentController.text,
+                              next: newController.text,
+                            );
+                        if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Password changed')));
+                        }
+                      } catch (_) {
+                        setDialogState(() {
+                          submitting = false;
+                          error = 'Your current password is incorrect';
+                        });
+                      }
+                    },
+              child: Text(submitting ? 'Saving...' : 'Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _confirmDeleteAccount(BuildContext context) async {
     final passwordController = TextEditingController();
     final confirmed = await showDialog<bool>(
@@ -256,6 +331,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             contentPadding: EdgeInsets.zero,
             title: Text(me?.email ?? '', style: AppTypography.sans(fontSize: 14, color: AppColors.muted)),
             subtitle: const Text('Signed in'),
+          ),
+          const SizedBox(height: 4),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.lock_outline, color: AppColors.text),
+            title: Text('Change password', style: AppTypography.sans(fontSize: 14)),
+            trailing: const Icon(Icons.chevron_right, color: AppColors.muted),
+            onTap: () => _changePassword(context),
           ),
           const SizedBox(height: 8),
           OutlinedButton(

@@ -45,6 +45,25 @@ class WalletScreen extends ConsumerWidget {
                   Text('Coins', style: AppTypography.sectionLabel),
                   const SizedBox(height: 6),
                   Text('${wallet.coins}', style: AppTypography.mono(fontSize: 32, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => context.push('/coins'),
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('Get coins'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => context.push('/wallet/history'),
+                          child: const Text('History'),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),

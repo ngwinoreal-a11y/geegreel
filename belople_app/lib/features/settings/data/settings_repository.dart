@@ -29,6 +29,15 @@ class SettingsRepository {
     return _dio.delete('/settings/avatar');
   }
 
+  /// `POST /api/settings/password` — verifies the current password, sets the
+  /// new one, and signs out every other session server-side.
+  Future<void> changePassword({required String current, required String next}) {
+    return _dio.post('/settings/password', data: {
+      'currentPassword': current,
+      'newPassword': next,
+    });
+  }
+
   /// `DELETE /api/settings/account` — password-confirmed, permanent.
   Future<void> deleteAccount(String password) {
     return _dio.delete('/settings/account', data: {'password': password});

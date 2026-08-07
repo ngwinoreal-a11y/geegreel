@@ -17,7 +17,9 @@ import '../../features/public_feed/presentation/public_feed_screen.dart';
 import '../../features/search/presentation/search_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/sounds/presentation/sound_screen.dart';
+import '../../features/wallet/presentation/buy_coins_screen.dart';
 import '../../features/wallet/presentation/monetization_screen.dart';
+import '../../features/wallet/presentation/wallet_history_screen.dart';
 import '../../features/wallet/presentation/wallet_screen.dart';
 
 /// go_router config. The full shell route (persistent bottom nav across
@@ -93,6 +95,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/wallet',
         builder: (context, state) => const WalletScreen(),
+      ),
+      GoRoute(
+        path: '/wallet/history',
+        builder: (context, state) => const WalletHistoryScreen(),
+      ),
+      GoRoute(
+        path: '/coins',
+        builder: (context, state) => const BuyCoinsScreen(),
       ),
       GoRoute(
         path: '/monetization',

@@ -6,6 +6,7 @@ import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../feed/data/feed_repository.dart';
 import '../../feed/data/video_model.dart';
+import '../../wallet/presentation/gift_sheet.dart';
 
 /// Ports design-3.css section H (the "•••" sheet) for the actions that have
 /// real backend support today per that file's own audit: Report, Block,
@@ -26,6 +27,14 @@ Future<void> showMoreOptionsSheet(
         mainAxisSize: MainAxisSize.min,
         children: [
           const SizedBox(height: 10),
+          _OptionRow(
+            icon: Icons.card_giftcard,
+            label: 'Send a gift',
+            onTap: () {
+              Navigator.of(sheetContext).pop();
+              showGiftSheet(context, videoId: video.id);
+            },
+          ),
           _OptionRow(
             icon: Icons.repeat_rounded,
             label: 'Repost',
