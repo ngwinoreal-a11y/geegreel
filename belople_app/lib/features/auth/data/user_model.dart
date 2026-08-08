@@ -14,6 +14,9 @@ class UserModel {
     this.isPrivate = false,
     this.allowMessages = 'everyone',
     this.allowComments = 'everyone',
+    this.notifyLikes = true,
+    this.notifyComments = true,
+    this.notifyFollows = true,
     this.followersCount = 0,
     this.followingCount = 0,
     this.likesCount = 0,
@@ -33,6 +36,9 @@ class UserModel {
   final bool isPrivate;
   final String allowMessages;
   final String allowComments;
+  final bool notifyLikes;
+  final bool notifyComments;
+  final bool notifyFollows;
   final int followersCount;
   final int followingCount;
   final int likesCount;
@@ -57,6 +63,9 @@ class UserModel {
         isPrivate: json['isPrivate'] as bool? ?? false,
         allowMessages: json['allowMessages'] as String? ?? 'everyone',
         allowComments: json['allowComments'] as String? ?? 'everyone',
+        notifyLikes: json['notifyLikes'] as bool? ?? true,
+        notifyComments: json['notifyComments'] as bool? ?? true,
+        notifyFollows: json['notifyFollows'] as bool? ?? true,
         following: json['following'] as bool? ?? false,
       );
 
@@ -80,6 +89,9 @@ class UserModel {
       isPrivate: isPrivate,
       allowMessages: allowMessages,
       allowComments: allowComments,
+      notifyLikes: notifyLikes,
+      notifyComments: notifyComments,
+      notifyFollows: notifyFollows,
       followersCount: (stats['followers'] as num?)?.toInt() ?? followersCount,
       followingCount: (stats['following'] as num?)?.toInt() ?? followingCount,
       likesCount: (stats['likes'] as num?)?.toInt() ?? likesCount,

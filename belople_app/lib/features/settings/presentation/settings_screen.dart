@@ -2,18 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../../core/widgets/seg_control.dart';
 import '../../auth/application/auth_controller.dart';
 import '../data/settings_repository.dart';
 
-/// Ports index.html's settingsPage(): profile edit fields auto-save on
-/// change, sign-out. Privacy toggles / notification prefs / monetization /
-/// admin entry points / account deletion land as their own screens exist to
-/// link to.
+/// Ports index.html's settingsPage(): avatar, profile fields, privacy
+/// (private + who-can-message / who-can-comment), notification toggles,
+/// monetization, admin (staff only), password change, and account actions.
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
@@ -22,46 +23,67 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  late final TextEditingController _usernameController;
   late final TextEditingController _displayNameController;
   late final TextEditingController _bioController;
+  late final TextEditingController _emailController;
+  final _currentPwController = TextEditingController();
+  final _newPwController = TextEditingController();
+
   bool _saving = false;
   bool _dirty = false;
   bool _uploadingAvatar = false;
+  bool _changingPw = false;
+  String? _pwError;
+
   late bool _isPrivate;
+  late String _allowMessages;
+  late String _allowComments;
+  late bool _notifyLikes;
+  late bool _notifyComments;
+  late bool _notifyFollows;
 
   @override
   void initState() {
     super.initState();
     final me = ref.read(authControllerProvider).valueOrNull;
+    _usernameController = TextEditingController(text: me?.username ?? '');
     _displayNameController = TextEditingController(text: me?.displayName ?? '');
     _bioController = TextEditingController(text: me?.bio ?? '');
+    _emailController = TextEditingController(text: me?.email ?? '');
     _isPrivate = me?.isPrivate ?? false;
-  }
-
-  Future<void> _toggleField(String key, bool value, void Function(bool) apply) async {
-    final previous = value;
-    setState(() => apply(!previous));
-    try {
-      await ref.read(settingsRepositoryProvider).update({key: !previous});
-      ref.invalidate(authControllerProvider);
-    } catch (_) {
-      if (mounted) setState(() => apply(previous));
-    }
+    _allowMessages = me?.allowMessages ?? 'everyone';
+    _allowComments = me?.allowComments ?? 'everyone';
+    _notifyLikes = me?.notifyLikes ?? true;
+    _notifyComments = me?.notifyComments ?? true;
+    _notifyFollows = me?.notifyFollows ?? true;
   }
 
   @override
   void dispose() {
+    _usernameController.dispose();
     _displayNameController.dispose();
     _bioController.dispose();
+    _emailController.dispose();
+    _currentPwController.dispose();
+    _newPwController.dispose();
     super.dispose();
   }
 
+  /// Auto-saves a single privacy/notification field on toggle, reverting the
+  /// optimistic UI change if the request fails.
+  Future<void> _patch(Map<String, dynamic> fields, VoidCallback optimistic, VoidCallback revert) async {
+    setState(optimistic);
+    try {
+      await ref.read(settingsRepositoryProvider).update(fields);
+      ref.invalidate(authControllerProvider);
+    } catch (_) {
+      if (mounted) setState(revert);
+    }
+  }
+
   Future<void> _pickAndUploadAvatar() async {
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1024,
-      imageQuality: 85,
-    );
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1024, imageQuality: 85);
     if (picked == null) return;
     setState(() => _uploadingAvatar = true);
     try {
@@ -83,7 +105,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       await ref.read(settingsRepositoryProvider).removeAvatar();
       ref.invalidate(authControllerProvider);
     } catch (_) {
-      // Best-effort; leave the current photo on failure.
     } finally {
       if (mounted) setState(() => _uploadingAvatar = false);
     }
@@ -93,92 +114,49 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     setState(() => _saving = true);
     try {
       await ref.read(settingsRepositoryProvider).update({
+        'username': _usernameController.text.trim(),
         'displayName': _displayNameController.text.trim(),
         'bio': _bioController.text.trim(),
+        'email': _emailController.text.trim(),
       });
       ref.invalidate(authControllerProvider);
-      if (mounted) setState(() { _saving = false; _dirty = false; });
+      if (mounted) {
+        setState(() { _saving = false; _dirty = false; });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
+      }
     } catch (_) {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Couldn't save — that username or email may be taken")));
+      }
     }
   }
 
-  Future<void> _changePassword(BuildContext context) async {
-    final currentController = TextEditingController();
-    final newController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-    var submitting = false;
-    String? error;
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) => AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: const Text('Change password'),
-          content: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: currentController,
-                  obscureText: true,
-                  decoration: const InputDecoration(hintText: 'Current password'),
-                  validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: newController,
-                  obscureText: true,
-                  decoration: const InputDecoration(hintText: 'New password'),
-                  validator: (v) =>
-                      (v == null || v.length < 8) ? 'At least 8 characters' : null,
-                ),
-                if (error != null) ...[
-                  const SizedBox(height: 10),
-                  Text(error!, style: const TextStyle(color: AppColors.error, fontSize: 13)),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: submitting ? null : () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: submitting
-                  ? null
-                  : () async {
-                      if (!(formKey.currentState?.validate() ?? false)) return;
-                      setDialogState(() { submitting = true; error = null; });
-                      try {
-                        await ref.read(settingsRepositoryProvider).changePassword(
-                              current: currentController.text,
-                              next: newController.text,
-                            );
-                        if (dialogContext.mounted) Navigator.of(dialogContext).pop();
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Password changed')));
-                        }
-                      } catch (_) {
-                        setDialogState(() {
-                          submitting = false;
-                          error = 'Your current password is incorrect';
-                        });
-                      }
-                    },
-              child: Text(submitting ? 'Saving...' : 'Save'),
-            ),
-          ],
-        ),
-      ),
-    );
+  Future<void> _changePassword() async {
+    if (_newPwController.text.length < 8) {
+      setState(() => _pwError = 'New password must be at least 8 characters');
+      return;
+    }
+    setState(() { _changingPw = true; _pwError = null; });
+    try {
+      await ref.read(settingsRepositoryProvider).changePassword(
+            current: _currentPwController.text,
+            next: _newPwController.text,
+          );
+      _currentPwController.clear();
+      _newPwController.clear();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Password changed')));
+      }
+    } catch (_) {
+      if (mounted) setState(() => _pwError = 'Your current password is incorrect');
+    } finally {
+      if (mounted) setState(() => _changingPw = false);
+    }
   }
 
-  Future<void> _confirmDeleteAccount(BuildContext context) async {
+  Future<void> _confirmDeleteAccount() async {
     final passwordController = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -190,11 +168,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           children: [
             const Text('This permanently deletes your account and everything in it. Enter your password to confirm.'),
             const SizedBox(height: 12),
-            TextField(
-              controller: passwordController,
-              obscureText: true,
-              decoration: const InputDecoration(hintText: 'Password'),
-            ),
+            TextField(controller: passwordController, obscureText: true, decoration: const InputDecoration(hintText: 'Password')),
           ],
         ),
         actions: [
@@ -230,8 +204,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.pageHorizontal),
         children: [
-          Text('PROFILE', style: AppTypography.sectionLabel),
-          const SizedBox(height: 14),
+          // --- Avatar ---
           Center(
             child: Column(
               children: [
@@ -248,17 +221,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       if (_uploadingAvatar)
                         const Positioned.fill(
                           child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Center(
-                              child: SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                              ),
-                            ),
+                            decoration: BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                            child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))),
                           ),
                         ),
                       Positioned(
@@ -266,20 +230,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         bottom: -2,
                         child: Container(
                           padding: const EdgeInsets.all(6),
-                          decoration: const BoxDecoration(
-                            color: AppColors.chrome,
-                            shape: BoxShape.circle,
-                          ),
+                          decoration: const BoxDecoration(color: AppColors.chrome, shape: BoxShape.circle),
                           child: const Icon(Icons.camera_alt, size: 15, color: AppColors.onChrome),
                         ),
                       ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: _uploadingAvatar ? null : _pickAndUploadAvatar,
-                  child: const Text('Change photo'),
                 ),
                 if (me?.avatarUrl != null)
                   TextButton(
@@ -290,55 +246,131 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ],
             ),
           ),
+          const SizedBox(height: 16),
+
+          // --- Profile ---
+          Text('PROFILE', style: AppTypography.sectionLabel),
           const SizedBox(height: 10),
-          TextField(
-            controller: _displayNameController,
-            onChanged: (_) => setState(() => _dirty = true),
-            decoration: const InputDecoration(hintText: 'Display name'),
-          ),
+          _label('Username'),
+          TextField(controller: _usernameController, onChanged: (_) => setState(() => _dirty = true), decoration: const InputDecoration()),
           const SizedBox(height: 12),
-          TextField(
-            controller: _bioController,
-            onChanged: (_) => setState(() => _dirty = true),
-            maxLines: 3,
-            decoration: const InputDecoration(hintText: 'Bio'),
-          ),
+          _label('Display name'),
+          TextField(controller: _displayNameController, onChanged: (_) => setState(() => _dirty = true), decoration: const InputDecoration()),
           const SizedBox(height: 12),
+          _label('Bio'),
+          TextField(controller: _bioController, maxLines: 3, onChanged: (_) => setState(() => _dirty = true), decoration: const InputDecoration()),
+          const SizedBox(height: 12),
+          _label('Email'),
+          TextField(controller: _emailController, keyboardType: TextInputType.emailAddress, onChanged: (_) => setState(() => _dirty = true), decoration: const InputDecoration()),
+          const SizedBox(height: 14),
           if (_dirty)
-            ElevatedButton(
-              onPressed: _saving ? null : _save,
-              child: Text(_saving ? 'Saving...' : 'Save changes'),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(onPressed: _saving ? null : _save, child: Text(_saving ? 'Saving...' : 'Save changes')),
             ),
 
-          const SizedBox(height: 28),
+          const SizedBox(height: 24),
+          // --- Privacy ---
           Text('PRIVACY', style: AppTypography.sectionLabel),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: Text('Private account', style: AppTypography.sans(fontSize: 14)),
-            subtitle: Text('Approve who can follow you', style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
+            subtitle: Text('Only approved followers see your videos', style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
             value: _isPrivate,
-            onChanged: (_) => _toggleField(
-              'isPrivate',
-              _isPrivate,
-              (v) => _isPrivate = v,
-            ),
+            onChanged: (v) => _patch({'isPrivate': v}, () => _isPrivate = v, () => _isPrivate = !v),
+          ),
+          const SizedBox(height: 8),
+          _label('Who can message you'),
+          const SizedBox(height: 8),
+          SegControl(
+            labels: const ['Everyone', 'Followers', 'Nobody'],
+            selectedIndex: _valueIndex(_allowMessages),
+            onChanged: (i) {
+              final v = _indexValue(i);
+              _patch({'allowMessages': v}, () => _allowMessages = v, () => {});
+            },
+          ),
+          const SizedBox(height: 14),
+          _label('Who can comment'),
+          const SizedBox(height: 8),
+          SegControl(
+            labels: const ['Everyone', 'Followers', 'Nobody'],
+            selectedIndex: _valueIndex(_allowComments),
+            onChanged: (i) {
+              final v = _indexValue(i);
+              _patch({'allowComments': v}, () => _allowComments = v, () => {});
+            },
+          ),
+
+          const SizedBox(height: 24),
+          // --- Notifications ---
+          Text('NOTIFICATIONS', style: AppTypography.sectionLabel),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Likes', style: AppTypography.sans(fontSize: 14)),
+            value: _notifyLikes,
+            onChanged: (v) => _patch({'notifyLikes': v}, () => _notifyLikes = v, () => _notifyLikes = !v),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Comments', style: AppTypography.sans(fontSize: 14)),
+            value: _notifyComments,
+            onChanged: (v) => _patch({'notifyComments': v}, () => _notifyComments = v, () => _notifyComments = !v),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('New followers', style: AppTypography.sans(fontSize: 14)),
+            value: _notifyFollows,
+            onChanged: (v) => _patch({'notifyFollows': v}, () => _notifyFollows = v, () => _notifyFollows = !v),
           ),
 
           const SizedBox(height: 20),
-          Text('ACCOUNT', style: AppTypography.sectionLabel),
-          const SizedBox(height: 6),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text(me?.email ?? '', style: AppTypography.sans(fontSize: 14, color: AppColors.muted)),
-            subtitle: const Text('Signed in'),
+          // --- Earning ---
+          Text('EARNING', style: AppTypography.sectionLabel),
+          const SizedBox(height: 8),
+          _NavRow(label: 'Monetization', trailing: 'Check progress', onTap: () => context.push('/monetization')),
+
+          // --- Staff ---
+          if (me?.isStaff ?? false) ...[
+            const SizedBox(height: 20),
+            Text('STAFF', style: AppTypography.sectionLabel),
+            const SizedBox(height: 8),
+            _NavRow(
+              label: 'Admin dashboard',
+              trailing: me?.role ?? 'admin',
+              onTap: () => launchUrl(Uri.parse(kApiBaseUrl), mode: LaunchMode.externalApplication),
+            ),
+          ],
+
+          const SizedBox(height: 24),
+          // --- Password ---
+          Text('PASSWORD', style: AppTypography.sectionLabel),
+          const SizedBox(height: 10),
+          TextField(controller: _currentPwController, obscureText: true, decoration: const InputDecoration(hintText: 'Current password')),
+          const SizedBox(height: 10),
+          TextField(controller: _newPwController, obscureText: true, decoration: const InputDecoration(hintText: 'New password (min 8 characters)')),
+          if (_pwError != null) ...[
+            const SizedBox(height: 8),
+            Text(_pwError!, style: const TextStyle(color: AppColors.error, fontSize: 13)),
+          ],
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(onPressed: _changingPw ? null : _changePassword, child: Text(_changingPw ? 'Saving...' : 'Change password')),
           ),
-          const SizedBox(height: 4),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.lock_outline, color: AppColors.text),
-            title: Text('Change password', style: AppTypography.sans(fontSize: 14)),
-            trailing: const Icon(Icons.chevron_right, color: AppColors.muted),
-            onTap: () => _changePassword(context),
+
+          const SizedBox(height: 24),
+          // --- Account ---
+          Text('ACCOUNT', style: AppTypography.sectionLabel),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: () async {
+              await ref.read(settingsRepositoryProvider).signOutOtherDevices();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Signed out of other devices')));
+              }
+            },
+            child: const Text('Sign out of other devices'),
           ),
           const SizedBox(height: 8),
           OutlinedButton(
@@ -348,13 +380,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             },
             child: const Text('Log out'),
           ),
-          const SizedBox(height: 24),
-          TextButton(
-            onPressed: () => _confirmDeleteAccount(context),
-            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: _confirmDeleteAccount,
+            style: OutlinedButton.styleFrom(foregroundColor: AppColors.error, side: const BorderSide(color: AppColors.danger)),
             child: const Text('Delete account'),
           ),
+
+          const SizedBox(height: 28),
+          Text('ABOUT', style: AppTypography.sectionLabel),
+          const SizedBox(height: 4),
+          Text('Belople · Version 1.0.0', style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+          const SizedBox(height: 20),
         ],
+      ),
+    );
+  }
+
+  Widget _label(String text) =>
+      Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(text, style: AppTypography.sans(fontSize: 12, color: AppColors.muted)));
+
+  static int _valueIndex(String v) => switch (v) { 'followers' => 1, 'nobody' => 2, _ => 0 };
+  static String _indexValue(int i) => switch (i) { 1 => 'followers', 2 => 'nobody', _ => 'everyone' };
+}
+
+class _NavRow extends StatelessWidget {
+  const _NavRow({required this.label, required this.trailing, required this.onTap});
+  final String label;
+  final String trailing;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Expanded(child: Text(label, style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w600))),
+            Text(trailing, style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+          ],
+        ),
       ),
     );
   }

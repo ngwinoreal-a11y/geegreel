@@ -38,6 +38,10 @@ class SettingsRepository {
     });
   }
 
+  /// `DELETE /api/settings/sessions` — signs out every other device, keeping
+  /// the current session.
+  Future<void> signOutOtherDevices() => _dio.delete('/settings/sessions');
+
   /// `DELETE /api/settings/account` — password-confirmed, permanent.
   Future<void> deleteAccount(String password) {
     return _dio.delete('/settings/account', data: {'password': password});

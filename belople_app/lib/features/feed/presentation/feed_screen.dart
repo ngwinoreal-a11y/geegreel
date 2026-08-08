@@ -239,30 +239,42 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                         ),
                       );
                     }),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
+                    // FittedBox scales the tabs down to fit the row rather than
+                    // clipping the last one off-screen (which made "Public"
+                    // untappable). Notifications live on the profile header.
                     Expanded(
                       child: Center(
-                        child: FeedTabs(
-                          labels: const ['Following', 'For you', 'Public'],
-                          selectedIndex: _tab == FeedTab.following ? 0 : 1,
-                          onChanged: (i) {
-                            if (i == 2) {
-                              context.push('/public');
-                              return;
-                            }
-                            setState(() {
-                              _tab = i == 0 ? FeedTab.following : FeedTab.forYou;
-                              _activeIndex = 0;
-                            });
-                            _pageController.jumpToPage(0);
-                          },
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: FeedTabs(
+                            labels: const ['Following', 'For you', 'Public'],
+                            selectedIndex: _tab == FeedTab.following ? 0 : 1,
+                            onChanged: (i) {
+                              if (i == 2) {
+                                context.push('/public');
+                                return;
+                              }
+                              setState(() {
+                                _tab = i == 0 ? FeedTab.following : FeedTab.forYou;
+                                _activeIndex = 0;
+                              });
+                              _pageController.jumpToPage(0);
+                            },
+                          ),
                         ),
                       ),
                     ),
-                    // Search & notifications moved next to Settings on the
-                    // profile screen — the feed header is just the avatar and
-                    // the big Following / For you / Public tabs now.
-                    const SizedBox(width: 44),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () => context.push('/search'),
+                      child: const Icon(
+                        Icons.search,
+                        color: Colors.white,
+                        size: 26,
+                        shadows: [Shadow(color: Colors.black87, blurRadius: 6)],
+                      ),
+                    ),
                   ],
                 ),
               ),

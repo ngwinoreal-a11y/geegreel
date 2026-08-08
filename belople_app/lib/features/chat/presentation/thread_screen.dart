@@ -46,6 +46,7 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
   final Set<String> _selected = {};
   MessageModel? _replyingTo;
   bool _showEmoji = false;
+  bool _initialScrollDone = false;
 
   bool get _selecting => _selected.isNotEmpty;
 
@@ -95,7 +96,13 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
 
   Future<void> _startRecording() async {
     if (_recording) return;
-    if (!await _recorder.hasPermission()) return;
+    if (!await _recorder.hasPermission()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Microphone permission is needed to record a voice note')));
+      }
+      return;
+    }
     final dir = await getTemporaryDirectory();
     final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
     await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: path);
@@ -284,6 +291,16 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
         ),
         data: (thread) {
           final items = _buildItems(thread.messages);
+          // Open the conversation already scrolled to the newest message
+          // (bottom), like every chat app — not stuck at the oldest.
+          if (!_initialScrollDone && thread.messages.isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scrollController.hasClients) {
+                _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+                _initialScrollDone = true;
+              }
+            });
+          }
           return Column(
             children: [
               Expanded(
@@ -389,18 +406,25 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
           PopupMenuButton<String>(
             color: AppColors.surface,
             onSelected: (value) async {
-              if (value == 'block') {
-                await ref.read(feedRepositoryProvider).setBlocked(thread.withUser.id, true);
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Blocked @${thread.withUser.username}')));
-              }
+              final block = value == 'block';
+              await ref.read(feedRepositoryProvider).setBlocked(thread.withUser.id, block);
+              ref.invalidate(chatThreadControllerProvider(widget.username));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(block
+                      ? 'Blocked @${thread.withUser.username}'
+                      : 'Unblocked @${thread.withUser.username}')));
             },
             itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'block',
-                child: Text('Block', style: AppTypography.sans(color: AppColors.danger)),
-              ),
+              thread.blocked
+                  ? PopupMenuItem(
+                      value: 'unblock',
+                      child: Text('Unblock', style: AppTypography.sans()),
+                    )
+                  : PopupMenuItem(
+                      value: 'block',
+                      child: Text('Block', style: AppTypography.sans(color: AppColors.danger)),
+                    ),
             ],
           ),
       ],
@@ -534,15 +558,24 @@ class _MessageBubble extends StatelessWidget {
         child: _VoiceContent(message: message, mine: mine, avatarUrl: avatarUrl),
       );
     } else if (message.imageUrl != null) {
-      content = Container(
-        decoration: selected
-            ? BoxDecoration(
-                borderRadius: BorderRadius.circular(AppRadii.lg + 2),
-                border: Border.all(color: AppColors.online, width: 2))
-            : null,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(AppRadii.lg),
-          child: Image.network(mediaUrl(message.imageUrl!), width: 200, fit: BoxFit.cover),
+      content = GestureDetector(
+        onTap: () {
+          if (selecting) {
+            onTap();
+          } else {
+            _openImageFullscreen(context, mediaUrl(message.imageUrl!));
+          }
+        },
+        child: Container(
+          decoration: selected
+              ? BoxDecoration(
+                  borderRadius: BorderRadius.circular(AppRadii.lg + 2),
+                  border: Border.all(color: AppColors.online, width: 2))
+              : null,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadii.lg),
+            child: Image.network(mediaUrl(message.imageUrl!), width: 200, fit: BoxFit.cover),
+          ),
         ),
       );
     } else {
@@ -651,6 +684,37 @@ class _TextWithMeta extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Opens a full-screen, pinch-zoomable view of a chat image. Tap or the
+/// system back gesture closes it (one back = return to the thread).
+void _openImageFullscreen(BuildContext context, String url) {
+  Navigator.of(context).push(PageRouteBuilder(
+    opaque: false,
+    barrierColor: Colors.black,
+    pageBuilder: (context, _, _) => GestureDetector(
+      onTap: () => Navigator.of(context).pop(),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              minScale: 1,
+              maxScale: 4,
+              child: Center(child: Image.network(url, fit: BoxFit.contain)),
+            ),
+          ),
+          Positioned(
+            top: 40,
+            left: 8,
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+        ],
+      ),
+    ),
+  ));
 }
 
 final _urlRegex = RegExp(r'(https?:\/\/[^\s]+)');
