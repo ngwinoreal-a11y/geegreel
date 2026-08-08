@@ -21,6 +21,21 @@ class MessageReaction {
       );
 }
 
+/// The message this one is a reply to — the server sends a short snippet
+/// plus whether the quoted message is the viewer's own (`mine`).
+class MessageReplyTo {
+  const MessageReplyTo({required this.id, required this.mine, required this.snippet});
+  final String id;
+  final bool mine;
+  final String snippet;
+
+  factory MessageReplyTo.fromJson(Map<String, dynamic> json) => MessageReplyTo(
+        id: json['id'].toString(),
+        mine: json['mine'] as bool? ?? false,
+        snippet: json['snippet'] as String? ?? '',
+      );
+}
+
 class MessageModel {
   const MessageModel({
     required this.id,
@@ -34,6 +49,7 @@ class MessageModel {
     this.read = false,
     this.deleted = false,
     this.reactions = const [],
+    this.replyTo,
   });
 
   final String id;
@@ -47,6 +63,16 @@ class MessageModel {
   final bool read;
   final bool deleted;
   final List<MessageReaction> reactions;
+  final MessageReplyTo? replyTo;
+
+  /// A short one-line preview used when THIS message is quoted in a reply
+  /// banner (before the server round-trip supplies a snippet of its own).
+  String get preview {
+    if (deleted) return 'This message was deleted';
+    if (audioUrl != null) return '🎤 Voice message';
+    if (imageUrl != null) return '📷 Photo';
+    return body ?? '';
+  }
 
   factory MessageModel.fromJson(Map<String, dynamic> json) => MessageModel(
         id: json['id'].toString(),
@@ -62,6 +88,9 @@ class MessageModel {
         reactions: (json['reactions'] as List<dynamic>? ?? [])
             .map((r) => MessageReaction.fromJson(r as Map<String, dynamic>))
             .toList(),
+        replyTo: json['replyTo'] != null
+            ? MessageReplyTo.fromJson(json['replyTo'] as Map<String, dynamic>)
+            : null,
       );
 }
 

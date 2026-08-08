@@ -332,7 +332,7 @@ class _ActionRail extends StatelessWidget {
         const SizedBox(height: 22),
         GestureDetector(
           onTap: onCommentTap,
-          child: _RailButton(icon: Icons.mode_comment, color: Colors.white, count: video.counts.comments),
+          child: _RailButton(icon: Icons.chat_bubble_outline, color: Colors.white, count: video.counts.comments),
         ),
         const SizedBox(height: 22),
         GestureDetector(
@@ -342,7 +342,7 @@ class _ActionRail extends StatelessWidget {
         const SizedBox(height: 22),
         GestureDetector(
           onTap: onShareTap,
-          child: _RailButton(icon: Icons.reply_rounded, color: Colors.white, count: video.counts.shares),
+          child: _RailButton(icon: Icons.send_outlined, color: Colors.white, count: video.counts.shares),
         ),
         const SizedBox(height: 22),
         GestureDetector(
@@ -352,7 +352,7 @@ class _ActionRail extends StatelessWidget {
         const SizedBox(height: 22),
         GestureDetector(
           onTap: onMoreTap,
-          child: const Icon(Icons.more_horiz, color: Colors.white, size: 28),
+          child: const Icon(Icons.more_vert, color: Colors.white, size: 28),
         ),
       ],
     );

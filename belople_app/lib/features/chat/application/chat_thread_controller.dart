@@ -56,7 +56,7 @@ class ChatThreadController extends FamilyAsyncNotifier<ThreadData, String>
     }
   }
 
-  Future<void> send(String body) async {
+  Future<void> send(String body, {String? replyToId}) async {
     final current = state.valueOrNull;
     if (current == null || body.trim().isEmpty) return;
     // Optimistic local echo — reconciled by the next poll tick.
@@ -66,20 +66,39 @@ class ChatThreadController extends FamilyAsyncNotifier<ThreadData, String>
       body: body,
       createdAt: DateTime.now(),
     );
-    state = AsyncData(ThreadData(
-      withUser: current.withUser,
-      messages: [...current.messages, optimistic],
-      requestStatus: current.requestStatus,
-      requestedByMe: current.requestedByMe,
-      blocked: current.blocked,
-      blockedByThem: current.blockedByThem,
-    ));
+    state = AsyncData(_copyWithMessages(current, [...current.messages, optimistic]));
     try {
-      await ref.read(chatRepositoryProvider).sendMessage(recipientId: current.withUser.id, body: body);
+      await ref.read(chatRepositoryProvider).sendMessage(
+            recipientId: current.withUser.id,
+            body: body,
+            replyToId: replyToId,
+          );
       await _poll();
     } catch (_) {
       await _poll();
     }
+  }
+
+  Future<void> deleteMessage(String messageId, {required String scope}) async {
+    try {
+      await ref.read(chatRepositoryProvider).deleteMessage(messageId, scope: scope);
+      await _poll();
+    } catch (_) {
+      await _poll();
+    }
+  }
+
+  ThreadData _copyWithMessages(ThreadData current, List<MessageModel> messages) {
+    return ThreadData(
+      withUser: current.withUser,
+      messages: messages,
+      requestStatus: current.requestStatus,
+      requestedByMe: current.requestedByMe,
+      blocked: current.blocked,
+      blockedByThem: current.blockedByThem,
+      isTyping: current.isTyping,
+      online: current.online,
+    );
   }
 
   /// Fire-and-forget typing ping (the UI throttles how often this is called).

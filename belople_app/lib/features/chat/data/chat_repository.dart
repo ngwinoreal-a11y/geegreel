@@ -15,6 +15,7 @@ class ThreadData {
     this.blocked = false,
     this.blockedByThem = false,
     this.isTyping = false,
+    this.online = false,
   });
 
   final UserModel withUser;
@@ -27,6 +28,9 @@ class ThreadData {
   /// The other person has pinged the typing endpoint recently (server-side
   /// freshness window). Surfaces the "typing…" line in the thread.
   final bool isTyping;
+
+  /// The other person was active in the last ~2 minutes (server-computed).
+  final bool online;
 
   bool get isPendingRequestToMe => requestStatus == 'pending' && !requestedByMe;
 }
@@ -80,8 +84,9 @@ class ChatRepository {
   }
 
   ThreadData _parseThread(Map<String, dynamic> data) {
+    final withJson = data['with'] as Map<String, dynamic>? ?? const {};
     return ThreadData(
-      withUser: UserModel.fromJson(data['with'] as Map<String, dynamic>? ?? const {}),
+      withUser: UserModel.fromJson(withJson),
       messages: (data['messages'] as List<dynamic>? ?? [])
           .map((m) => MessageModel.fromJson(m as Map<String, dynamic>))
           .toList(),
@@ -90,11 +95,27 @@ class ChatRepository {
       blocked: data['blocked'] as bool? ?? false,
       blockedByThem: data['blockedByThem'] as bool? ?? false,
       isTyping: data['isTyping'] as bool? ?? false,
+      online: withJson['online'] as bool? ?? false,
     );
   }
 
-  Future<void> sendMessage({required String recipientId, required String body}) async {
-    await _dio.post('/messages', data: {'recipientId': recipientId, 'body': body});
+  Future<void> sendMessage({
+    required String recipientId,
+    required String body,
+    String? replyToId,
+  }) async {
+    await _dio.post('/messages', data: {
+      'recipientId': recipientId,
+      'body': body,
+      if (replyToId != null) 'replyToId': replyToId,
+    });
+  }
+
+  /// `POST /api/messages/:id/delete` with `{scope}`. `scope: "everyone"` is
+  /// sender-only and time-limited (server enforces 15 min); anything else
+  /// deletes just for this side.
+  Future<void> deleteMessage(String messageId, {required String scope}) {
+    return _dio.post('/messages/$messageId/delete', data: {'scope': scope});
   }
 
   /// `POST /api/messages/media` (multipart) — see src/index.js. `kind` is
