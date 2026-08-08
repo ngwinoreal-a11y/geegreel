@@ -67,11 +67,19 @@ class SoundScreen extends ConsumerWidget {
                   child: SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: () {
-                        if (ref.read(isLoggedInProvider)) {
+                      onPressed: () async {
+                        if (!ref.read(isLoggedInProvider)) {
+                          context.push('/login');
+                          return;
+                        }
+                        // Record with the camera first, then land in the
+                        // composer with this sound already attached.
+                        final result = await context.push<String>('/camera');
+                        if (!context.mounted || result == null) return;
+                        if (result == 'compose') {
                           context.push('/compose?sound=$soundId');
                         } else {
-                          context.push('/login');
+                          context.push('/compose?sound=$soundId', extra: {'videoPath': result});
                         }
                       },
                       icon: const Icon(Icons.videocam, size: 18),

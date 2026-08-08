@@ -41,6 +41,27 @@ import '../../features/wallet/presentation/wallet_screen.dart';
 /// a screen the user can no longer see it on.
 final routeObserver = RouteObserver<PageRoute<dynamic>>();
 
+/// A fast cross-fade page used for every route, so screens feel like they
+/// snap open rather than sliding in over ~300ms (the user asked for quick
+/// navigation). Keeps go_router's back-swipe/observer behaviour intact.
+CustomTransitionPage<void> _fast(LocalKey key, Widget child) {
+  return CustomTransitionPage<void>(
+    key: key,
+    transitionDuration: const Duration(milliseconds: 130),
+    reverseTransitionDuration: const Duration(milliseconds: 110),
+    child: child,
+    transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+        FadeTransition(opacity: animation, child: child),
+  );
+}
+
+GoRoute _route(String path, Widget Function(BuildContext, GoRouterState) build) {
+  return GoRoute(
+    path: path,
+    pageBuilder: (context, state) => _fast(state.pageKey, build(context, state)),
+  );
+}
+
 final appRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     observers: [routeObserver],
@@ -55,98 +76,43 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      GoRoute(
-        path: '/',
-        builder: (context, state) => const FeedScreen(),
-      ),
-      GoRoute(
-        path: '/gallery',
-        builder: (context, state) => const ComponentGalleryScreen(),
-      ),
-      GoRoute(
-        path: '/login',
-        builder: (context, state) => const AuthScreen(),
-      ),
-      GoRoute(
-        path: '/google-signin',
-        builder: (context, state) => const GoogleSignInScreen(),
-      ),
-      GoRoute(
-        path: '/profile/:handle',
-        builder: (context, state) => ProfileScreen(handle: state.pathParameters['handle']!),
-      ),
-      GoRoute(
-        path: '/profile/:handle/:kind',
-        builder: (context, state) => FollowListScreen(
-          handle: state.pathParameters['handle']!,
-          kind: state.pathParameters['kind']!,
-        ),
-      ),
-      GoRoute(
-        path: '/public',
-        builder: (context, state) => const PublicFeedScreen(),
-      ),
-      GoRoute(
-        path: '/search',
-        builder: (context, state) => const SearchScreen(),
-      ),
-      GoRoute(
-        path: '/notifications',
-        builder: (context, state) => const NotificationsScreen(),
-      ),
-      GoRoute(
-        path: '/settings',
-        builder: (context, state) => const SettingsScreen(),
-      ),
-      GoRoute(
-        path: '/wallet',
-        builder: (context, state) => const WalletScreen(),
-      ),
-      GoRoute(
-        path: '/wallet/history',
-        builder: (context, state) => const WalletHistoryScreen(),
-      ),
-      GoRoute(
-        path: '/coins',
-        builder: (context, state) => const BuyCoinsScreen(),
-      ),
-      GoRoute(
-        path: '/monetization',
-        builder: (context, state) => const MonetizationScreen(),
-      ),
-      GoRoute(
-        path: '/messages',
-        builder: (context, state) => const InboxScreen(),
-      ),
-      GoRoute(
-        path: '/message-requests',
-        builder: (context, state) => const MessageRequestsScreen(),
-      ),
-      GoRoute(
-        path: '/friends',
-        builder: (context, state) => const FriendsScreen(),
-      ),
-      GoRoute(
-        path: '/chat/:username',
-        builder: (context, state) => ThreadScreen(username: state.pathParameters['username']!),
-      ),
-      GoRoute(
-        path: '/v/:id',
-        builder: (context, state) => SingleVideoScreen(videoId: state.pathParameters['id']!),
-      ),
-      GoRoute(
-        path: '/sound/:id',
-        builder: (context, state) => SoundScreen(soundId: state.pathParameters['id']!),
-      ),
-      GoRoute(
-        path: '/compose',
-        builder: (context, state) =>
-            ComposerScreen(soundId: state.uri.queryParameters['sound']),
-      ),
-      GoRoute(
-        path: '/camera',
-        builder: (context, state) => const CameraCaptureScreen(),
-      ),
+      _route('/', (context, state) => const FeedScreen()),
+      _route('/gallery', (context, state) => const ComponentGalleryScreen()),
+      _route('/login', (context, state) => const AuthScreen()),
+      _route('/google-signin', (context, state) => const GoogleSignInScreen()),
+      _route('/profile/:handle',
+          (context, state) => ProfileScreen(handle: state.pathParameters['handle']!)),
+      _route(
+          '/profile/:handle/:kind',
+          (context, state) => FollowListScreen(
+                handle: state.pathParameters['handle']!,
+                kind: state.pathParameters['kind']!,
+              )),
+      _route('/public', (context, state) => const PublicFeedScreen()),
+      _route('/search', (context, state) => const SearchScreen()),
+      _route('/notifications', (context, state) => const NotificationsScreen()),
+      _route('/settings', (context, state) => const SettingsScreen()),
+      _route('/wallet', (context, state) => const WalletScreen()),
+      _route('/wallet/history', (context, state) => const WalletHistoryScreen()),
+      _route('/coins', (context, state) => const BuyCoinsScreen()),
+      _route('/monetization', (context, state) => const MonetizationScreen()),
+      _route('/messages', (context, state) => const InboxScreen()),
+      _route('/message-requests', (context, state) => const MessageRequestsScreen()),
+      _route('/friends', (context, state) => const FriendsScreen()),
+      _route('/chat/:username',
+          (context, state) => ThreadScreen(username: state.pathParameters['username']!)),
+      _route('/v/:id',
+          (context, state) => SingleVideoScreen(videoId: state.pathParameters['id']!)),
+      _route('/sound/:id',
+          (context, state) => SoundScreen(soundId: state.pathParameters['id']!)),
+      _route('/compose', (context, state) {
+        final extra = state.extra as Map<String, dynamic>?;
+        return ComposerScreen(
+          soundId: state.uri.queryParameters['sound'],
+          videoPath: extra?['videoPath'] as String?,
+        );
+      }),
+      _route('/camera', (context, state) => const CameraCaptureScreen()),
     ],
   );
 });

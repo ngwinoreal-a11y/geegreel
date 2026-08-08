@@ -32,6 +32,16 @@ class ProfileScreen extends ConsumerWidget {
         title: Text('@$handle'),
         actions: isSelf
             ? [
+                // Search & notifications live here now (moved off the feed
+                // header so the Following / For you / Public tabs get room).
+                IconButton(
+                  icon: const Icon(Icons.search),
+                  onPressed: () => context.push('/search'),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.notifications_outlined),
+                  onPressed: () => context.push('/notifications'),
+                ),
                 IconButton(
                   icon: const Icon(Icons.account_balance_wallet_outlined),
                   onPressed: () => context.push('/wallet'),

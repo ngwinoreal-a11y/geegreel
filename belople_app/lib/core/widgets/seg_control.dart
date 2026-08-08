@@ -76,15 +76,15 @@ class FeedTabs extends StatelessWidget {
       children: [
         for (var i = 0; i < labels.length; i++)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
             child: GestureDetector(
               onTap: () => onChanged(i),
               child: Container(
-                padding: const EdgeInsets.only(bottom: 4),
+                padding: const EdgeInsets.only(bottom: 5),
                 decoration: BoxDecoration(
                   border: Border(
                     bottom: BorderSide(
-                      width: 2,
+                      width: 3,
                       color: i == selectedIndex ? Colors.white : Colors.transparent,
                     ),
                   ),
@@ -92,7 +92,7 @@ class FeedTabs extends StatelessWidget {
                 child: Text(
                   labels[i],
                   style: AppTypography.display(
-                    fontSize: 17,
+                    fontSize: 21,
                     fontWeight: FontWeight.w700,
                     color: i == selectedIndex
                         ? Colors.white

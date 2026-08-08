@@ -234,6 +234,16 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
+                            // Gallery / photo / text shortcut — pops 'compose'
+                            // so the caller opens the composer without a take.
+                            if (!_recording)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 36),
+                                child: _RoundIcon(
+                                  icon: Icons.photo_library_outlined,
+                                  onTap: () => context.pop('compose'),
+                                ),
+                              ),
                             GestureDetector(
                               onTap: _toggleRecording,
                               child: Container(
@@ -256,7 +266,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
                                 ),
                               ),
                             ),
-                            if (_cameras.length > 1)
+                            if (_cameras.length > 1 && !_recording)
                               Padding(
                                 padding: const EdgeInsets.only(left: 36),
                                 child: _RoundIcon(icon: Icons.flip_camera_ios, onTap: _flip),

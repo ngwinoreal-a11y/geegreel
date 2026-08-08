@@ -22,11 +22,15 @@ enum _ComposerMode { video, photo, text }
 /// via the OS camera UI, caption, upload with progress, land in the feed)
 /// end to end against the real backend.
 class ComposerScreen extends ConsumerStatefulWidget {
-  const ComposerScreen({super.key, this.soundId});
+  const ComposerScreen({super.key, this.soundId, this.videoPath});
 
   /// When arriving from a sound page's "Use this sound", the picked video is
   /// attached to this sound on publish. Locks the composer to video mode.
   final String? soundId;
+
+  /// A video just recorded in the in-app camera, handed straight in so the
+  /// composer opens already showing it (no re-pick needed).
+  final String? videoPath;
 
   @override
   ConsumerState<ComposerScreen> createState() => _ComposerScreenState();
@@ -52,6 +56,15 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
 
   /// The sound id actually sent on publish (page-attached wins over picked).
   String? get _effectiveSoundId => widget.soundId ?? _pickedSound?.id;
+
+  @override
+  void initState() {
+    super.initState();
+    // A video handed in from the in-app camera previews immediately.
+    if (widget.videoPath != null) {
+      _loadVideoPreview(File(widget.videoPath!));
+    }
+  }
 
   Future<void> _pickSound() async {
     final sound = await showSoundPickerSheet(context);

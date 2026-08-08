@@ -128,6 +128,20 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
     }
   }
 
+  /// The "+" flow: open the camera first (the user asked for + to go
+  /// straight to the camera). A recorded take hands its path to the composer;
+  /// the camera's gallery/photo shortcut returns 'compose' to open the
+  /// composer directly for a photo/text post or a gallery pick.
+  Future<void> _openCreate() async {
+    final result = await context.push<String>('/camera');
+    if (!mounted || result == null) return;
+    if (result == 'compose') {
+      context.push('/compose');
+    } else {
+      context.push('/compose', extra: {'videoPath': result});
+    }
+  }
+
   void _onPageChanged(int index) {
     setState(() => _activeIndex = index);
     final state = ref.read(feedControllerProvider(_tab)).valueOrNull;
@@ -225,6 +239,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                         ),
                       );
                     }),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: Center(
                         child: FeedTabs(
@@ -244,27 +259,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                         ),
                       ),
                     ),
-                    GestureDetector(
-                      onTap: () => context.push('/notifications'),
-                      child: const Padding(
-                        padding: EdgeInsets.only(right: 12),
-                        child: Icon(
-                          Icons.notifications_outlined,
-                          color: Colors.white,
-                          size: 24,
-                          shadows: [Shadow(color: Colors.black87, blurRadius: 6)],
-                        ),
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: () => context.push('/search'),
-                      child: const Icon(
-                        Icons.search,
-                        color: Colors.white,
-                        size: 26,
-                        shadows: [Shadow(color: Colors.black87, blurRadius: 6)],
-                      ),
-                    ),
+                    // Search & notifications moved next to Settings on the
+                    // profile screen — the feed header is just the avatar and
+                    // the big Following / For you / Public tabs now.
+                    const SizedBox(width: 44),
                   ],
                 ),
               ),
@@ -295,7 +293,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                 }
               },
               fabIcon: Icons.add,
-              onFabTap: () => _requireLogin(() => context.push('/compose')),
+              onFabTap: () => _requireLogin(_openCreate),
             ),
           ),
         ],
