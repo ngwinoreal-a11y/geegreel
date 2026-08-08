@@ -111,6 +111,12 @@ class ChatRepository {
     });
   }
 
+  /// Shares a video into a DM — `POST /api/messages` with a `videoId`, the
+  /// same field the web app's "Send" uses in the share sheet.
+  Future<void> sendVideo({required String recipientId, required String videoId}) async {
+    await _dio.post('/messages', data: {'recipientId': recipientId, 'videoId': videoId});
+  }
+
   /// `POST /api/messages/:id/delete` with `{scope}`. `scope: "everyone"` is
   /// sender-only and time-limited (server enforces 15 min); anything else
   /// deletes just for this side.

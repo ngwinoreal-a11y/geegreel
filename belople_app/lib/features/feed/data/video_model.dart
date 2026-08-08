@@ -63,6 +63,7 @@ class VideoModel {
     this.liked = false,
     this.following = false,
     this.giftCoins = 0,
+    this.isRepost = false,
     this.isAd = false,
     // Ad-only fields (see design-2.css section F / src/index.js ad shaping)
     this.sponsorName,
@@ -87,6 +88,10 @@ class VideoModel {
   final bool liked;
   final bool following;
   final int giftCoins;
+
+  /// True when this row is a repost (has repostOf) rather than an original —
+  /// used to split the profile's Videos vs Reposts tabs.
+  final bool isRepost;
 
   final bool isAd;
   final String? sponsorName;
@@ -116,6 +121,7 @@ class VideoModel {
       liked: liked ?? this.liked,
       following: following ?? this.following,
       giftCoins: giftCoins,
+      isRepost: isRepost,
       isAd: isAd,
       sponsorName: sponsorName,
       ctaText: ctaText,
@@ -160,6 +166,7 @@ class VideoModel {
       height: (json['height'] as num?)?.toInt(),
       duration: (json['duration'] as num?)?.toDouble(),
       views: (json['views'] as num?)?.toInt() ?? 0,
+      isRepost: json['repostOf'] != null,
       createdAt: parseTimestamp(json['createdAt']),
       user: VideoAuthor.fromJson(json['user'] as Map<String, dynamic>? ?? const {}),
       counts: VideoCounts.fromJson(json['counts'] as Map<String, dynamic>?),

@@ -89,6 +89,9 @@ class FeedRepository {
   /// design-4.css's copy rules: "You already reposted this").
   Future<void> repost(String videoId) => _dio.post('/videos/$videoId/repost');
 
+  /// `DELETE /api/videos/:id` — removes the caller's own video.
+  Future<void> deleteVideo(String videoId) => _dio.delete('/videos/$videoId');
+
   /// `POST /api/videos/:id/share` — returns a share URL. NOTE: design-5.css
   /// flagged this exact button as missing a handler in the reference web
   /// build too ("the share button was the one icon with no click handler

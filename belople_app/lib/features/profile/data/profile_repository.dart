@@ -4,19 +4,30 @@ import '../../../core/cache/local_cache.dart';
 import '../../../core/network/api_client.dart';
 import '../../auth/data/user_model.dart';
 import '../../feed/data/video_model.dart';
+import '../../public_feed/data/post_model.dart';
 
 class ProfileData {
   const ProfileData({
     required this.user,
     required this.following,
     required this.videos,
+    required this.posts,
     required this.locked,
   });
 
   final UserModel user;
   final bool following;
+
+  /// All rows the profile endpoint returns for this user (originals AND
+  /// reposts); split into the Videos / Reposts tabs by [VideoModel.isRepost].
   final List<VideoModel> videos;
+
+  /// Public photo/text posts — the Public tab.
+  final List<PostModel> posts;
   final bool locked;
+
+  List<VideoModel> get originals => videos.where((v) => !v.isRepost).toList();
+  List<VideoModel> get reposts => videos.where((v) => v.isRepost).toList();
 }
 
 /// `GET /api/users/:handle` — see src/index.js. Works by username or id.
@@ -45,10 +56,14 @@ class ProfileRepository {
     final videos = (data['videos'] as List<dynamic>? ?? [])
         .map((v) => VideoModel.fromJson(v as Map<String, dynamic>))
         .toList();
+    final posts = (data['posts'] as List<dynamic>? ?? [])
+        .map((p) => PostModel.fromJson(p as Map<String, dynamic>))
+        .toList();
     return ProfileData(
       user: user,
       following: data['following'] as bool? ?? false,
       videos: videos,
+      posts: posts,
       locked: data['locked'] as bool? ?? false,
     );
   }
