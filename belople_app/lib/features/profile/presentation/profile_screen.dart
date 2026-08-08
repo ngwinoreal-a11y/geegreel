@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/badges_provider.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
@@ -39,7 +40,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         title: Text(profileAsync.valueOrNull?.user.displayName ?? '@${widget.handle}'),
         actions: isSelf
             ? [
-                IconButton(icon: const Icon(Icons.notifications_outlined), onPressed: () => context.push('/notifications')),
+                IconButton(
+                  icon: Badge(
+                    label: Text('${ref.watch(unreadNotificationsProvider).valueOrNull ?? 0}'),
+                    isLabelVisible: (ref.watch(unreadNotificationsProvider).valueOrNull ?? 0) > 0,
+                    child: const Icon(Icons.notifications_outlined),
+                  ),
+                  onPressed: () => context.push('/notifications'),
+                ),
                 IconButton(icon: const Icon(Icons.settings_outlined), onPressed: () => context.push('/settings')),
                 IconButton(icon: const Icon(Icons.account_balance_wallet_outlined), onPressed: () => context.push('/wallet')),
               ]

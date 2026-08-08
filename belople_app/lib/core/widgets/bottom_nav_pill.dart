@@ -16,6 +16,7 @@ class BottomNavPill extends StatelessWidget {
     required this.onTap,
     required this.fabIcon,
     required this.onFabTap,
+    this.badges,
   });
 
   final List<({IconData icon, String label})> items;
@@ -23,6 +24,9 @@ class BottomNavPill extends StatelessWidget {
   final ValueChanged<int> onTap;
   final IconData fabIcon;
   final VoidCallback onFabTap;
+
+  /// Optional per-item unread counts; a count > 0 paints a red badge.
+  final List<int>? badges;
 
   @override
   Widget build(BuildContext context) {
@@ -73,6 +77,7 @@ class BottomNavPill extends StatelessWidget {
                                 icon: items[i].icon,
                                 label: items[i].label,
                                 active: i == activeIndex,
+                                badge: (badges != null && i < badges!.length) ? badges![i] : 0,
                                 onTap: () => onTap(i),
                               ),
                             ),
@@ -117,11 +122,13 @@ class _NavButton extends StatelessWidget {
     required this.label,
     required this.active,
     required this.onTap,
+    this.badge = 0,
   });
 
   final IconData icon;
   final String label;
   final bool active;
+  final int badge;
   final VoidCallback onTap;
 
   @override
@@ -140,7 +147,30 @@ class _NavButton extends StatelessWidget {
             curve: AppMotion.pressCurve,
             child: Transform.translate(
               offset: Offset(0, active ? -1 : 0),
-              child: Icon(icon, color: color, size: 22),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(icon, color: color, size: 22),
+                  if (badge > 0)
+                    Positioned(
+                      right: -8,
+                      top: -6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        constraints: const BoxConstraints(minWidth: 16),
+                        decoration: BoxDecoration(
+                          color: AppColors.badge,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          badge > 99 ? '99+' : '$badge',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 3),

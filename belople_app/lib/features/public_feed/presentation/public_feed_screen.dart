@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../../core/widgets/linkified_text.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../feed/data/feed_repository.dart';
 import '../../feed/data/video_model.dart';
 import '../application/public_feed_controller.dart';
+import '../data/link_preview_repository.dart';
 import '../data/post_comment_repository.dart';
 import '../data/post_model.dart';
 import 'post_comments_sheet.dart';
@@ -209,7 +212,16 @@ class _PostCard extends ConsumerWidget {
                 width: double.infinity,
                 padding: const EdgeInsets.all(18),
                 decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14)),
-                child: Text(post.content, style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700)),
+                    if (firstUrl(post.content) != null) ...[
+                      const SizedBox(height: 10),
+                      _LinkPreviewCard(url: firstUrl(post.content)!),
+                    ],
+                  ],
+                ),
               ),
             ),
           Padding(
@@ -269,7 +281,16 @@ class _PostCard extends ConsumerWidget {
           if (post.imageUrl != null && post.content.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(AppSpacing.publicPostPadding, 10, AppSpacing.publicPostPadding, 0),
-              child: Text(post.content, style: AppTypography.sans(fontSize: 15)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15)),
+                  if (firstUrl(post.content) != null) ...[
+                    const SizedBox(height: 10),
+                    _LinkPreviewCard(url: firstUrl(post.content)!),
+                  ],
+                ],
+              ),
             ),
         ],
       ),
@@ -356,6 +377,63 @@ class _VideoCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: AppTypography.sans(fontSize: 15)),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A rich preview (title + thumbnail + site) for the first link in a post's
+/// caption — fetched from GET /api/link-preview and cached per URL.
+class _LinkPreviewCard extends ConsumerWidget {
+  const _LinkPreviewCard({required this.url});
+  final String url;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final preview = ref.watch(linkPreviewProvider(url)).valueOrNull;
+    if (preview == null || preview.title.isEmpty) return const SizedBox.shrink();
+    return GestureDetector(
+      onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.raised,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (preview.image != null && preview.image!.isNotEmpty)
+              AspectRatio(
+                aspectRatio: 1.9,
+                child: Image.network(preview.image!, fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink()),
+              ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(preview.siteName ?? Uri.parse(url).host,
+                      style: AppTypography.sans(fontSize: 11, color: AppColors.muted)),
+                  const SizedBox(height: 3),
+                  Text(preview.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700)),
+                  if (preview.description != null && preview.description!.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(preview.description!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
+                  ],
+                ],
+              ),
+            ),
           ],
         ),
       ),

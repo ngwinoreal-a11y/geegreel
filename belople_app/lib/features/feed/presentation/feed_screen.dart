@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/badges_provider.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_colors.dart';
@@ -291,6 +292,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                 (icon: Icons.mail_outline, label: 'Messages'),
                 (icon: Icons.home_rounded, label: 'Feed'),
               ],
+              badges: [ref.watch(unreadMessagesProvider).valueOrNull ?? 0, 0],
               activeIndex: _navIndex,
               onTap: (i) {
                 if (i == 0) {

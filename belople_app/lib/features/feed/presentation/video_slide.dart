@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
@@ -244,6 +245,18 @@ class _VideoSlideState extends State<VideoSlide> with WidgetsBindingObserver {
                     ],
                   ],
                 ),
+                if (widget.video.isAd) ...[
+                  const SizedBox(height: 5),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppColors.sponsor.withValues(alpha: 0.9),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text('Sponsored',
+                        style: AppTypography.sans(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.onChrome)),
+                  ),
+                ],
                 if (widget.video.caption.isNotEmpty) ...[
                   const SizedBox(height: 5),
                   Text(
@@ -251,6 +264,25 @@ class _VideoSlideState extends State<VideoSlide> with WidgetsBindingObserver {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: AppTypography.sans(fontSize: 14, color: Colors.white),
+                  ),
+                ],
+                if (widget.video.isAd && widget.video.linkUrl != null) ...[
+                  const SizedBox(height: 8),
+                  GestureDetector(
+                    onTap: () => launchUrl(Uri.parse(widget.video.linkUrl!), mode: LaunchMode.externalApplication),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(widget.video.ctaText ?? 'Learn more',
+                              style: AppTypography.sans(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.onChrome)),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.open_in_new, size: 14, color: AppColors.onChrome),
+                        ],
+                      ),
+                    ),
                   ),
                 ],
                 if (widget.video.song != null) ...[
