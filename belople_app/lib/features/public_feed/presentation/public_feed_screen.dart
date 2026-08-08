@@ -1,7 +1,10 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
@@ -203,7 +206,7 @@ class _PostCard extends ConsumerWidget {
           if (post.imageUrl != null)
             AspectRatio(
               aspectRatio: post.aspectRatio,
-              child: Image.network(mediaUrl(post.imageUrl!), fit: BoxFit.contain, width: double.infinity),
+              child: CachedNetworkImage(imageUrl: mediaUrl(post.imageUrl!), fit: BoxFit.contain, width: double.infinity),
             )
           else if (post.content.isNotEmpty)
             Padding(
@@ -316,69 +319,144 @@ class _VideoItem extends _FeedItem {
 
 /// A spliced video shown as a tappable 9:16 thumbnail with a play badge —
 /// tapping opens the full vertical player at /v/:id.
-class _VideoCard extends StatelessWidget {
+/// A spliced feed video that autoplays muted while on screen (Instagram
+/// style) and pauses the instant it scrolls away — controlled by a
+/// VisibilityDetector so only the visible one is ever decoding. A speaker
+/// button toggles sound; tapping the video opens the full vertical player.
+class _VideoCard extends StatefulWidget {
   const _VideoCard({required this.video});
   final VideoModel video;
 
   @override
+  State<_VideoCard> createState() => _VideoCardState();
+}
+
+class _VideoCardState extends State<_VideoCard> {
+  VideoPlayerController? _controller;
+  bool _muted = true;
+  bool _visible = false;
+  bool _initializing = false;
+
+  Future<void> _ensureInit() async {
+    if (_controller != null || _initializing) return;
+    _initializing = true;
+    final c = VideoPlayerController.networkUrl(Uri.parse(mediaUrl(widget.video.videoUrl)));
+    try {
+      await c.initialize();
+      await c.setLooping(true);
+      await c.setVolume(_muted ? 0 : 1);
+    } catch (_) {
+      c.dispose();
+      _initializing = false;
+      return;
+    }
+    if (!mounted) { c.dispose(); return; }
+    setState(() { _controller = c; _initializing = false; });
+    if (_visible) c.play();
+  }
+
+  void _onVisibility(VisibilityInfo info) {
+    final visible = info.visibleFraction > 0.6;
+    if (visible == _visible) return;
+    _visible = visible;
+    if (visible) {
+      _ensureInit();
+      _controller?.play();
+    } else {
+      _controller?.pause();
+    }
+  }
+
+  void _toggleMute() {
+    setState(() => _muted = !_muted);
+    _controller?.setVolume(_muted ? 0 : 1);
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final video = widget.video;
+    final c = _controller;
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.md),
-      child: GestureDetector(
-        onTap: () => context.push('/v/${video.id}'),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.publicPostPadding, vertical: 10),
-              child: Row(
-                children: [
-                  AppAvatar(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding, vertical: 10),
+            child: Row(
+              children: [
+                GestureDetector(
+                  onTap: () => context.push('/profile/${video.user.username}'),
+                  child: AppAvatar(
                     size: 32,
                     imageUrl: video.user.avatarUrl != null ? mediaUrl(video.user.avatarUrl!) : null,
                     displayName: video.user.displayName,
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(video.user.displayName,
-                        style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14)),
-                  ),
-                  Icon(Icons.play_circle_fill, color: AppColors.muted, size: 18),
-                  const SizedBox(width: 5),
-                  Text('Video', style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
-                ],
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(video.user.displayName,
+                      style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14)),
+                ),
+              ],
+            ),
+          ),
+          VisibilityDetector(
+            key: Key('pubvid-${video.id}'),
+            onVisibilityChanged: _onVisibility,
+            child: GestureDetector(
+              onTap: () => context.push('/v/${video.id}'),
+              child: AspectRatio(
+                aspectRatio: 9 / 16,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (c != null && c.value.isInitialized)
+                      FittedBox(
+                        fit: BoxFit.cover,
+                        child: SizedBox(
+                          width: c.value.size.width,
+                          height: c.value.size.height,
+                          child: VideoPlayer(c),
+                        ),
+                      )
+                    else
+                      DecoratedBox(
+                        decoration: const BoxDecoration(color: AppColors.raised),
+                        child: video.thumbUrl != null
+                            ? CachedNetworkImage(imageUrl: mediaUrl(video.thumbUrl!), fit: BoxFit.cover)
+                            : null,
+                      ),
+                    // Mute / unmute — tap doesn't bubble to the open-player tap.
+                    Positioned(
+                      right: 12,
+                      bottom: 12,
+                      child: GestureDetector(
+                        onTap: _toggleMute,
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                          child: Icon(_muted ? Icons.volume_off : Icons.volume_up, color: Colors.white, size: 18),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            AspectRatio(
-              aspectRatio: 9 / 16,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  DecoratedBox(
-                    decoration: const BoxDecoration(color: AppColors.raised),
-                    child: video.thumbUrl != null
-                        ? Image.network(mediaUrl(video.thumbUrl!), fit: BoxFit.cover)
-                        : null,
-                  ),
-                  const Center(
-                    child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 56,
-                        shadows: [Shadow(color: Colors.black54, blurRadius: 12)]),
-                  ),
-                ],
-              ),
+          ),
+          if (video.caption.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(AppSpacing.publicPostPadding, 10, AppSpacing.publicPostPadding, 0),
+              child: Text(video.caption, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppTypography.sans(fontSize: 15)),
             ),
-            if (video.caption.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.publicPostPadding, 10, AppSpacing.publicPostPadding, 0),
-                child: Text(video.caption,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.sans(fontSize: 15)),
-              ),
-          ],
-        ),
+        ],
       ),
     );
   }

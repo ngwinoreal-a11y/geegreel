@@ -190,7 +190,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                     return const ColoredBox(color: Colors.black);
                   }
                   final video = state.videos[index];
-                  return VideoSlide(
+                  return RepaintBoundary(
+                    child: VideoSlide(
                     video: video,
                     isActive: index == _activeIndex && _routeVisible,
                     onLikeTap: () => _requireLogin(() =>
@@ -209,6 +210,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                     onGiftTap: () =>
                         _requireLogin(() => showGiftSheet(context, videoId: video.id)),
                     onRepostTap: () => _requireLogin(() => _repost(video.id)),
+                  ),
                   );
                 },
               );

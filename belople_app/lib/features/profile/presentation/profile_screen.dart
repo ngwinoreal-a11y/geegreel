@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -180,7 +181,9 @@ class _VideoCell extends StatelessWidget {
         children: [
           DecoratedBox(
             decoration: const BoxDecoration(color: AppColors.raised),
-            child: video.thumbUrl != null ? Image.network(mediaUrl(video.thumbUrl!), fit: BoxFit.cover) : null,
+            child: video.thumbUrl != null
+                ? CachedNetworkImage(imageUrl: mediaUrl(video.thumbUrl!), fit: BoxFit.cover)
+                : null,
           ),
           Positioned(
             left: 6,
@@ -216,7 +219,7 @@ class _PostCell extends StatelessWidget {
     return DecoratedBox(
       decoration: const BoxDecoration(color: AppColors.raised),
       child: post.imageUrl != null
-          ? Image.network(mediaUrl(post.imageUrl!), fit: BoxFit.cover)
+          ? CachedNetworkImage(imageUrl: mediaUrl(post.imageUrl!), fit: BoxFit.cover)
           : Padding(
               padding: const EdgeInsets.all(8),
               child: Text(post.content, maxLines: 6, overflow: TextOverflow.ellipsis, style: AppTypography.sans(fontSize: 12)),
