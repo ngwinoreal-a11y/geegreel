@@ -11,6 +11,7 @@ import '../../../core/theme/app_typography.dart';
 import '../../sounds/data/sound_repository.dart';
 import '../../sounds/presentation/sound_picker_sheet.dart';
 import '../data/upload_repository.dart';
+import 'posted_sheet.dart';
 
 enum _ComposerMode { video, photo, text }
 
@@ -22,7 +23,7 @@ enum _ComposerMode { video, photo, text }
 /// via the OS camera UI, caption, upload with progress, land in the feed)
 /// end to end against the real backend.
 class ComposerScreen extends ConsumerStatefulWidget {
-  const ComposerScreen({super.key, this.soundId, this.videoPath});
+  const ComposerScreen({super.key, this.soundId, this.videoPath, this.imagePath, this.initialMode});
 
   /// When arriving from a sound page's "Use this sound", the picked video is
   /// attached to this sound on publish. Locks the composer to video mode.
@@ -32,12 +33,22 @@ class ComposerScreen extends ConsumerStatefulWidget {
   /// composer opens already showing it (no re-pick needed).
   final String? videoPath;
 
+  /// A photo captured/picked in the camera's Public mode.
+  final String? imagePath;
+
+  /// Which post type the camera chose: 'photo' or 'text' (else video).
+  final String? initialMode;
+
   @override
   ConsumerState<ComposerScreen> createState() => _ComposerScreenState();
 }
 
 class _ComposerScreenState extends ConsumerState<ComposerScreen> {
-  _ComposerMode _mode = _ComposerMode.video;
+  late _ComposerMode _mode = switch (widget.initialMode) {
+    'photo' => _ComposerMode.photo,
+    'text' => _ComposerMode.text,
+    _ => _ComposerMode.video,
+  };
   File? _videoFile;
   File? _imageFile;
   VideoPlayerController? _previewController;
@@ -60,9 +71,11 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
   @override
   void initState() {
     super.initState();
-    // A video handed in from the in-app camera previews immediately.
+    // Media handed in from the in-app camera previews immediately.
     if (widget.videoPath != null) {
       _loadVideoPreview(File(widget.videoPath!));
+    } else if (widget.imagePath != null) {
+      _imageFile = File(widget.imagePath!);
     }
   }
 
@@ -81,9 +94,13 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
   /// Opens the in-app camera (live preview + filters); falls back to nothing
   /// if the user backs out. Returns via the same preview path as gallery.
   Future<void> _recordInApp() async {
-    final path = await context.push<String>('/camera');
-    if (path == null) return;
-    await _loadVideoPreview(File(path));
+    final result = await context.push<String>('/camera');
+    if (result == null) return;
+    if (result.startsWith('video:')) {
+      await _loadVideoPreview(File(result.substring(6)));
+    } else if (result.startsWith('photo:') && mounted) {
+      setState(() { _imageFile = File(result.substring(6)); _mode = _ComposerMode.photo; });
+    }
   }
 
   Future<void> _pickVideo(ImageSource source) async {
@@ -116,9 +133,10 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
     setState(() { _uploading = true; _error = null; _progress = 0; });
     try {
       final repo = ref.read(uploadRepositoryProvider);
+      String? uploadedVideoId;
       if (_mode == _ComposerMode.video) {
         if (_videoFile == null) throw Exception('Pick or record a video first');
-        await repo.uploadVideo(
+        uploadedVideoId = await repo.uploadVideo(
           file: _videoFile!,
           caption: _captionController.text.trim(),
           soundId: _effectiveSoundId,
@@ -136,10 +154,13 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
           },
         );
       }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Published!')));
-        context.pop();
+      if (!mounted) return;
+      if (uploadedVideoId != null && uploadedVideoId.isNotEmpty) {
+        await showPostedSheet(context, ref, videoId: uploadedVideoId, previewController: _previewController);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Posted!')));
       }
+      if (mounted) context.pop();
     } catch (e) {
       if (mounted) setState(() => _error = "Couldn't publish — check your connection and try again");
     } finally {

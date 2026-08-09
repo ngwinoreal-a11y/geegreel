@@ -2,7 +2,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:gal/gal.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
@@ -11,9 +13,9 @@ import '../../../core/widgets/app_avatar.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_repository.dart';
 import '../../chat/data/message_model.dart';
+import '../../feed/application/playback_speed.dart';
 import '../../feed/data/feed_repository.dart';
 import '../../feed/data/video_model.dart';
-import '../../wallet/presentation/gift_sheet.dart';
 
 /// Ports the video "•••" sheet from the reference: quick actions (Save video /
 /// Gift / Delete-or-Report), a Share-with row (Copy link / WhatsApp), Repost,
@@ -38,6 +40,8 @@ class _MoreSheet extends ConsumerStatefulWidget {
 
 class _MoreSheetState extends ConsumerState<_MoreSheet> {
   List<ThreadPreview>? _people;
+  bool _downloading = false;
+  double _downloadProgress = 0;
 
   @override
   void initState() {
@@ -45,16 +49,69 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
     _loadPeople();
   }
 
+  /// Show the cached inbox instantly (feels offline-fast), then refresh.
   Future<void> _loadPeople() async {
+    final cached = ref.read(chatRepositoryProvider).readCachedInbox();
+    if (cached != null) {
+      _people = cached.where((t) => !t.isPendingRequestToMe).toList();
+    }
     try {
       final threads = await ref.read(chatRepositoryProvider).fetchInbox();
       if (mounted) setState(() => _people = threads.where((t) => !t.isPendingRequestToMe).toList());
     } catch (_) {
-      if (mounted) setState(() => _people = const []);
+      if (mounted && _people == null) setState(() => _people = const []);
     }
   }
 
   VideoModel get video => widget.video;
+
+  /// Downloads the video in-app with a progress bar, then saves it to the
+  /// phone's gallery — no browser hop.
+  Future<void> _saveVideo() async {
+    if (_downloading) return;
+    setState(() { _downloading = true; _downloadProgress = 0; });
+    try {
+      final dir = await getTemporaryDirectory();
+      final path = '${dir.path}/belople_${video.id}.mp4';
+      await ref.read(dioProvider).download(
+        mediaUrl(video.videoUrl),
+        path,
+        onReceiveProgress: (received, total) {
+          if (total > 0 && mounted) setState(() => _downloadProgress = received / total);
+        },
+      );
+      await Gal.putVideo(path, album: 'Belople');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved to your gallery')));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't save the video")));
+      }
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  /// Cycles the playback speed (0.5x → 1x → 1.5x → 2x → …) applied to the
+  /// playing video via [playbackSpeedProvider].
+  void _cycleSpeed() {
+    final current = ref.read(playbackSpeedProvider);
+    final i = kPlaybackSpeeds.indexOf(current);
+    final next = kPlaybackSpeeds[(i + 1) % kPlaybackSpeeds.length];
+    ref.read(playbackSpeedProvider.notifier).state = next;
+  }
+
+  /// Native share sheet — shows whatever apps are installed (WhatsApp,
+  /// Facebook, Messenger, …) with the video's link.
+  Future<void> _shareToApps() async {
+    try {
+      final url = await _link();
+      await Share.share(url, subject: 'Belople video');
+    } catch (_) {}
+  }
+
+  static String _fmtSpeed(double s) => s == s.truncateToDouble() ? '${s.toInt()}x' : '${s}x';
 
   Future<void> _shareUrl() async {
     try {
@@ -130,7 +187,7 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
                 controller: scrollController,
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
-                  // Quick actions row.
+                  // Quick actions row: Save (with progress) / Speed / Delete-Report.
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                     child: Row(
@@ -138,19 +195,15 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
                       children: [
                         _QuickAction(
                           icon: Icons.download_outlined,
-                          label: 'Save video',
-                          onTap: () async {
-                            final url = mediaUrl(video.videoUrl);
-                            launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-                          },
+                          label: _downloading ? '${(_downloadProgress * 100).toStringAsFixed(0)}%' : 'Save video',
+                          busy: _downloading,
+                          progress: _downloadProgress,
+                          onTap: _saveVideo,
                         ),
                         _QuickAction(
-                          icon: Icons.card_giftcard,
-                          label: 'Gift',
-                          onTap: () {
-                            Navigator.of(context).pop();
-                            showGiftSheet(context, videoId: video.id);
-                          },
+                          icon: Icons.speed,
+                          label: '${_fmtSpeed(ref.watch(playbackSpeedProvider))} Speed',
+                          onTap: _cycleSpeed,
                         ),
                         if (isOwn)
                           _QuickAction(icon: Icons.delete_outline, label: 'Delete', danger: true, onTap: _delete)
@@ -160,20 +213,13 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
                     ),
                   ),
                   const Divider(height: 1, color: AppColors.sheetLine),
-                  // Share with.
+                  // Share with — native sheet (installed apps) + copy link.
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
                     child: Row(
                       children: [
                         Expanded(child: Text('Share with', style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.sheetInk))),
-                        _ShareCircle(
-                          color: const Color(0xFF25D366),
-                          icon: Icons.chat,
-                          onTap: () async {
-                            final url = await _link();
-                            launchUrl(Uri.parse('https://wa.me/?text=${Uri.encodeComponent(url)}'), mode: LaunchMode.externalApplication);
-                          },
-                        ),
+                        _ShareCircle(color: const Color(0xFF25D366), icon: Icons.ios_share, onTap: _shareToApps),
                         const SizedBox(width: 10),
                         _ShareCircle(color: AppColors.sheetFill, icon: Icons.link, iconColor: AppColors.sheetInk, onTap: _shareUrl),
                       ],
@@ -221,24 +267,45 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
 }
 
 class _QuickAction extends StatelessWidget {
-  const _QuickAction({required this.icon, required this.label, required this.onTap, this.danger = false});
+  const _QuickAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.danger = false,
+    this.busy = false,
+    this.progress = 0,
+  });
   final IconData icon;
   final String label;
   final VoidCallback onTap;
   final bool danger;
+  final bool busy;
+  final double progress;
 
   @override
   Widget build(BuildContext context) {
     final color = danger ? AppColors.danger : AppColors.sheetInk;
     return GestureDetector(
-      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      onTap: busy ? null : onTap,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
             width: 52, height: 52,
             decoration: const BoxDecoration(color: AppColors.sheetFill, shape: BoxShape.circle),
-            child: Icon(icon, color: color, size: 24),
+            child: busy
+                ? Center(
+                    child: SizedBox(
+                      width: 24, height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        value: progress > 0 ? progress : null,
+                        color: AppColors.sheetInk,
+                      ),
+                    ),
+                  )
+                : Icon(icon, color: color, size: 24),
           ),
           const SizedBox(height: 6),
           Text(label, style: AppTypography.sans(fontSize: 12, color: color)),

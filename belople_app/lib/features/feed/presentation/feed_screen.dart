@@ -136,10 +136,14 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
   Future<void> _openCreate() async {
     final result = await context.push<String>('/camera');
     if (!mounted || result == null) return;
-    if (result == 'compose') {
-      context.push('/compose');
+    if (result == 'text') {
+      context.push('/compose', extra: {'mode': 'text'});
+    } else if (result.startsWith('video:')) {
+      context.push('/compose', extra: {'videoPath': result.substring(6)});
+    } else if (result.startsWith('photo:')) {
+      context.push('/compose', extra: {'imagePath': result.substring(6), 'mode': 'photo'});
     } else {
-      context.push('/compose', extra: {'videoPath': result});
+      context.push('/compose');
     }
   }
 
@@ -203,9 +207,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                     onCommentTap: () => showCommentsSheet(context, videoId: video.id),
                     onMoreTap: () => _requireLogin(
                         () => showMoreOptionsSheet(context, ref, video: video)),
-                    onSoundTap: video.soundId != null
-                        ? () => context.push('/sound/${video.soundId}')
-                        : null,
+                    // Tapping the sound always goes somewhere: a shareable
+                    // sound opens its page; an original sound opens the
+                    // creator's profile (the "owner" of that sound).
+                    onSoundTap: () => context.push(video.soundId != null
+                        ? '/sound/${video.soundId}'
+                        : '/profile/${video.user.username}'),
                     onShareTap: () => _share(video.id),
                     onGiftTap: () =>
                         _requireLogin(() => showGiftSheet(context, videoId: video.id)),
@@ -235,6 +242,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                         onTap: () => _requireLogin(() => context.push('/profile/${me!.username}')),
                         child: AppAvatar(
                           size: 44,
+                          ring: true,
                           imageUrl: me?.avatarUrl != null ? mediaUrl(me!.avatarUrl!) : null,
                           displayName: me?.displayName ?? '?',
                           backgroundColor: AppColors.chrome,
@@ -292,7 +300,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
             child: BottomNavPill(
               items: const [
                 (icon: Icons.mail_outline, label: 'Messages'),
-                (icon: Icons.home_rounded, label: 'Feed'),
+                (icon: Icons.smart_display, label: 'Shorts'),
               ],
               badges: [ref.watch(unreadMessagesProvider).valueOrNull ?? 0, 0],
               activeIndex: _navIndex,

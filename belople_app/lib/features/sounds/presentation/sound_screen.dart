@@ -76,10 +76,10 @@ class SoundScreen extends ConsumerWidget {
                         // composer with this sound already attached.
                         final result = await context.push<String>('/camera');
                         if (!context.mounted || result == null) return;
-                        if (result == 'compose') {
-                          context.push('/compose?sound=$soundId');
+                        if (result.startsWith('video:')) {
+                          context.push('/compose?sound=$soundId', extra: {'videoPath': result.substring(6)});
                         } else {
-                          context.push('/compose?sound=$soundId', extra: {'videoPath': result});
+                          context.push('/compose?sound=$soundId');
                         }
                       },
                       icon: const Icon(Icons.videocam, size: 18),

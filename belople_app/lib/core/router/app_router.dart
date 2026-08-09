@@ -110,6 +110,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return ComposerScreen(
           soundId: state.uri.queryParameters['sound'],
           videoPath: extra?['videoPath'] as String?,
+          imagePath: extra?['imagePath'] as String?,
+          initialMode: extra?['mode'] as String?,
         );
       }),
       _route('/camera', (context, state) => const CameraCaptureScreen()),

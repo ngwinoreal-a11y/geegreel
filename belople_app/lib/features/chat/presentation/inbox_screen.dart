@@ -6,6 +6,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/bottom_nav_pill.dart';
+import '../../../core/widgets/brand_wordmark.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../data/chat_repository.dart';
 import '../data/message_model.dart';
@@ -54,7 +55,7 @@ class InboxScreen extends ConsumerWidget {
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
-        title: const Text('Messages'),
+        title: const BrandWordmark(fontSize: 22),
         actions: [
           IconButton(
             icon: Badge(
@@ -108,7 +109,7 @@ class InboxScreen extends ConsumerWidget {
             child: BottomNavPill(
               items: const [
                 (icon: Icons.mail_outline, label: 'Messages'),
-                (icon: Icons.home_rounded, label: 'Feed'),
+                (icon: Icons.smart_display, label: 'Shorts'),
               ],
               activeIndex: 0,
               onTap: (i) {

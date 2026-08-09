@@ -69,6 +69,11 @@ dependencies:
   # --- Tappable links inside chat messages ---
   url_launcher: ^6.3.1
 
+  # --- Native share sheet (shows installed apps: WhatsApp, Facebook, …) and
+  # saving a downloaded video into the phone's gallery ---
+  share_plus: ^10.1.4
+  gal: ^2.3.1
+
   # --- Instagram-style autoplay: play the public-feed video only while it's
   # actually on screen, pause it the moment it scrolls away ---
   visibility_detector: ^0.4.0+2
@@ -95,6 +100,21 @@ dev_dependencies:
 
   build_runner: ^2.4.13
   riverpod_generator: ^2.6.3
+
+  # Generates the Android/iOS launcher icons from the Belople logo.
+  flutter_launcher_icons: ^0.14.1
+
+# App launcher icon config — run `dart run flutter_launcher_icons` to
+# regenerate after changing assets/icon/belople_logo.jpg.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/belople_logo.jpg"
+  min_sdk_android: 21
+  remove_alpha_ios: true
+  # Adaptive icon: the logo already sits on black, so match the background.
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "assets/icon/belople_logo.jpg"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

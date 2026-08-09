@@ -70,6 +70,7 @@ class VideoModel {
     this.ctaText,
     this.linkUrl,
     this.adId,
+    this.adType,
   });
 
   final String id;
@@ -98,6 +99,11 @@ class VideoModel {
   final String? ctaText;
   final String? linkUrl;
   final String? adId;
+
+  /// 'image' or 'video' — an image ad is shown as a still, not played.
+  final String? adType;
+
+  bool get isImageAd => isAd && adType == 'image';
 
   VideoModel copyWith({
     VideoCounts? counts,
@@ -149,6 +155,7 @@ class VideoModel {
         createdAt: DateTime.now(),
         user: const VideoAuthor(id: '', username: '', displayName: ''),
         isAd: true,
+        adType: json['adType'] as String?,
         sponsorName: json['sponsorName'] as String?,
         ctaText: json['ctaText'] as String?,
         linkUrl: json['linkUrl'] as String?,

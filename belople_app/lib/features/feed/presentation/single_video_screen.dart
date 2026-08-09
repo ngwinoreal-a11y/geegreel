@@ -50,6 +50,9 @@ class SingleVideoScreen extends ConsumerWidget {
               },
               onCommentTap: () => showCommentsSheet(context, videoId: video.id),
               onAuthorTap: () => context.push('/profile/${video.user.username}'),
+              onSoundTap: () => context.push(video.soundId != null
+                  ? '/sound/${video.soundId}'
+                  : '/profile/${video.user.username}'),
               onGiftTap: () {
                 if (!ref.read(isLoggedInProvider)) {
                   context.push('/login');

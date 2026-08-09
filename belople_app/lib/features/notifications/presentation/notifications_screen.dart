@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,13 +11,27 @@ import '../data/notification_model.dart';
 import '../data/notifications_repository.dart';
 
 /// Ports index.html's notificationsPage() + design-2.css section B: actor
-/// avatar, message, relative time, and a right-aligned video thumbnail
-/// (omitted for follow notifications).
-class NotificationsScreen extends ConsumerWidget {
+/// avatar (tap → their profile), bold-name message, relative time, and a
+/// right-aligned video thumbnail. Tapping the row opens the video (or the
+/// profile for a follow); opening the list clears the unread badge.
+class NotificationsScreen extends ConsumerStatefulWidget {
   const NotificationsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<NotificationsScreen> createState() => _NotificationsScreenState();
+}
+
+class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Opening the list marks everything read, same as TikTok's inbox — clears
+    // the bell badge.
+    ref.read(notificationsRepositoryProvider).markAllRead().catchError((_) {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final notificationsAsync = ref.watch(notificationsProvider);
 
     return Scaffold(
@@ -40,7 +55,17 @@ class NotificationsScreen extends ConsumerWidget {
         data: (items) {
           if (items.isEmpty) {
             return Center(
-              child: Text('No notifications yet', style: AppTypography.sans(color: AppColors.muted)),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.notifications_none, color: AppColors.faint, size: 56),
+                  const SizedBox(height: 12),
+                  Text('Nothing yet', style: AppTypography.sans(color: AppColors.muted, fontSize: 15)),
+                  const SizedBox(height: 4),
+                  Text('Likes, comments and follows will show up here.',
+                      style: AppTypography.sans(color: AppColors.faint, fontSize: 13)),
+                ],
+              ),
             );
           }
           return ListView.builder(
@@ -57,19 +82,37 @@ class _NotificationRow extends StatelessWidget {
   const _NotificationRow({required this.item});
   final NotificationModel item;
 
+  void _openProfile(BuildContext context) => context.push('/profile/${item.actorUsername}');
+
+  void _openRow(BuildContext context) {
+    // The avatar means "that person"; the row means "the thing they did" —
+    // a follow has no video so it opens the profile, everything else opens
+    // the video it's about.
+    if (item.type == 'follow' || item.videoId == null) {
+      _openProfile(context);
+    } else {
+      context.push('/v/${item.videoId}');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: item.read ? null : AppColors.unreadTint,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: GestureDetector(
-        onTap: () => context.push('/profile/${item.actorUsername}'),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _openRow(context),
+      child: Container(
+        color: item.read ? null : AppColors.unreadTint,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            AppAvatar(
-              size: 46,
-              imageUrl: item.actorAvatarUrl != null ? mediaUrl(item.actorAvatarUrl!) : null,
-              displayName: item.actorDisplayName,
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _openProfile(context),
+              child: AppAvatar(
+                size: 46,
+                imageUrl: item.actorAvatarUrl != null ? mediaUrl(item.actorAvatarUrl!) : null,
+                displayName: item.actorDisplayName,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -80,10 +123,7 @@ class _NotificationRow extends StatelessWidget {
                     text: TextSpan(
                       style: AppTypography.sans(fontSize: 14, color: AppColors.text),
                       children: [
-                        TextSpan(
-                          text: item.actorDisplayName,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
+                        TextSpan(text: item.actorDisplayName, style: const TextStyle(fontWeight: FontWeight.w600)),
                         TextSpan(text: ' ${item.message}'),
                       ],
                     ),
@@ -98,8 +138,8 @@ class _NotificationRow extends StatelessWidget {
               const SizedBox(width: 8),
               ClipRRect(
                 borderRadius: BorderRadius.circular(6),
-                child: Image.network(
-                  mediaUrl(item.videoThumb!),
+                child: CachedNetworkImage(
+                  imageUrl: mediaUrl(item.videoThumb!),
                   width: 44,
                   height: 56,
                   fit: BoxFit.cover,

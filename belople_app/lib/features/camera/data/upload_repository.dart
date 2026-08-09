@@ -11,7 +11,8 @@ class UploadRepository {
   UploadRepository(this._dio);
   final Dio _dio;
 
-  Future<void> uploadVideo({
+  /// Returns the created video's id (for the "posted" popup's share/copy link).
+  Future<String> uploadVideo({
     required File file,
     required String caption,
     String visibility = 'public',
@@ -28,7 +29,9 @@ class UploadRepository {
       if (soundId == null && soundShareable) 'soundShareable': '1',
       'video': await MultipartFile.fromFile(file.path, filename: 'upload.mp4'),
     });
-    await _dio.post('/videos', data: formData, onSendProgress: onProgress);
+    final res = await _dio.post('/videos', data: formData, onSendProgress: onProgress);
+    final data = res.data as Map<String, dynamic>;
+    return (data['video'] as Map<String, dynamic>?)?['id']?.toString() ?? '';
   }
 
   Future<void> uploadPost({

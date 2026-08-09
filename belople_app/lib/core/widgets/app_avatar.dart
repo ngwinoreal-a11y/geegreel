@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_typography.dart';
@@ -16,6 +17,7 @@ class AppAvatar extends StatelessWidget {
     this.borderWidth = 0,
     this.backgroundColor = AppColors.raised,
     this.textColor = AppColors.text,
+    this.ring = false,
   });
 
   final double size;
@@ -26,6 +28,15 @@ class AppAvatar extends StatelessWidget {
   final Color backgroundColor;
   final Color textColor;
 
+  /// Wraps the avatar in an Instagram-style gradient story ring.
+  final bool ring;
+
+  static const _ringGradient = LinearGradient(
+    begin: Alignment.topRight,
+    end: Alignment.bottomLeft,
+    colors: [Color(0xFFF9CE34), Color(0xFFEE2A7B), Color(0xFF6228D7)],
+  );
+
   String get _initial {
     final n = displayName?.trim();
     if (n == null || n.isEmpty) return '?';
@@ -34,7 +45,7 @@ class AppAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final avatar = Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
@@ -46,12 +57,24 @@ class AppAvatar extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: (imageUrl != null && imageUrl!.isNotEmpty)
-          ? Image.network(
-              imageUrl!,
+          ? CachedNetworkImage(
+              imageUrl: imageUrl!,
               fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => _initials(),
+              errorWidget: (_, _, _) => _initials(),
+              placeholder: (_, _) => _initials(),
             )
           : _initials(),
+    );
+    if (!ring) return avatar;
+    // Gradient story ring with a thin dark gap between it and the photo.
+    return Container(
+      padding: const EdgeInsets.all(2.5),
+      decoration: const BoxDecoration(shape: BoxShape.circle, gradient: _ringGradient),
+      child: Container(
+        padding: const EdgeInsets.all(2),
+        decoration: const BoxDecoration(shape: BoxShape.circle, color: AppColors.bg),
+        child: avatar,
+      ),
     );
   }
 

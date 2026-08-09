@@ -2,14 +2,20 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import 'camera_filters.dart';
 
-/// In-app camera: live preview with a colour-filter strip, tap-to-record (max
-/// 60s), flip camera, and flash toggle. Pops back the recorded file's path as
-/// a String so the composer can preview and upload it — the OS-picker path in
-/// the composer remains as the fallback when a device has no usable camera.
+/// In-app camera modelled on the reference (Instagram/TikTok style): mode tabs
+/// Short / Public / Text, a max-duration picker for Short, live colour filters,
+/// flip, flash, and gallery access.
+///
+/// Pops a result the caller routes into the composer:
+///   `video:<path>`  a recorded/gallery video    (Short)
+///   `photo:<path>`  a captured/gallery photo     (Public)
+///   'text'          switch to a text-only post   (Text)
+///   'compose'       open the composer with nothing (fallback)
 class CameraCaptureScreen extends StatefulWidget {
   const CameraCaptureScreen({super.key});
 
@@ -17,8 +23,9 @@ class CameraCaptureScreen extends StatefulWidget {
   State<CameraCaptureScreen> createState() => _CameraCaptureScreenState();
 }
 
-class _CameraCaptureScreenState extends State<CameraCaptureScreen>
-    with WidgetsBindingObserver {
+enum _CamMode { short, public, text }
+
+class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsBindingObserver {
   List<CameraDescription> _cameras = const [];
   CameraController? _controller;
   int _cameraIndex = 0;
@@ -30,8 +37,15 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
   Timer? _timer;
   FlashMode _flashMode = FlashMode.off;
   int _filterIndex = 0;
+  bool _showFilters = false;
 
-  static const _maxRecord = Duration(seconds: 60);
+  _CamMode _mode = _CamMode.short;
+  int _maxSeconds = 60;
+  final _picker = ImagePicker();
+
+  // Max-record options shown as pills in Short mode.
+  static const _durations = [15, 60, 180];
+  String _durationLabel(int s) => s < 60 ? '${s}s' : '${s ~/ 60}m';
 
   @override
   void initState() {
@@ -54,23 +68,25 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
   }
 
   Future<void> _startController(int index) async {
+    // Release the previous camera BEFORE opening the next one. Holding two
+    // controllers at once is what made a flip-to-front come up black.
     final previous = _controller;
-    final controller = CameraController(
-      _cameras[index],
-      ResolutionPreset.high,
-      enableAudio: true,
-    );
-    _controller = controller;
+    _controller = null;
+    await previous?.dispose();
+
+    final controller = CameraController(_cameras[index], ResolutionPreset.high, enableAudio: true);
     _cameraIndex = index;
     try {
       await controller.initialize();
-      await controller.setFlashMode(_flashMode);
     } catch (_) {
       if (mounted) setState(() { _initializing = false; _error = "Couldn't start the camera"; });
       return;
     }
-    await previous?.dispose();
-    if (mounted) setState(() => _initializing = false);
+    try {
+      await controller.setFlashMode(_flashMode);
+    } catch (_) {}
+    if (!mounted) { controller.dispose(); return; }
+    setState(() { _controller = controller; _initializing = false; });
   }
 
   @override
@@ -84,6 +100,25 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
     }
   }
 
+  // ----- capture actions -----
+
+  Future<void> _onCapture() async {
+    if (_mode == _CamMode.public) {
+      await _takePhoto();
+    } else {
+      await _toggleRecording();
+    }
+  }
+
+  Future<void> _takePhoto() async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    try {
+      final file = await controller.takePicture();
+      if (mounted) context.pop('photo:${file.path}');
+    } catch (_) {}
+  }
+
   Future<void> _toggleRecording() async {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
@@ -93,7 +128,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
         final file = await controller.stopVideoRecording();
         if (mounted) {
           setState(() => _recording = false);
-          context.pop(file.path);
+          context.pop('video:${file.path}');
         }
       } catch (_) {
         if (mounted) setState(() => _recording = false);
@@ -108,8 +143,18 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
       _timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
         if (!mounted) return;
         setState(() => _elapsed += const Duration(milliseconds: 200));
-        if (_elapsed >= _maxRecord) _toggleRecording();
+        if (_elapsed.inSeconds >= _maxSeconds) _toggleRecording();
       });
+    }
+  }
+
+  Future<void> _pickFromGallery() async {
+    if (_mode == _CamMode.short) {
+      final v = await _picker.pickVideo(source: ImageSource.gallery, maxDuration: Duration(seconds: _maxSeconds));
+      if (v != null && mounted) context.pop('video:${v.path}');
+    } else {
+      final p = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 90);
+      if (p != null && mounted) context.pop('photo:${p.path}');
     }
   }
 
@@ -128,9 +173,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
       _ => FlashMode.off,
     };
     setState(() => _flashMode = next);
-    try {
-      await controller.setFlashMode(next);
-    } catch (_) {}
+    try { await controller.setFlashMode(next); } catch (_) {}
   }
 
   IconData get _flashIcon => switch (_flashMode) {
@@ -151,126 +194,174 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
   Widget build(BuildContext context) {
     final controller = _controller;
     final filter = kCameraFilters[_filterIndex];
+    final ready = controller != null && controller.value.isInitialized && !_initializing;
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
         child: _error != null
             ? _CameraError(message: _error!, onClose: () => context.pop())
-            : _initializing || controller == null || !controller.value.isInitialized
-                ? const Center(child: CircularProgressIndicator(color: Colors.white))
+            : _mode == _CamMode.text
+                ? _TextComposePrompt(onContinue: () => context.pop('text'), onClose: () => context.pop(), tabs: _modeTabs())
                 : Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Live preview with the selected colour filter.
-                      Center(
-                        child: filter.colorFilter == null
-                            ? CameraPreview(controller)
-                            : ColorFiltered(
-                                colorFilter: filter.colorFilter!,
-                                child: CameraPreview(controller),
-                              ),
-                      ),
+                      if (ready)
+                        Center(
+                          child: filter.colorFilter == null
+                              ? CameraPreview(controller)
+                              : ColorFiltered(colorFilter: filter.colorFilter!, child: CameraPreview(controller)),
+                        )
+                      else
+                        const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-                      // Top controls: close, flash.
+                      // Top: close, Add sound (Short only), flip.
                       Positioned(
-                        top: 8,
-                        left: 8,
-                        right: 8,
+                        top: 8, left: 8, right: 8,
                         child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             _RoundIcon(icon: Icons.close, onTap: () => context.pop()),
-                            if (_recording)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.black54,
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 8, height: 8,
-                                      decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle),
-                                    ),
+                            const Spacer(),
+                            if (_mode == _CamMode.short)
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () {}, // sound picker opens in the composer for now
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                  decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(20)),
+                                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                    const Icon(Icons.music_note, color: Colors.white, size: 16),
                                     const SizedBox(width: 6),
-                                    Text(_fmt(_elapsed), style: AppTypography.sans(fontSize: 13, color: Colors.white)),
-                                  ],
+                                    Text('Add sound', style: AppTypography.sans(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w600)),
+                                  ]),
                                 ),
                               ),
-                            _RoundIcon(icon: _flashIcon, onTap: _cycleFlash),
+                            const Spacer(),
+                            _RoundIcon(icon: Icons.cameraswitch, onTap: _flip),
                           ],
                         ),
                       ),
 
-                      // Filter strip.
+                      // Right rail: flash, filters toggle.
                       Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 150,
-                        child: SizedBox(
-                          height: 64,
-                          child: ListView.separated(
-                            scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            itemCount: kCameraFilters.length,
-                            separatorBuilder: (_, _) => const SizedBox(width: 10),
-                            itemBuilder: (context, i) => _FilterChip(
-                              label: kCameraFilters[i].label,
-                              selected: i == _filterIndex,
-                              onTap: () => setState(() => _filterIndex = i),
+                        top: 64, right: 8,
+                        child: Column(children: [
+                          _RoundIcon(icon: _flashIcon, onTap: _cycleFlash),
+                          const SizedBox(height: 16),
+                          _RoundIcon(
+                            icon: Icons.auto_awesome,
+                            active: _showFilters,
+                            onTap: () => setState(() => _showFilters = !_showFilters),
+                          ),
+                        ]),
+                      ),
+
+                      if (_recording)
+                        Positioned(
+                          top: 12, left: 0, right: 0,
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle)),
+                                const SizedBox(width: 6),
+                                Text(_fmt(_elapsed), style: AppTypography.sans(fontSize: 13, color: Colors.white)),
+                              ]),
                             ),
                           ),
                         ),
-                      ),
 
-                      // Bottom bar: record + flip.
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 40,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            // Gallery / photo / text shortcut — pops 'compose'
-                            // so the caller opens the composer without a take.
-                            if (!_recording)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 36),
-                                child: _RoundIcon(
-                                  icon: Icons.photo_library_outlined,
-                                  onTap: () => context.pop('compose'),
-                                ),
+                      // Filter strip.
+                      if (_showFilters)
+                        Positioned(
+                          left: 0, right: 0, bottom: 190,
+                          child: SizedBox(
+                            height: 60,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              itemCount: kCameraFilters.length,
+                              separatorBuilder: (_, _) => const SizedBox(width: 10),
+                              itemBuilder: (context, i) => _FilterChip(
+                                label: kCameraFilters[i].label,
+                                selected: i == _filterIndex,
+                                onTap: () => setState(() => _filterIndex = i),
                               ),
-                            GestureDetector(
-                              onTap: _toggleRecording,
-                              child: Container(
-                                width: 76,
-                                height: 76,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white, width: 4),
-                                ),
-                                child: Center(
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    width: _recording ? 30 : 60,
-                                    height: _recording ? 30 : 60,
+                            ),
+                          ),
+                        ),
+
+                      // Bottom controls: duration pills, record, mode tabs, gallery.
+                      Positioned(
+                        left: 0, right: 0, bottom: 20,
+                        child: Column(
+                          children: [
+                            if (_mode == _CamMode.short && !_recording)
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  for (final s in _durations)
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                                      child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: () => setState(() => _maxSeconds = s),
+                                        child: Text(_durationLabel(s),
+                                            style: AppTypography.sans(
+                                              fontSize: _maxSeconds == s ? 15 : 13,
+                                              fontWeight: _maxSeconds == s ? FontWeight.w700 : FontWeight.w500,
+                                              color: _maxSeconds == s ? Colors.white : Colors.white60,
+                                            )),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            const SizedBox(height: 16),
+                            // Record row: gallery, big button, spacer.
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: _pickFromGallery,
+                                  child: Container(
+                                    width: 44, height: 44,
                                     decoration: BoxDecoration(
-                                      color: AppColors.danger,
-                                      borderRadius: BorderRadius.circular(_recording ? 8 : 30),
+                                      color: Colors.white24,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.white54),
+                                    ),
+                                    child: const Icon(Icons.photo_library_outlined, color: Colors.white, size: 22),
+                                  ),
+                                ),
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: _onCapture,
+                                  child: Container(
+                                    width: 78, height: 78,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: Colors.white, width: 4),
+                                    ),
+                                    child: Center(
+                                      child: AnimatedContainer(
+                                        duration: const Duration(milliseconds: 200),
+                                        width: _recording ? 30 : 62,
+                                        height: _recording ? 30 : 62,
+                                        decoration: BoxDecoration(
+                                          color: _mode == _CamMode.public ? Colors.white : AppColors.danger,
+                                          borderRadius: BorderRadius.circular(_recording ? 8 : 40),
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
+                                const SizedBox(width: 44),
+                              ],
                             ),
-                            if (_cameras.length > 1 && !_recording)
-                              Padding(
-                                padding: const EdgeInsets.only(left: 36),
-                                child: _RoundIcon(icon: Icons.flip_camera_ios, onTap: _flip),
-                              ),
+                            const SizedBox(height: 16),
+                            _modeTabs(),
                           ],
                         ),
                       ),
@@ -280,10 +371,74 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
     );
   }
 
+  Widget _modeTabs() {
+    Widget tab(String label, _CamMode m) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() => _mode = m),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Text(label,
+                style: AppTypography.sans(
+                  fontSize: 14,
+                  fontWeight: _mode == m ? FontWeight.w800 : FontWeight.w500,
+                  color: _mode == m ? AppColors.accent : Colors.white70,
+                )),
+          ),
+        );
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [tab('Short', _CamMode.short), tab('Public', _CamMode.public), tab('Text', _CamMode.text)],
+    );
+  }
+
   static String _fmt(Duration d) {
     final m = d.inMinutes;
     final s = (d.inSeconds % 60).toString().padLeft(2, '0');
     return '$m:$s';
+  }
+}
+
+/// The Text mode surface: a big prompt to write a public text post; Continue
+/// hands off to the composer's text mode.
+class _TextComposePrompt extends StatelessWidget {
+  const _TextComposePrompt({required this.onContinue, required this.onClose, required this.tabs});
+  final VoidCallback onContinue;
+  final VoidCallback onClose;
+  final Widget tabs;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned(
+          top: 8, left: 8,
+          child: _RoundIcon(icon: Icons.close, onTap: onClose),
+        ),
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.article_outlined, color: Colors.white38, size: 60),
+                const SizedBox(height: 16),
+                Text('Write a public post', style: AppTypography.display(fontSize: 20, color: Colors.white)),
+                const SizedBox(height: 8),
+                Text('Share a thought or story — no photo needed.',
+                    textAlign: TextAlign.center,
+                    style: AppTypography.sans(fontSize: 14, color: Colors.white54)),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(onPressed: onContinue, child: const Text('Continue')),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Positioned(left: 0, right: 0, bottom: 20, child: tabs),
+      ],
+    );
   }
 }
 
@@ -296,6 +451,7 @@ class _FilterChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Container(
         alignment: Alignment.center,
@@ -305,32 +461,28 @@ class _FilterChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: Colors.white54),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? Colors.black : Colors.white,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
+        child: Text(label,
+            style: TextStyle(color: selected ? Colors.black : Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
       ),
     );
   }
 }
 
 class _RoundIcon extends StatelessWidget {
-  const _RoundIcon({required this.icon, required this.onTap});
+  const _RoundIcon({required this.icon, required this.onTap, this.active = false});
   final IconData icon;
   final VoidCallback onTap;
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(10),
-        decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
-        child: Icon(icon, color: Colors.white, size: 24),
+        decoration: BoxDecoration(color: active ? AppColors.accent : Colors.black45, shape: BoxShape.circle),
+        child: Icon(icon, color: active ? AppColors.onAccent : Colors.white, size: 24),
       ),
     );
   }

@@ -2,7 +2,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import '../../../core/network/api_client.dart';
@@ -10,13 +9,13 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../../core/widgets/brand_wordmark.dart';
 import '../../../core/widgets/linkified_text.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../feed/data/feed_repository.dart';
 import '../../feed/data/video_model.dart';
 import '../application/public_feed_controller.dart';
-import '../data/link_preview_repository.dart';
 import '../data/post_comment_repository.dart';
 import '../data/post_model.dart';
 import 'post_comments_sheet.dart';
@@ -112,7 +111,10 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.bg,
-      appBar: AppBar(title: const Text('Public')),
+      appBar: AppBar(
+        centerTitle: true,
+        title: const BrandWordmark(),
+      ),
       body: feedAsync.when(
         loading: () => ListView.builder(
           itemCount: 3,
@@ -167,7 +169,8 @@ class _PostCard extends ConsumerWidget {
                 GestureDetector(
                   onTap: () => context.push('/profile/${post.user.username}'),
                   child: AppAvatar(
-                    size: 32,
+                    size: 34,
+                    ring: true,
                     imageUrl: post.user.avatarUrl != null ? mediaUrl(post.user.avatarUrl!) : null,
                     displayName: post.user.displayName,
                   ),
@@ -215,16 +218,7 @@ class _PostCard extends ConsumerWidget {
                 width: double.infinity,
                 padding: const EdgeInsets.all(18),
                 decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14)),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700)),
-                    if (firstUrl(post.content) != null) ...[
-                      const SizedBox(height: 10),
-                      _LinkPreviewCard(url: firstUrl(post.content)!),
-                    ],
-                  ],
-                ),
+                child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700)),
               ),
             ),
           Padding(
@@ -251,7 +245,7 @@ class _PostCard extends ConsumerWidget {
                   behavior: HitTestBehavior.opaque,
                   onTap: () => showPostCommentsSheet(context, postId: post.id),
                   child: Row(children: [
-                    const Icon(Icons.mode_comment_outlined, color: AppColors.text, size: 24),
+                    const Icon(Icons.mode_comment, color: AppColors.text, size: 24),
                     const SizedBox(width: 7),
                     Text('${post.comments}', style: AppTypography.mono(fontSize: 15)),
                   ]),
@@ -273,7 +267,7 @@ class _PostCard extends ConsumerWidget {
                     } catch (_) {}
                   },
                   child: Row(children: [
-                    const Icon(Icons.reply_rounded, color: AppColors.text, size: 24),
+                    Transform.flip(flipX: true, child: const Icon(Icons.reply, color: AppColors.text, size: 24)),
                     const SizedBox(width: 7),
                     Text('${post.shares}', style: AppTypography.mono(fontSize: 15)),
                   ]),
@@ -284,16 +278,7 @@ class _PostCard extends ConsumerWidget {
           if (post.imageUrl != null && post.content.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(AppSpacing.publicPostPadding, 10, AppSpacing.publicPostPadding, 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15)),
-                  if (firstUrl(post.content) != null) ...[
-                    const SizedBox(height: 10),
-                    _LinkPreviewCard(url: firstUrl(post.content)!),
-                  ],
-                ],
-              ),
+              child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15)),
             ),
         ],
       ),
@@ -394,7 +379,8 @@ class _VideoCardState extends State<_VideoCard> {
                 GestureDetector(
                   onTap: () => context.push('/profile/${video.user.username}'),
                   child: AppAvatar(
-                    size: 32,
+                    size: 34,
+                    ring: true,
                     imageUrl: video.user.avatarUrl != null ? mediaUrl(video.user.avatarUrl!) : null,
                     displayName: video.user.displayName,
                   ),
@@ -411,7 +397,9 @@ class _VideoCardState extends State<_VideoCard> {
             key: Key('pubvid-${video.id}'),
             onVisibilityChanged: _onVisibility,
             child: GestureDetector(
-              onTap: () => context.push('/v/${video.id}'),
+              // A public video takes you into the vertical Shorts feed so you
+              // can keep scrolling other shorts (not a single-video dead end).
+              onTap: () => context.go('/'),
               child: AspectRatio(
                 aspectRatio: 9 / 16,
                 child: Stack(
@@ -457,63 +445,6 @@ class _VideoCardState extends State<_VideoCard> {
               child: Text(video.caption, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppTypography.sans(fontSize: 15)),
             ),
         ],
-      ),
-    );
-  }
-}
-
-/// A rich preview (title + thumbnail + site) for the first link in a post's
-/// caption — fetched from GET /api/link-preview and cached per URL.
-class _LinkPreviewCard extends ConsumerWidget {
-  const _LinkPreviewCard({required this.url});
-  final String url;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final preview = ref.watch(linkPreviewProvider(url)).valueOrNull;
-    if (preview == null || preview.title.isEmpty) return const SizedBox.shrink();
-    return GestureDetector(
-      onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.raised,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.border),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (preview.image != null && preview.image!.isNotEmpty)
-              AspectRatio(
-                aspectRatio: 1.9,
-                child: Image.network(preview.image!, fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => const SizedBox.shrink()),
-              ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(preview.siteName ?? Uri.parse(url).host,
-                      style: AppTypography.sans(fontSize: 11, color: AppColors.muted)),
-                  const SizedBox(height: 3),
-                  Text(preview.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700)),
-                  if (preview.description != null && preview.description!.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(preview.description!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

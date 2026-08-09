@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:just_audio/just_audio.dart';
@@ -13,8 +15,12 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../../core/widgets/linkified_text.dart';
 import '../../feed/data/feed_repository.dart';
+import '../../public_feed/data/link_preview_repository.dart';
+import '../../feed/presentation/single_video_screen.dart';
 import '../application/chat_thread_controller.dart';
+import '../application/voice_player.dart';
 import '../data/chat_repository.dart';
 import '../data/message_model.dart';
 
@@ -46,7 +52,27 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
   final Set<String> _selected = {};
   MessageModel? _replyingTo;
   bool _showEmoji = false;
-  bool _initialScrollDone = false;
+
+  // Scroll: stay pinned to the newest message unless the user scrolls up.
+  bool _stick = true;
+  bool _firstLoad = true;
+  int _lastCount = -1;
+
+  // Per-message keys so a reply quote can scroll to the message it answers,
+  // with a brief highlight on arrival.
+  final Map<String, GlobalKey> _msgKeys = {};
+  String? _highlightId;
+
+  void _jumpToMessage(String id) {
+    final ctx = _msgKeys[id]?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 300), alignment: 0.35);
+    }
+    setState(() => _highlightId = id);
+    Future.delayed(const Duration(milliseconds: 1300), () {
+      if (mounted && _highlightId == id) setState(() => _highlightId = null);
+    });
+  }
 
   bool get _selecting => _selected.isNotEmpty;
 
@@ -57,6 +83,20 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
       setState(() {});
       _maybePingTyping();
     });
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    // Within ~80px of the bottom counts as "at the bottom" (keep auto-scroll).
+    _stick = pos.pixels >= pos.maxScrollExtent - 80;
+  }
+
+  void _jumpBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+    }
   }
 
   void _maybePingTyping() {
@@ -124,7 +164,7 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
     if (mounted) setState(() { _recording = false; _recordStartedAt = null; });
     if (path == null || startedAt == null) return;
     final seconds = DateTime.now().difference(startedAt).inMilliseconds / 1000.0;
-    if (seconds < 1) return;
+    if (seconds < 0.5) return; // guard against an accidental double-tap
     await ref
         .read(chatThreadControllerProvider(widget.username).notifier)
         .sendVoice(File(path), seconds);
@@ -217,9 +257,12 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
             ListTile(
               leading: const Icon(Icons.delete_outline, color: AppColors.danger),
               title: Text('Delete', style: AppTypography.sans(color: AppColors.danger)),
-              onTap: () {
+              onTap: () async {
                 Navigator.of(sheetContext).pop();
-                _confirmDelete({m.id}, allMine: m.outgoing);
+                // Let this sheet finish dismissing before opening the next —
+                // showing a second modal in the same frame silently no-ops.
+                await Future<void>.delayed(const Duration(milliseconds: 220));
+                if (mounted) _confirmDelete({m.id}, allMine: m.outgoing);
               },
             ),
           ],
@@ -291,15 +334,24 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
         ),
         data: (thread) {
           final items = _buildItems(thread.messages);
-          // Open the conversation already scrolled to the newest message
-          // (bottom), like every chat app — not stuck at the oldest.
-          if (!_initialScrollDone && thread.messages.isNotEmpty) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (_scrollController.hasClients) {
-                _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-                _initialScrollDone = true;
+          // Open at (and stay pinned to) the newest message, like every chat
+          // app. On first load the content height keeps growing as images and
+          // voice bubbles lay out, so re-jump a few times to settle at the
+          // true bottom; afterwards only re-jump when a new message arrives
+          // and the user hasn't scrolled up to read history.
+          if (thread.messages.isNotEmpty) {
+            if (_firstLoad) {
+              _firstLoad = false;
+              _lastCount = thread.messages.length;
+              for (final ms in const [0, 120, 350, 700]) {
+                Future.delayed(Duration(milliseconds: ms), () {
+                  if (mounted && _stick) _jumpBottom();
+                });
               }
-            });
+            } else if (thread.messages.length != _lastCount) {
+              _lastCount = thread.messages.length;
+              if (_stick) WidgetsBinding.instance.addPostFrameCallback((_) => _jumpBottom());
+            }
           }
           return Column(
             children: [
@@ -312,13 +364,18 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
                     final item = items[i];
                     if (item is _DateItem) return _DateSeparator(label: item.label);
                     final m = (item as _MsgItem).message;
-                    return _MessageBubble(
-                      message: m,
-                      selected: _selected.contains(m.id),
-                      selecting: _selecting,
-                      avatarUrl: thread.withUser.avatarUrl,
-                      onTap: () { if (_selecting) _toggleSelect(m); },
-                      onLongPress: () => _onMessageLongPress(m),
+                    return KeyedSubtree(
+                      key: _msgKeys.putIfAbsent(m.id, () => GlobalKey()),
+                      child: _MessageBubble(
+                        message: m,
+                        selected: _selected.contains(m.id),
+                        selecting: _selecting,
+                        highlighted: _highlightId == m.id,
+                        avatarUrl: thread.withUser.avatarUrl,
+                        onTap: () { if (_selecting) _toggleSelect(m); },
+                        onLongPress: () => _onMessageLongPress(m),
+                        onReplyTap: m.replyTo != null ? () => _jumpToMessage(m.replyTo!.id) : null,
+                      ),
                     );
                   },
                 ),
@@ -524,6 +581,8 @@ class _MessageBubble extends StatelessWidget {
     required this.avatarUrl,
     required this.onTap,
     required this.onLongPress,
+    this.highlighted = false,
+    this.onReplyTap,
   });
 
   final MessageModel message;
@@ -532,6 +591,8 @@ class _MessageBubble extends StatelessWidget {
   final String? avatarUrl;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
+  final bool highlighted;
+  final VoidCallback? onReplyTap;
 
   @override
   Widget build(BuildContext context) {
@@ -574,9 +635,16 @@ class _MessageBubble extends StatelessWidget {
               : null,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(AppRadii.lg),
-            child: Image.network(mediaUrl(message.imageUrl!), width: 200, fit: BoxFit.cover),
+            child: CachedNetworkImage(imageUrl: mediaUrl(message.imageUrl!), width: 200, fit: BoxFit.cover),
           ),
         ),
+      );
+    } else if (message.videoId != null) {
+      content = _SharedVideoContent(
+        videoId: message.videoId!,
+        selected: selected,
+        selecting: selecting,
+        onSelect: onTap,
       );
     } else {
       content = _bubble(
@@ -586,8 +654,10 @@ class _MessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (message.replyTo != null) _ReplyQuote(reply: message.replyTo!, onDark: !mine),
+            if (message.replyTo != null) _ReplyQuote(reply: message.replyTo!, onDark: !mine, onTap: onReplyTap),
             _TextWithMeta(message: message, fg: fg),
+            if (firstUrl(message.body ?? '') != null)
+              _ChatLinkPreview(url: firstUrl(message.body!)!, onDark: !mine),
           ],
         ),
       );
@@ -596,8 +666,13 @@ class _MessageBubble extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       onLongPress: onLongPress,
-      child: Container(
-        color: selected ? AppColors.online.withValues(alpha: 0.10) : Colors.transparent,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        color: highlighted
+            ? AppColors.accent.withValues(alpha: 0.22)
+            : selected
+                ? AppColors.online.withValues(alpha: 0.10)
+                : Colors.transparent,
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Align(
           alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
@@ -700,7 +775,7 @@ void _openImageFullscreen(BuildContext context, String url) {
             child: InteractiveViewer(
               minScale: 1,
               maxScale: 4,
-              child: Center(child: Image.network(url, fit: BoxFit.contain)),
+              child: Center(child: CachedNetworkImage(imageUrl: url, fit: BoxFit.contain)),
             ),
           ),
           Positioned(
@@ -745,143 +820,272 @@ Widget _linkedText(String body, Color color) {
   );
 }
 
-class _ReplyQuote extends StatelessWidget {
-  const _ReplyQuote({required this.reply, required this.onDark});
-  final MessageReplyTo reply;
+/// A compact link preview shown under a chat message that contains a URL —
+/// the link's thumbnail + title, tappable to open it.
+class _ChatLinkPreview extends ConsumerWidget {
+  const _ChatLinkPreview({required this.url, required this.onDark});
+  final String url;
   final bool onDark;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final preview = ref.watch(linkPreviewProvider(url)).valueOrNull;
+    if (preview == null || preview.title.isEmpty) return const SizedBox.shrink();
     final ink = onDark ? AppColors.text : AppColors.onChrome;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
-      decoration: BoxDecoration(
-        color: (onDark ? AppColors.raised : AppColors.sheetFill),
-        borderRadius: BorderRadius.circular(8),
-        border: const Border(left: BorderSide(color: AppColors.accent, width: 3)),
-      ),
-      child: Text(
-        reply.snippet,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: AppTypography.sans(fontSize: 12, color: ink.withValues(alpha: 0.75)),
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+        child: Container(
+          width: 220,
+          decoration: BoxDecoration(
+            color: (onDark ? AppColors.raised : AppColors.sheetFill),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (preview.image != null && preview.image!.isNotEmpty)
+                AspectRatio(
+                  aspectRatio: 1.9,
+                  child: CachedNetworkImage(imageUrl: preview.image!, fit: BoxFit.cover,
+                      errorWidget: (_, _, _) => const SizedBox.shrink()),
+                ),
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(preview.siteName ?? Uri.parse(url).host,
+                        style: AppTypography.sans(fontSize: 10, color: ink.withValues(alpha: 0.6))),
+                    const SizedBox(height: 2),
+                    Text(preview.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.sans(fontSize: 12, fontWeight: FontWeight.w600, color: ink)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
-class _VoiceContent extends StatefulWidget {
+/// A video shared into the chat (a message carrying a videoId): shows the
+/// video's thumbnail with a play badge; tapping opens the full player.
+class _SharedVideoContent extends ConsumerWidget {
+  const _SharedVideoContent({
+    required this.videoId,
+    required this.selected,
+    required this.selecting,
+    required this.onSelect,
+  });
+  final String videoId;
+  final bool selected;
+  final bool selecting;
+  final VoidCallback onSelect;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final video = ref.watch(singleVideoProvider(videoId)).valueOrNull;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => selecting ? onSelect() : context.push('/v/$videoId'),
+      child: Container(
+        width: 150,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadii.lg),
+          border: selected ? Border.all(color: AppColors.online, width: 2) : null,
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: AspectRatio(
+          aspectRatio: 9 / 14,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              DecoratedBox(
+                decoration: const BoxDecoration(color: AppColors.raised),
+                child: video?.thumbUrl != null
+                    ? CachedNetworkImage(imageUrl: mediaUrl(video!.thumbUrl!), fit: BoxFit.cover)
+                    : null,
+              ),
+              const Center(
+                child: Icon(Icons.play_circle_fill, color: Colors.white, size: 44,
+                    shadows: [Shadow(color: Colors.black54, blurRadius: 10)]),
+              ),
+              Positioned(
+                left: 6, bottom: 6, right: 6,
+                child: Text(video?.caption ?? 'Video',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.sans(fontSize: 11, color: Colors.white)
+                        .copyWith(shadows: const [Shadow(color: Colors.black87, blurRadius: 6)])),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReplyQuote extends StatelessWidget {
+  const _ReplyQuote({required this.reply, required this.onDark, this.onTap});
+  final MessageReplyTo reply;
+  final bool onDark;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = onDark ? AppColors.text : AppColors.onChrome;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+        decoration: BoxDecoration(
+          color: (onDark ? AppColors.raised : AppColors.sheetFill),
+          borderRadius: BorderRadius.circular(8),
+          border: const Border(left: BorderSide(color: AppColors.accent, width: 3)),
+        ),
+        child: Text(
+          reply.snippet,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppTypography.sans(fontSize: 12, color: ink.withValues(alpha: 0.75)),
+        ),
+      ),
+    );
+  }
+}
+
+/// Voice-note bubble backed by the shared [voicePlayerProvider] — only one
+/// note plays at a time, so tapping a second one stops the first. Shows a
+/// play/pause control, a progress waveform you can tap or drag to seek, and
+/// the elapsed / total time.
+class _VoiceContent extends ConsumerWidget {
   const _VoiceContent({required this.message, required this.mine, required this.avatarUrl});
   final MessageModel message;
   final bool mine;
   final String? avatarUrl;
 
   @override
-  State<_VoiceContent> createState() => _VoiceContentState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final fg = mine ? AppColors.onChrome : AppColors.text;
+    final isActive = ref.watch(voicePlayerProvider) == message.id;
+    final vp = ref.read(voicePlayerProvider.notifier);
+    final totalSeconds = message.audioDuration?.round() ?? 0;
 
-class _VoiceContentState extends State<_VoiceContent> {
-  final _player = AudioPlayer();
-  bool _loaded = false;
-  bool _loadFailed = false;
-
-  Future<void> _toggle() async {
-    if (_loadFailed) return;
-    if (!_loaded) {
-      try {
-        await _player.setUrl(mediaUrl(widget.message.audioUrl!));
-        _loaded = true;
-      } catch (_) {
-        if (mounted) setState(() => _loadFailed = true);
-        return;
-      }
-    }
-    _player.playing ? await _player.pause() : await _player.play();
-  }
-
-  @override
-  void dispose() {
-    _player.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final fg = widget.mine ? AppColors.onChrome : AppColors.text;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        AppAvatar(
-          size: 34,
-          imageUrl: widget.avatarUrl != null ? mediaUrl(widget.avatarUrl!) : null,
-          displayName: '♪',
-        ),
+        AppAvatar(size: 34, imageUrl: avatarUrl != null ? mediaUrl(avatarUrl!) : null, displayName: '♪'),
         const SizedBox(width: 6),
         GestureDetector(
-          onTap: _toggle,
-          child: StreamBuilder<PlayerState>(
-            stream: _player.playerStateStream,
-            builder: (context, snapshot) {
-              final playing = snapshot.data?.playing ?? false;
-              return Icon(playing ? Icons.pause_circle_filled : Icons.play_circle_fill,
-                  color: fg, size: 34);
+          onTap: () => vp.toggle(message.id, mediaUrl(message.audioUrl!)),
+          child: isActive
+              ? StreamBuilder<PlayerState>(
+                  stream: vp.player.playerStateStream,
+                  builder: (context, snap) {
+                    final playing = snap.data?.playing ?? false;
+                    return Icon(playing ? Icons.pause_circle_filled : Icons.play_circle_fill, color: fg, size: 34);
+                  },
+                )
+              : Icon(Icons.play_circle_fill, color: fg, size: 34),
+        ),
+        const SizedBox(width: 8),
+        if (isActive)
+          StreamBuilder<Duration>(
+            stream: vp.player.positionStream,
+            builder: (context, snap) {
+              final pos = snap.data ?? Duration.zero;
+              final total = vp.player.duration ?? Duration(seconds: totalSeconds);
+              final frac = total.inMilliseconds > 0 ? pos.inMilliseconds / total.inMilliseconds : 0.0;
+              return Row(mainAxisSize: MainAxisSize.min, children: [
+                _ProgressWaveform(color: fg, progress: frac.clamp(0.0, 1.0).toDouble(), onSeek: (f) => vp.seek(total * f)),
+                const SizedBox(width: 8),
+                _meta(fg, _fmtDur(pos.inSeconds)),
+              ]);
             },
-          ),
-        ),
-        const SizedBox(width: 8),
-        _Waveform(color: fg.withValues(alpha: 0.5)),
-        const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(_durationLabel(), style: AppTypography.sans(fontSize: 12, color: fg)),
-            const SizedBox(height: 2),
-            Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(_shortTime(widget.message.createdAt),
-                  style: AppTypography.sans(fontSize: 10, color: AppColors.onSheetMuted)),
-              if (widget.mine) ...[
-                const SizedBox(width: 3),
-                Icon(widget.message.read ? Icons.done_all : Icons.done,
-                    size: 12, color: widget.message.read ? AppColors.tickRead : AppColors.tickSent),
-              ],
-            ]),
-          ],
-        ),
+          )
+        else
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            _ProgressWaveform(color: fg, progress: 0),
+            const SizedBox(width: 8),
+            _meta(fg, _fmtDur(totalSeconds)),
+          ]),
       ],
     );
   }
 
-  String _durationLabel() {
-    final seconds = widget.message.audioDuration?.round() ?? 0;
+  Widget _meta(Color fg, String duration) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(duration, style: AppTypography.sans(fontSize: 12, color: fg)),
+        const SizedBox(height: 2),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(_shortTime(message.createdAt), style: AppTypography.sans(fontSize: 10, color: AppColors.onSheetMuted)),
+          if (mine) ...[
+            const SizedBox(width: 3),
+            Icon(message.read ? Icons.done_all : Icons.done,
+                size: 12, color: message.read ? AppColors.tickRead : AppColors.tickSent),
+          ],
+        ]),
+      ],
+    );
+  }
+
+  static String _fmtDur(int seconds) {
     final m = seconds ~/ 60;
     final s = (seconds % 60).toString().padLeft(2, '0');
     return '$m:$s';
   }
 }
 
-class _Waveform extends StatelessWidget {
-  const _Waveform({required this.color});
+/// A bar "waveform" whose bars fill up to [progress] (0-1); tapping or
+/// dragging along it seeks via [onSeek].
+class _ProgressWaveform extends StatelessWidget {
+  const _ProgressWaveform({required this.color, required this.progress, this.onSeek});
   final Color color;
+  final double progress;
+  final ValueChanged<double>? onSeek;
 
-  static const _heights = [6.0, 12.0, 18.0, 10.0, 16.0, 8.0, 14.0, 6.0, 11.0, 9.0];
+  static const _heights = [6.0, 12.0, 18.0, 10.0, 16.0, 8.0, 14.0, 6.0, 11.0, 9.0, 15.0, 7.0];
+  static const _width = 96.0;
+
+  void _seekAt(Offset local) => onSeek?.call((local.dx / _width).clamp(0.0, 1.0));
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 68,
-      height: 20,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          for (final h in _heights)
-            Container(
-              width: 2.5,
-              height: h,
-              decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2)),
-            ),
-        ],
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (d) => _seekAt(d.localPosition),
+      onHorizontalDragUpdate: (d) => _seekAt(d.localPosition),
+      child: SizedBox(
+        width: _width,
+        height: 22,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            for (var i = 0; i < _heights.length; i++)
+              Container(
+                width: 3,
+                height: _heights[i],
+                decoration: BoxDecoration(
+                  color: (i / _heights.length) <= progress ? color : color.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1057,13 +1261,24 @@ class _Composer extends StatelessWidget {
                           const SizedBox(width: 8),
                           Text(_fmt(recordElapsed), style: AppTypography.sans(fontSize: 13)),
                           const Spacer(),
-                          Text('Release to send', style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
+                          Text('Recording… tap ➤ to send', style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
                         ],
                       ),
                     ),
                   ),
                 const SizedBox(width: 8),
-                if (hasText && !recording)
+                // Tap-to-record (matches the web app's chat mic): tap the mic
+                // to start, tap the green send to stop and send. No holding.
+                if (recording)
+                  GestureDetector(
+                    onTap: onRecordEnd,
+                    child: Container(
+                      width: 48, height: 48,
+                      decoration: const BoxDecoration(color: AppColors.online, shape: BoxShape.circle),
+                      child: const Icon(Icons.send_rounded, color: Colors.white, size: 22),
+                    ),
+                  )
+                else if (hasText)
                   GestureDetector(
                     onTap: onSend,
                     child: Container(
@@ -1074,14 +1289,10 @@ class _Composer extends StatelessWidget {
                   )
                 else
                   GestureDetector(
-                    onLongPressStart: (_) => onRecordStart(),
-                    onLongPressEnd: (_) => onRecordEnd(),
+                    onTap: onRecordStart,
                     child: Container(
                       width: 48, height: 48,
-                      decoration: BoxDecoration(
-                        color: recording ? AppColors.danger : AppColors.online,
-                        shape: BoxShape.circle,
-                      ),
+                      decoration: const BoxDecoration(color: AppColors.online, shape: BoxShape.circle),
                       child: const Icon(Icons.mic, color: Colors.white, size: 22),
                     ),
                   ),
