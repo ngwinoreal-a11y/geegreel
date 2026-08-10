@@ -1,10 +1,11 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/widgets/top_toast.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../overlays/presentation/comments_sheet.dart';
 import '../../overlays/presentation/more_options_sheet.dart';
@@ -100,10 +101,10 @@ class SingleVideoScreen extends ConsumerWidget {
               onShareTap: () async {
                 try {
                   final url = await ref.read(feedRepositoryProvider).share(video.id);
-                  await Clipboard.setData(ClipboardData(text: url));
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(const SnackBar(content: Text('Link copied')));
+                  if (!context.mounted) return;
+                  final result = await Share.share(url, subject: 'Belople video');
+                  if (context.mounted && result.status == ShareResultStatus.success) {
+                    showTopToast(context, 'Shared');
                   }
                 } catch (_) {}
               },

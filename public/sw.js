@@ -22,6 +22,7 @@ const THUMB_CACHE = "geereel-thumbs-v1";
 const SHELL_FILES = [
   "/", "/index.html",
   "/design.css", "/design-2.css", "/design-3.css", "/design-4.css", "/design-5.css", "/design-feed.css",
+  "/manifest.json", "/icons/icon-192.png", "/icons/icon-512.png",
 ];
 
 self.addEventListener("install", (event) => {
@@ -95,8 +96,13 @@ self.addEventListener("fetch", (event) => {
   // it to a full user object before opening the chat screen, so without
   // this cached too, opening an already-cached conversation still failed
   // offline: the failure was in getting there, not in the thread itself.
+  // /api/posts (the Public tab's photo feed) rides the same rule for the
+  // same reason as /api/feed — public.js reads this exact cache name to
+  // paint the last page instantly instead of a skeleton, online or not.
+  // /api/notifications the same way, for notificationsPage().
   const isCachedApi = url.pathname === "/api/messages" || /^\/api\/messages\/[\w-]+$/.test(url.pathname)
-    || url.pathname === "/api/feed" || /^\/api\/users\/[\w.]+$/.test(url.pathname);
+    || url.pathname === "/api/feed" || url.pathname === "/api/posts" || url.pathname === "/api/notifications"
+    || /^\/api\/users\/[\w.]+$/.test(url.pathname);
   if (isCachedApi) {
     event.respondWith((async () => {
       try {
@@ -147,28 +153,49 @@ self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data.json(); } catch {}
 
-  event.waitUntil(self.registration.showNotification(data.title || "GEEREEL", {
+  // A message notification gets a one-tap "Reply" action, matching
+  // WhatsApp/TikTok's own notifications. It can't actually send the reply
+  // from here without the app open — auth is a Bearer token in localStorage
+  // (see store.token in index.html), which a service worker has no access
+  // to at all, unlike a cookie-based session. What it CAN do is open
+  // straight into that chat with the composer already focused, which is
+  // the honest version of this button rather than a fake "send in
+  // background" that would silently fail with no page open.
+  const isMessage = (data.tag || "").startsWith("message-");
+
+  event.waitUntil(self.registration.showNotification(data.title || "Belople", {
     body: data.body || "",
+    icon: "/icons/icon-192.png",
+    // Android's status bar / notification-shade badge renders ONLY this
+    // image's alpha channel (it tints it itself) — a full-color icon there
+    // just shows as a grey blob, which is why the app wasn't showing up
+    // clearly at the top the way TikTok/WhatsApp do. badge-mono.png is a
+    // plain white silhouette on transparent, built for exactly this.
+    badge: "/icons/badge-mono.png",
     tag: data.tag || "geereel",
-    renotify: false,
-    data: { url: data.url || "/" },
+    renotify: true,
+    data: { url: data.url || "/", focusReply: isMessage },
+    actions: isMessage ? [{ action: "reply", title: "Reply" }] : [],
   }));
 });
 
-// A tap focuses an already-open tab and hands it the target URL rather than
-// always opening a fresh one — the app reads the URL itself and navigates.
+// A tap (or the Reply action) focuses an already-open tab and hands it the
+// target URL rather than always opening a fresh one — the app reads the URL
+// itself and navigates. Reply additionally tells the page to focus the
+// message composer once it lands there.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = event.notification.data?.url || "/";
+  const focusReply = event.action === "reply" || event.notification.data?.focusReply;
 
   event.waitUntil((async () => {
     const clientsList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const c of clientsList) {
       if ("focus" in c) {
-        c.postMessage({ type: "navigate", url });
+        c.postMessage({ type: "navigate", url, focusReply });
         return c.focus();
       }
     }
-    return self.clients.openWindow(url);
+    return self.clients.openWindow(focusReply ? `${url}${url.includes("?") ? "&" : "?"}focusReply=1` : url);
   })());
 });

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.belople.twa",
+      "sha256_cert_fingerprints": [
+        "55:97:6D:01:1C:91:D8:3B:BC:D1:CD:07:AB:4B:B8:66:07:9A:2A:B3:A7:65:21:B1:A9:17:38:03:7B:E1:1E:10"
+      ]
+    }
+  }
+]

@@ -113,6 +113,23 @@ html, body {
 
 body { font-family: var(--sans); color: var(--text); }
 
+/* Nothing here doubles as a document to read and select from — a name, a
+   button label, a message preview are all tap targets, never copy source.
+   Without this, a slightly-too-long tap on any of them (a name in the
+   inbox, a thread preview — see the "Voice message" row) is read by mobile
+   Chrome/Safari as a text-selection gesture instead of a tap: it highlights
+   the word, pops the native dictionary/"Web Search" card up from the
+   bottom, and eats the tap that was supposed to open the conversation. The
+   compose box is the one real exception — typing needs a cursor and
+   selection to work normally, so it's opted back in explicitly. */
+* {
+  -webkit-user-select: none; -webkit-touch-callout: none;
+  user-select: none;
+}
+input, textarea, [contenteditable] {
+  -webkit-user-select: text; user-select: text;
+}
+
 ::-webkit-scrollbar { display: none; }
 
 input, textarea { font-family: inherit; }
@@ -182,29 +199,46 @@ button:active { transform: scale(.9); opacity: .85; }
    ========================================================================= */
 
 /* Snap hard and settle immediately — the browser's default smooth easing is
-   what makes a feed feel sluggish. */
+   what makes a feed feel sluggish.
+   -webkit-overflow-scrolling: touch is deliberately NOT here. It's a relic
+   from pre-iOS-13 Safari (native momentum scrolling is the default on every
+   version still in use); left on, it's not inert — it's independently
+   documented to fight scroll-snap-type: mandatory on modern WebKit,
+   producing exactly a floaty overshoot-then-settle instead of a clean stop.
+   That combination was the main reason the feed felt like it drifted into
+   place instead of landing on it.
+   touch-action: pan-y tells the browser up front that only vertical panning
+   is possible here, so it can start tracking the gesture immediately
+   instead of waiting a beat to rule out a horizontal one first — that wait
+   is exactly what "gesture latency" is. */
 .feed {
   height: 100%; overflow-y: scroll;
   scroll-snap-type: y mandatory; scroll-behavior: auto;
-  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
   overscroll-behavior-y: contain; scroll-snap-stop: always;
 }
 
+/* content-visibility: auto skips layout/paint work entirely for slides the
+   browser already knows are off-screen — with a feed that can grow to
+   dozens of slides, that's the difference between the browser doing
+   rendering work proportional to "how many videos have loaded so far" and
+   proportional to "how many are actually on screen" (~1-2). Unsupported
+   browsers (pre-2024 Safari) just ignore it — same behavior as before,
+   not worse. */
 .slide {
   height: 100%; position: relative; background: #000;
   scroll-snap-align: start; scroll-snap-stop: always;
   contain: layout paint;
+  content-visibility: auto;
 }
 
-/* Landing on a slide gets a quick, springy punch — same overshoot curve as
-   --press — so the swipe reads as forceful and decisive rather than a soft
-   drift to a stop. Triggered in observePlayback() the instant a slide
-   becomes the active one. */
-@keyframes slideImpact {
-  0%   { transform: scale(.97); }
-  100% { transform: scale(1); }
-}
-.slide.landed { animation: slideImpact .24s cubic-bezier(.34,1.56,.64,1); }
+/* The landing "thud" (scale .99 → 1, quick) now runs via Element.animate()
+   in observePlayback(), not a CSS class — restarting a CSS animation
+   needed a classList.remove/void offsetWidth/classList.add trick, and that
+   offsetWidth read forced the whole document's pending layout to resolve
+   synchronously on every swipe (measured: up to 460ms, almost certainly
+   content-visibility:auto elsewhere in the feed being forced to resolve
+   all at once). Nothing here anymore on purpose. */
 
 /* Base layer for the two black chrome bands (top: status bar/topbar/tabs,
    bottom: author/caption/sound) — design-feed.css (loaded last) is the
@@ -386,7 +420,7 @@ button:active { transform: scale(.9); opacity: .85; }
   overflow-y: auto; padding: 16px 20px 100px;
   animation: pagein var(--settle);
 }
-.page h2 { font-family: var(--display); font-size: 18px; margin: 0; }
+.page h2 { font-family: var(--display); font-size: 22px; font-weight: 800; margin: 0; }
 
 /* Page title row. Sticky so it stays put while the body scrolls. */
 .pagehead {
@@ -480,10 +514,10 @@ button:active { transform: scale(.9); opacity: .85; }
 
 .seg { display: flex; gap: 6px; }
 .seg button {
-  flex: 1; padding: 8px 0; border-radius: 8px; font-size: 12px; font-weight: 600;
-  background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+  flex: 1; padding: 11px 0; border-radius: 10px; font-size: 14px; font-weight: 700;
+  background: var(--surface); border: none; color: var(--muted);
 }
-.seg button.on { background: #fff; color: #000; border-color: #fff; }
+.seg button.on { background: #fff; color: #000; }
 
 .sect {
   font-size: 12px; font-weight: 600; color: var(--muted);

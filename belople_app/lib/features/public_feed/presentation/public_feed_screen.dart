@@ -20,6 +20,19 @@ import '../application/public_feed_controller.dart';
 import '../data/post_model.dart';
 import 'post_comments_sheet.dart';
 
+/// Compact "time ago" for a post's age — matches the web's "4d", "3h", "just
+/// now" style shown next to the author.
+String _timeAgo(DateTime when) {
+  final d = DateTime.now().difference(when);
+  if (d.inSeconds < 60) return 'now';
+  if (d.inMinutes < 60) return '${d.inMinutes}m';
+  if (d.inHours < 24) return '${d.inHours}h';
+  if (d.inDays < 7) return '${d.inDays}d';
+  if (d.inDays < 30) return '${(d.inDays / 7).floor()}w';
+  if (d.inDays < 365) return '${(d.inDays / 30).floor()}mo';
+  return '${(d.inDays / 365).floor()}y';
+}
+
 /// Ports public.js's mountPublic(): an Instagram-like photo feed with one
 /// video spliced in after every 3 photo posts (drawn from the For You feed,
 /// ads excluded), on top of the photo-post render/like/infinite-scroll path.
@@ -187,8 +200,24 @@ class _PostCard extends ConsumerWidget {
                 Expanded(
                   child: GestureDetector(
                     onTap: () => context.push('/profile/${post.user.username}'),
-                    child: Text(post.user.displayName,
-                        style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.onChrome)),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(post.user.displayName,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.onChrome)),
+                        ),
+                        // Blue tick only for the official/admin (Belople) account.
+                        if (post.user.verified) ...[
+                          const SizedBox(width: 4),
+                          const Icon(Icons.verified, color: AppColors.verified, size: 15),
+                        ],
+                        const SizedBox(width: 8),
+                        Text(_timeAgo(post.createdAt),
+                            style: AppTypography.sans(fontSize: 12, color: AppColors.onChromeMuted)),
+                      ],
+                    ),
                   ),
                 ),
                 if (!isMine)
@@ -258,7 +287,7 @@ class _PostCard extends ConsumerWidget {
                   behavior: HitTestBehavior.opaque,
                   onTap: () => showPostCommentsSheet(context, postId: post.id),
                   child: Row(children: [
-                    const Icon(Icons.mode_comment, color: AppColors.onChrome, size: 24),
+                    const Icon(Icons.chat_bubble_outline, color: AppColors.onChrome, size: 24),
                     const SizedBox(width: 7),
                     Text('${post.comments}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
                   ]),
@@ -273,7 +302,7 @@ class _PostCard extends ConsumerWidget {
                     ref.read(publicFeedControllerProvider.notifier).registerShare(post.id);
                   },
                   child: Row(children: [
-                    Transform.flip(flipX: true, child: const Icon(Icons.reply, color: AppColors.onChrome, size: 24)),
+                    const Icon(Icons.send, color: AppColors.onChrome, size: 23),
                     const SizedBox(width: 7),
                     Text('${post.shares}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
                   ]),

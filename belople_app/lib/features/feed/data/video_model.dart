@@ -9,6 +9,7 @@ class VideoAuthor {
     required this.username,
     required this.displayName,
     this.avatarUrl,
+    this.verified = false,
   });
 
   final String id;
@@ -16,11 +17,17 @@ class VideoAuthor {
   final String displayName;
   final String? avatarUrl;
 
+  /// The blue verified tick. Driven ONLY by the account being official/admin
+  /// (Belople), never by anything else — the backend sends `role`, and only
+  /// 'admin' earns the badge.
+  final bool verified;
+
   factory VideoAuthor.fromJson(Map<String, dynamic> json) => VideoAuthor(
         id: json['id'].toString(),
         username: json['username'] as String? ?? '',
         displayName: json['displayName'] as String? ?? json['username'] as String? ?? '',
         avatarUrl: json['avatarUrl'] as String?,
+        verified: json['role'] == 'admin',
       );
 }
 

@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail_plus/video_thumbnail_plus.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_spacing.dart';
@@ -18,7 +20,6 @@ import '../../public_feed/application/public_feed_controller.dart';
 import '../../sounds/data/sound_repository.dart';
 import '../../sounds/presentation/sound_picker_sheet.dart';
 import '../data/audio_mix_service.dart';
-import '../data/video_edit_service.dart';
 import '../data/upload_repository.dart';
 import 'posted_sheet.dart';
 
@@ -52,7 +53,7 @@ class ComposerScreen extends ConsumerStatefulWidget {
   ConsumerState<ComposerScreen> createState() => _ComposerScreenState();
 }
 
-class _ComposerScreenState extends ConsumerState<ComposerScreen> {
+class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware {
   late _ComposerMode _mode = switch (widget.initialMode) {
     'photo' => _ComposerMode.photo,
     'text' => _ComposerMode.text,
@@ -61,6 +62,10 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
   File? _videoFile;
   File? _imageFile;
   VideoPlayerController? _previewController;
+  // Plays the chosen sound over the muted-to-mic-level video so the poster can
+  // HEAR the mix while dragging the two volume sliders (step 2).
+  AudioPlayer? _soundPreview;
+  String? _soundPreviewId; // which soundId is currently loaded, to avoid reloads
   final _captionController = TextEditingController();
   bool _uploading = false;
   // Default ON so an uploaded video's sound becomes a reusable, tappable sound
@@ -77,10 +82,6 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
   int _videoStep = 1;
   // 'public' = everyone · 'followers' = people who follow you · 'private'.
   String _visibility = 'public';
-  // Step-2 edits: centre-crop aspect + burnt-in text overlay.
-  String _cropAspect = 'original';
-  final _overlayTextController = TextEditingController();
-  String _textPos = 'bottom';
   double _progress = 0;
   String? _error;
 
@@ -104,16 +105,41 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
     }
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) routeObserver.subscribe(this, route);
+  }
+
+  // Another screen opened on top — silence the preview so no audio bleeds
+  // through from behind it. Resume when we come back.
+  @override
+  void didPushNext() {
+    _previewController?.pause();
+    _soundPreview?.pause();
+  }
+
+  @override
+  void didPopNext() {
+    if (_videoStep != 3) _previewController?.play();
+    if (_videoStep == 2 && _effectiveSoundId != null) _soundPreview?.play();
+  }
+
   Future<void> _pickSound() async {
     final sound = await showSoundPickerSheet(context);
-    if (sound != null) setState(() => _pickedSound = sound);
+    if (sound != null) {
+      setState(() => _pickedSound = sound);
+      _setupSoundPreview();
+    }
   }
 
   @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _previewController?.dispose();
+    _soundPreview?.dispose();
     _captionController.dispose();
-    _overlayTextController.dispose();
     super.dispose();
   }
 
@@ -140,6 +166,9 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
     final controller = VideoPlayerController.file(file);
     await controller.initialize();
     await controller.setLooping(true);
+    // The video's own audio plays at the "Your audio" level so the mic slider
+    // is audible live; the chosen sound is layered on top via _soundPreview.
+    await controller.setVolume(_micVolume);
     controller.play();
     if (!mounted) return;
     setState(() {
@@ -147,6 +176,35 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
       _previewController = controller;
       _videoStep = 2; // a clip is in hand — move to the edit step
     });
+    _setupSoundPreview();
+  }
+
+  /// Loads and loops the attached sound so step 2 previews the actual mix. No-op
+  /// when no sound is attached or it's already loaded. Best-effort (network).
+  Future<void> _setupSoundPreview() async {
+    final soundId = _effectiveSoundId;
+    if (soundId == null) {
+      await _soundPreview?.stop();
+      return;
+    }
+    if (_soundPreviewId == soundId && _soundPreview != null) {
+      _soundPreview?.play();
+      return;
+    }
+    try {
+      var audioUrl = _pickedSound?.audioUrl;
+      if (audioUrl == null) {
+        final detail = await ref.read(soundRepositoryProvider).fetch(soundId);
+        audioUrl = detail.sound.audioUrl;
+      }
+      if (audioUrl == null || !mounted) return;
+      final player = _soundPreview ??= AudioPlayer();
+      await player.setLoopMode(LoopMode.one);
+      await player.setUrl(mediaUrl(audioUrl));
+      await player.setVolume(_soundVolume);
+      _soundPreviewId = soundId;
+      if (mounted && _videoStep == 2) player.play();
+    } catch (_) {/* preview is best-effort; publish still mixes for real */}
   }
 
   /// First-frame JPEG poster for the upload — the native equivalent of the
@@ -210,16 +268,9 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
       String? uploadedVideoId;
       if (_mode == _ComposerMode.video) {
         if (_videoFile == null) throw Exception('Pick or record a video first');
-        // Mix the chosen sound INTO the video (at the two volumes), then apply
-        // the step-2 edits (crop / burnt-in text), before uploading.
+        // Mix the chosen sound INTO the video (at the two volumes) before upload.
         final mixed = await _applySound(_videoFile!);
-        final editedPath = await VideoEditService.applyEdits(
-          videoPath: mixed.path,
-          cropAspect: _cropAspect,
-          text: _overlayTextController.text,
-          textPos: _textPos,
-        );
-        final fileToUpload = File(editedPath);
+        final fileToUpload = mixed;
         final thumb = await _makeThumbnail(fileToUpload);
         final size = _previewController?.value.size;
         final dur = _previewController?.value.duration;
@@ -296,10 +347,19 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
 
   void _onPrimary() {
     if (_isVideo && _videoStep == 2) {
-      setState(() => _videoStep = 3);
+      _goToStep(3);
     } else {
       _publish();
     }
+  }
+
+  /// Moves between the video wizard steps and keeps the preview audio sane: the
+  /// video plays on steps 1–2, the sound only on step 2; step 3 (audience) is
+  /// silent so nothing keeps playing behind the picker.
+  void _goToStep(int step) {
+    setState(() => _videoStep = step);
+    step != 3 ? _previewController?.play() : _previewController?.pause();
+    (step == 2 && _effectiveSoundId != null) ? _soundPreview?.play() : _soundPreview?.pause();
   }
 
   Widget _captionField() => TextField(
@@ -318,7 +378,7 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         leading: (_isVideo && _videoStep > 1 && !_uploading)
-            ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => setState(() => _videoStep -= 1))
+            ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => _goToStep(_videoStep - 1))
             : null,
         title: Text(_stepTitle()),
         actions: [
@@ -463,49 +523,19 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
                   icon: Icons.music_note,
                   label: 'Sound',
                   value: _soundVolume,
-                  onChanged: (v) => setState(() => _soundVolume = v),
+                  onChanged: (v) => setState(() {
+                    _soundVolume = v;
+                    _soundPreview?.setVolume(v); // hear the change live
+                  }),
                 ),
                 _VolumeSlider(
                   icon: Icons.mic,
                   label: 'Your audio',
                   value: _micVolume,
-                  onChanged: (v) => setState(() => _micVolume = v),
-                ),
-              ],
-              const SizedBox(height: 12),
-              Text('CROP', style: AppTypography.sectionLabel),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final a in const [('Original', 'original'), ('9:16', '9:16'), ('1:1', '1:1'), ('4:5', '4:5')])
-                    ChoiceChip(
-                      label: Text(a.$1),
-                      selected: _cropAspect == a.$2,
-                      onSelected: (_) => setState(() => _cropAspect = a.$2),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Text('TEXT ON VIDEO', style: AppTypography.sectionLabel),
-              const SizedBox(height: 6),
-              TextField(
-                controller: _overlayTextController,
-                onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(hintText: 'Add text… (optional)'),
-              ),
-              if (_overlayTextController.text.trim().isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final p in const [('Top', 'top'), ('Center', 'center'), ('Bottom', 'bottom')])
-                      ChoiceChip(
-                        label: Text(p.$1),
-                        selected: _textPos == p.$2,
-                        onSelected: (_) => setState(() => _textPos = p.$2),
-                      ),
-                  ],
+                  onChanged: (v) => setState(() {
+                    _micVolume = v;
+                    _previewController?.setVolume(v); // hear the change live
+                  }),
                 ),
               ],
               const SizedBox(height: 12),

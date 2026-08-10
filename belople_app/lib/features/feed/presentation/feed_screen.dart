@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/badges_provider.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/prewarm.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/app_avatar.dart';
@@ -48,6 +49,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
   void initState() {
     super.initState();
     _pageController = PageController();
+    // Warm the caches for the other main screens in the background so Public /
+    // Messages / Notifications / Profile open instantly on first tap.
+    WidgetsBinding.instance.addPostFrameCallback((_) => prewarmCaches(ref));
   }
 
   @override
@@ -93,14 +97,18 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
     }
   }
 
-  /// Ports the "Link copied" flow — design-4.css's copy rules: "Share does
-  /// not 'share' anything by itself — it hands back a link... the honest
-  /// label for the copy action is 'Link copied'."
+  /// Opens the real system share sheet with a link to the video (matching the
+  /// public feed's share), then confirms "Shared". The sheet is a system
+  /// overlay — it never navigates the app away from the feed. Only bumps the
+  /// share count / shows the toast when the user actually completed a share.
   Future<void> _share(String videoId) async {
     try {
       final url = await ref.read(feedRepositoryProvider).share(videoId);
-      await Clipboard.setData(ClipboardData(text: url));
-      if (mounted) showTopToast(context, 'Link copied');
+      if (!mounted) return;
+      final result = await Share.share(url, subject: 'Belople video');
+      if (mounted && result.status == ShareResultStatus.success) {
+        showTopToast(context, 'Shared');
+      }
     } catch (_) {
       if (mounted) showTopToast(context, "Couldn't share — check your connection");
     }
@@ -311,7 +319,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
             child: BottomNavPill(
               items: const [
                 (icon: Icons.mail_outline, label: 'Messages'),
-                (icon: Icons.smart_display, label: 'Shorts'),
+                (icon: Icons.videocam, label: 'Feed'),
               ],
               badges: [ref.watch(unreadMessagesProvider).valueOrNull ?? 0, 0],
               activeIndex: _navIndex,

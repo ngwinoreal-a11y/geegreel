@@ -295,6 +295,21 @@
   font-size: 12px; color: var(--muted); white-space: nowrap;
 }
 
+/* Marks where a chat's unread messages start on open — same shape as
+   .day-sep, colored to stand out since it's a "you are here" marker rather
+   than a neutral date label. Only ever rendered on a real (non-poll) open;
+   see unreadDividerId in chatPage(). */
+.unread-sep {
+  display: flex; align-items: center; gap: 12px;
+  margin: 16px 0 10px;
+}
+.unread-sep::before, .unread-sep::after {
+  content: ""; flex: 1; height: 1px; background: var(--online);
+}
+.unread-sep span {
+  font-size: 12px; font-weight: 600; color: var(--online); white-space: nowrap;
+}
+
 /* "Seen" under the last outgoing message, when the whole thread is read. */
 .seen-tag {
   text-align: right;

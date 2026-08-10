@@ -1,0 +1,517 @@
+/* ============================================================================
+   design-public.css — THE "PUBLIC" PAGE
+   ============================================================================
+
+   Linked after design-feed.css. Styles the third feed tab: a photo feed with
+   likes, share, and a comment sheet — plus one For You video spliced in
+   after every 3 photo posts (muted, tap the speaker to unmute, tap the
+   video to open the real For You feed). Pairs with public/public.js, which
+   renders this markup.
+
+   ---------------------------------------------------------------------------
+   FIVE DECISIONS WORTH KNOWING
+
+   1. NO GAP, NO DIVIDER between posts. The edge of the photo is the boundary
+      — a line or a gap would be a second, weaker boundary doing the same job.
+      Everything is scaled up instead (26px icons, 15px counts and captions)
+      so the feed reads clearly without ruled lines holding it together.
+
+   2. USERNAME (+ FOLLOW) FIRST, then the media, then the actions, then the
+      caption. Who posted it is the thing you decide whether to follow before
+      you've necessarily looked at the photo — the byline leads, same as it
+      does on a video card, instead of being buried below the actions.
+
+   3. COMMENTS OPEN AS A SHEET, not inline. On a photo feed, comment threads
+      run long — inline they push every post below off the screen and the feed
+      stops being scannable. The sheet keeps your place.
+
+   4. THE VERIFIED TICK IS FOR `role === 'admin'` ONLY. It's a claim about who
+      someone is, so it has to be earned by something real in the data — never
+      a styling choice. Wire it to the role field and nothing else.
+
+   5. A SPLICED-IN VIDEO STAYS FULL-BLEED, not framed like a photo post. The
+      feed is still fundamentally photos with video visiting, so the video
+      should read as "a video, playing" — not get boxed into looking like a
+      photo it isn't.
+
+   ---------------------------------------------------------------------------
+   CONTENTS
+     A. Tabs — room for a third
+     B. Feed surface
+     C. A post
+     C-2. An interleaved video
+     D. Verified tick
+     E. Comment sheet
+     F. Create screen
+     G. Loading and empty
+   ========================================================================= */
+
+
+/* ============================================================================
+   TOKENS
+   ========================================================================= */
+:root {
+  --pub-pad: 14px;
+  --verified: #3897F0;    /* white knockout on this reads 3.4:1 — icon-safe */
+}
+
+
+/* ============================================================================
+   A. TABS
+   ---------------------------------------------------------------------------
+   Three labels where there were two. The gap tightens rather than the row
+   growing, since these tabs sit inside .topbar alongside the avatar and
+   search icon (see design-feed.css) and a wider row starts crowding them on
+   a narrow phone.
+   ========================================================================= */
+
+/* On Public the header is over a solid background (.public-page's own
+   black, not video), so the shadow that keeps labels readable over video is
+   dead weight here — it just softens the type. */
+.tabs.on-public button { text-shadow: none; }
+
+
+/* ============================================================================
+   B. FEED SURFACE
+   ---------------------------------------------------------------------------
+   Normal scrolling, no snap. Snap is right when one item fills the screen;
+   here it would fight someone reading a caption that straddles two posts.
+   ========================================================================= */
+.public-page {
+  position: absolute; inset: 0; z-index: 2;
+  background: var(--bg);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding: 58px 0 96px;         /* clears the header and the nav */
+}
+
+/* No gap — see decision 1 above. */
+.public-feed { display: block; }
+
+
+/* ============================================================================
+   C. A POST
+   ---------------------------------------------------------------------------
+   MARKUP:
+     <article class="post" data-id="…">
+       <div class="post-head">
+         <span class="post-user">username<svg class="tick">…</svg></span>
+         <button class="post-follow">Follow</button>
+       </div>
+       <div class="post-media" style="aspect-ratio: 4/5">   ← see note
+         <img src="…" alt="">
+       </div>
+       <div class="post-actions">
+         <button class="post-like"><svg…/><span class="n">95.7K</span></button>
+         <button class="post-cmt"><svg…/><span class="n">2.0K</span></button>
+         <button class="post-share"><svg…/><span class="n">7.1K</span></button>
+       </div>
+       <div class="post-body">
+         <p class="post-caption">caption text<button class="post-more-text">more</button></p>
+         <p class="post-time">7d</p>
+       </div>
+     </article>
+
+   THE INLINE aspect-ratio IS LOAD-BEARING, not decoration.
+
+   public.js sets it from the width/height stored with the post, reserving the
+   exact space before the image downloads. Without it the box has no height
+   until the bytes arrive, then everything below jumps — and someone reaching
+   for a like button taps whatever slid into its place. Posts created before
+   those columns existed have no dimensions, so the CSS fallback gives them
+   4:5, the shape most phone photos sit closest to.
+   ========================================================================= */
+.post { background: var(--bg); padding-bottom: 14px; }
+
+.post-media {
+  position: relative; width: 100%;
+  aspect-ratio: 4 / 5;                /* fallback — overridden inline */
+  background: var(--raised);
+  overflow: hidden;
+}
+.post-media img {
+  width: 100%; height: 100%;
+  object-fit: contain;                /* never crop someone's photo */
+  background: #000; display: block;
+}
+
+.post-actions {
+  display: flex; align-items: center; gap: 20px;
+  padding: 12px var(--pub-pad) 0;
+}
+.post-actions button {
+  display: flex; align-items: center; gap: 7px;
+  background: none; border: none; padding: 0; color: var(--text);
+}
+.post-actions .n {
+  font-family: var(--mono); font-size: 15px; font-weight: 500;
+}
+
+/* Liked: the heart fills and the count follows it, so the state reads from
+   either half of the control rather than only from the icon. */
+.post-like.on { color: var(--badge); }
+.post-like.on svg { fill: var(--badge); stroke: var(--badge); }
+
+.post-body { padding: 10px var(--pub-pad) 0; }
+
+/* Username (with tick) on the left, Follow on the right. Leads the card —
+   see decision 2 — so it carries its own top padding rather than the
+   media's, and sits directly on .post/.pub-video-wrap, not inside
+   .post-body (which is only ever the text that follows the media). */
+.post-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px var(--pub-pad) 8px;
+}
+
+.post-caption {
+  margin: 0; font-size: 15px; line-height: 1.45;
+  color: var(--text); word-break: break-word;
+}
+
+/* A text-only post (no photo) — its own card so it reads as a deliberate
+   short note, not a photo post that's missing its photo. Bigger, bolder
+   type than a caption gets, since here the words ARE the post. */
+.post-text-card {
+  margin: 0 var(--pub-pad) 4px;
+  background: var(--surface, #1a1a1a);
+  border-radius: 14px; padding: 18px;
+  min-height: 100px; display: flex; align-items: center;
+}
+.post-text-caption {
+  margin: 0; font-size: 14px; font-weight: 700; line-height: 1.4;
+  color: var(--text); word-break: break-word;
+}
+
+.post-user {
+  font-weight: 600;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+
+/* The poster's avatar next to their name — same treatment as the main
+   feed's overlay avatar (object-fit: cover, fully filled circle, no gaps),
+   was missing here entirely before. */
+.post-av {
+  width: 32px; height: 32px; border-radius: 50%; overflow: hidden; flex-shrink: 0;
+  background: var(--surface, #222); display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; color: var(--muted, #888); cursor: pointer;
+}
+.post-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Same shape as the caption/comment "more" link and the main feed's
+   follow-btn: text only, no pill, so it reads as part of the byline rather
+   than a competing button next to the photo's own like/comment/share row. */
+.post-follow {
+  background: none; border: none; padding: 0; margin-left: auto;
+  font-size: 13px; font-weight: 600; color: var(--verified);
+}
+.post-follow.done { color: var(--muted); font-weight: 500; }
+
+/* Long captions truncate to a "more" link rather than running the full length
+   — an uncapped caption pushes the next photo off the screen, and this feed
+   is meant to be scanned. */
+.post-more-text {
+  background: none; border: none; padding: 0 0 0 4px;
+  color: var(--muted); font-size: 15px;
+}
+
+/* A link (WhatsApp or otherwise) pasted into a caption — auto-detected and
+   made tappable in public.js's linkify(). Same blue as the verified tick so
+   the whole page has one color that means "this is a real, tappable thing,"
+   not decoration. Underlined too, since color alone fails for anyone who
+   can't distinguish it from plain text. */
+.post-link { color: var(--verified); text-decoration: underline; }
+
+/* The timestamp uses --muted, not --faint. --faint (#5C5C5E) measures
+   3.15:1 on black, below the 4.5:1 text needs — small grey type is exactly
+   where that shortfall bites. --muted reaches 6.4:1 and still reads as
+   secondary. */
+.post-time {
+  margin: 6px 0 0; font-size: 13px; color: var(--muted);
+}
+
+
+/* ============================================================================
+   C-2. AN INTERLEAVED VIDEO
+   ---------------------------------------------------------------------------
+   One of these rides in after every 3 photo posts (see public.js's load()).
+   The byline row above it is the same .post-head as a photo post — see
+   decision 2 — so Follow works identically for both. The video itself
+   stays full-bleed below that row, not framed like a photo, so it still
+   reads as "a video, playing" rather than another gallery cell.
+
+   MARKUP:
+     <div class="pub-video-wrap">
+       <div class="post-head">
+         <span class="post-user">username<svg class="tick">…</svg></span>
+         <button class="post-follow">Follow</button>
+       </div>
+       <div class="pub-video" style="aspect-ratio: 9/16" data-vid="3">
+         <video muted loop playsinline poster="…"></video>
+         <button class="pub-vid-mute">…</button>
+         <div class="pub-vid-watchmore"><span>Watch more videos</span></div>
+       </div>
+     </div>
+
+   .gap-before ON THE WRAP: added by public.js only when the photo post
+   right before this video had no caption — see decision 5. A caption gives
+   the previous post a trailing text line; without one, the photo's bottom
+   edge would land flush against this video's top edge with nothing telling
+   them apart.
+   ========================================================================= */
+.pub-video-wrap { background: var(--bg); padding-bottom: 14px; }
+.pub-video-wrap.gap-before { margin-top: 10px; }
+
+.pub-video {
+  position: relative; width: 100%;
+  aspect-ratio: 9 / 16;                 /* fallback — overridden inline */
+  background: #000; overflow: hidden;
+}
+.pub-video video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover; background: #000;
+}
+
+/* Unmuted state (.on) swaps to the filled waves icon painted by
+   toggleMute() in public.js — the class only carries the pill's own look.
+   z-index above .pub-vid-watchmore so it stays tappable even once that
+   overlay is showing — unmuting from there is exactly how someone dismisses
+   the nudge and keeps watching in place. */
+.pub-vid-mute {
+  position: absolute; right: 10px; bottom: 14px; z-index: 3;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(0,0,0,.45); color: #fff;
+  display: grid; place-items: center; border: none;
+}
+.pub-vid-mute.on { background: rgba(255,255,255,.18); }
+
+/* Hidden until public.js's armWatchMore() adds .watch-more to .pub-video,
+   5 seconds into a still-muted autoplay. Tapping anywhere on it (it's not
+   the speaker) opens the real For You feed, same as tapping the video. */
+.pub-vid-watchmore {
+  position: absolute; inset: 0; z-index: 2;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.55);
+}
+.pub-video.watch-more .pub-vid-watchmore { display: flex; }
+.pub-vid-watchmore span {
+  padding: 10px 20px; border-radius: 999px;
+  background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.4);
+  color: #fff; font-size: 14px; font-weight: 700;
+}
+
+
+/* ============================================================================
+   D. VERIFIED TICK
+   ---------------------------------------------------------------------------
+   Rendered only when the user's `role` is 'admin'. See decision 4 above — this
+   is a factual claim, not decoration, so it must come from the data.
+
+   MARKUP: an inline svg with class="tick" inside .post-user, and the same in
+   a comment's username.
+   ========================================================================= */
+.tick { flex-shrink: 0; color: var(--verified); }
+.post-user .tick { width: 14px; height: 14px; }
+.cmt-user .tick { width: 13px; height: 13px; }
+
+
+/* ============================================================================
+   E. COMMENT SHEET
+   ---------------------------------------------------------------------------
+   MARKUP:
+     <div class="cmt-backdrop"></div>
+     <div class="cmt-sheet">
+       <div class="cmt-grab"></div>
+       <div class="cmt-head"><span>Comments</span><button class="x">×</button></div>
+       <div class="cmt-list">
+         <div class="cmt-row">
+           <div class="av">…</div>
+           <div class="cmt-main">
+             <p><span class="cmt-user">name<svg class="tick"…/></span>body</p>
+             <div class="cmt-meta">
+               <span>2h</span><span class="cmt-likes">12 likes</span>
+               <button class="cmt-reply">Reply</button>
+             </div>
+           </div>
+           <button class="cmt-heart"><svg…/></button>
+         </div>
+       </div>
+       <div class="cmt-compose">…</div>
+     </div>
+
+   The sheet is dark rather than white, unlike the video comment sheet. On a
+   photo feed you come back to it constantly, and a white panel flashing over
+   a dark feed every few taps is tiring in a way a once-per-video sheet isn't.
+   ========================================================================= */
+/* Fixed, not absolute — these are appended straight to <body> by public.js
+   (not into .public-page), specifically so they sit in the top-level
+   stacking context instead of being trapped inside .public-page's own
+   (position:absolute z-index:2) one, which is lower than the bottom nav
+   pill's. Trapped there, no z-index on the sheet itself could ever win
+   against the nav — fixed positioning here matters for that, not just
+   convenience. */
+.cmt-backdrop {
+  position: fixed; inset: 0; z-index: 19;
+  background: rgba(0,0,0,.5); animation: fadein .3s ease;
+}
+
+.cmt-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  height: 76%;
+  background: #1A1A1A; border-radius: 16px 16px 0 0;
+  display: flex; flex-direction: column; overflow: hidden;
+  animation: up .32s cubic-bezier(.22,.61,.36,1);
+}
+
+/* The grab handle says "this can be dragged away" without a label. */
+.cmt-grab {
+  width: 38px; height: 4px; border-radius: 2px;
+  background: #3A3A3C; margin: 10px auto 6px;
+}
+
+.cmt-head {
+  padding: 6px 16px 12px; position: relative;
+  display: flex; align-items: center; justify-content: center;
+}
+.cmt-head span { font-size: 15px; font-weight: 600; color: #fff; }
+.cmt-head .x { position: absolute; right: 14px; color: #fff; display: flex; }
+
+.cmt-list { flex: 1; overflow-y: auto; padding: 4px 0 8px; }
+
+.cmt-row { display: flex; gap: 11px; padding: 10px 16px; }
+.cmt-row .av {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  background: var(--raised); border: 1px solid var(--border);
+  display: grid; place-items: center; overflow: hidden;
+  font-family: var(--display); font-weight: 700; font-size: 13px; color: #fff;
+}
+.cmt-row .av img { width: 100%; height: 100%; object-fit: cover; }
+
+.cmt-main { flex: 1; min-width: 0; }
+.cmt-main p {
+  margin: 0; font-size: 14px; line-height: 1.4; color: #fff; word-break: break-word;
+}
+.cmt-user {
+  font-weight: 600; margin-right: 6px;
+  display: inline-flex; align-items: center; gap: 3px; vertical-align: -2px;
+}
+
+.cmt-meta { display: flex; gap: 14px; margin-top: 5px; }
+.cmt-meta span, .cmt-meta button {
+  font-size: 12px; color: var(--muted); background: none; border: none; padding: 0;
+}
+.cmt-likes, .cmt-reply { font-weight: 600; }
+
+/* The like heart sits top-aligned so it stays beside the first line of a long
+   comment rather than drifting to the middle of it. */
+.cmt-heart {
+  align-self: flex-start; padding-top: 3px;
+  color: var(--muted); display: flex; background: none; border: none;
+}
+.cmt-heart.on { color: var(--badge); }
+.cmt-heart.on svg { fill: var(--badge); stroke: var(--badge); }
+
+.cmt-compose {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px calc(14px + env(safe-area-inset-bottom, 0));
+  display: flex; align-items: center; gap: 10px; background: #1A1A1A;
+}
+.cmt-compose .av { width: 32px; height: 32px; }
+.cmt-compose input {
+  flex: 1; min-width: 0; background: none; border: none;
+  color: #fff; font-size: 14px; outline: none;
+}
+.cmt-compose input::placeholder { color: var(--muted); }
+
+/* Send only lights up once there's something to send, so an empty tap can't
+   produce an empty comment. */
+.cmt-compose .send {
+  background: none; border: none; padding: 0;
+  font-size: 14px; font-weight: 600; color: var(--verified);
+  opacity: .35; transition: opacity .2s;
+}
+.cmt-compose .send.ready { opacity: 1; }
+
+/* Replies stay collapsed behind this toggle until tapped — see
+   groupComments()/commentBlockHtml() in public.js. Indented under the
+   parent row it belongs to, not a second top-level comment. */
+.cmt-view-replies {
+  display: flex; align-items: center; gap: 8px;
+  margin: 2px 0 4px 61px; padding: 0;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  background: none; border: none;
+}
+.cmt-view-replies::before {
+  content: ""; width: 24px; height: 1px; background: var(--border);
+}
+.cmt-replies .cmt-row { padding-left: 61px; }
+.cmt-replies .cmt-row .av { width: 28px; height: 28px; }
+
+/* Same shape as .cmt-compose's own reply-quote pattern used elsewhere in
+   the app (chatPage's #replyBar) — a colored accent bar + text + Cancel,
+   sitting right above the input while a reply is staged. */
+.cmt-replying {
+  display: none; align-items: center; justify-content: space-between;
+  padding: 8px 16px; background: #1A1A1A; border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--verified);
+}
+.cmt-replying .cancel { background: none; border: none; color: var(--muted); font-weight: 600; padding: 0; }
+
+
+/* ============================================================================
+   F. CREATE SCREEN
+   ---------------------------------------------------------------------------
+   Public is photos only — videos go to the main feed. The screen says so
+   rather than silently rejecting a video at submit time, and the photo picker
+   comes before the caption because the photo is the post.
+   ========================================================================= */
+.post-form .pick {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 40px 14px; width: 100%;
+  background: var(--raised); border: 1px dashed var(--border);
+  border-radius: 12px; color: var(--muted); font-size: 14px;
+}
+
+.post-form .preview {
+  position: relative; border-radius: 12px; overflow: hidden; background: var(--raised);
+}
+.post-form .preview img { width: 100%; display: block; }
+.post-form .preview .drop {
+  position: absolute; top: 8px; right: 8px;
+  width: 32px; height: 32px; border-radius: 50%;
+  background: rgba(0,0,0,.6); color: #fff;
+  display: grid; place-items: center;
+}
+
+.post-form textarea {
+  width: 100%; min-height: 90px; margin-top: 12px;
+  background: var(--raised); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px;
+  color: var(--text); font-size: 15px; line-height: 1.5;
+  resize: none; outline: none; font-family: var(--sans);
+}
+
+.post-form .note {
+  margin-top: 12px; text-align: center;
+  font-size: 12px; color: var(--faint);
+}
+
+
+/* ============================================================================
+   G. LOADING AND EMPTY
+   ---------------------------------------------------------------------------
+   The skeleton mirrors a real post — a 4:5 media box then an action row — so
+   the layout doesn't shift when the real thing replaces it. A skeleton that
+   doesn't match its content is worse than none, because the jump is the thing
+   people notice.
+   ========================================================================= */
+.post-sk { padding-bottom: 14px; }
+.post-sk .media { width: 100%; aspect-ratio: 4/5; display: block; }
+.post-sk .row { display: flex; gap: 16px; padding: 12px var(--pub-pad) 0; }
+.post-sk .line { margin: 12px var(--pub-pad) 0; }
+
+/* An empty feed is an invitation, so it says what to do rather than only
+   reporting that there's nothing here. */
+.public-empty { text-align: center; padding: 80px 32px; }
+.public-empty p { margin: 0 0 6px; font-size: 15px; color: var(--text); }
+.public-empty span { font-size: 13px; color: var(--muted); line-height: 1.5; }

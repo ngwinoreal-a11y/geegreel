@@ -3,7 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Video App</title>
+<title>Belople</title>
+<meta name="description" content="Belople — Where People Shine. Watch, create, and connect.">
+
+<!-- Installable as an app (Add to Home Screen / desktop install) — the
+     manifest plus these icon/meta tags are what make the browser offer
+     "Install" at all. Publishing to the Play Store or App Store on top of
+     this is a separate step (wrapping this same PWA in a TWA/Capacitor
+     shell) — this alone doesn't put it there, but it's the same underlying
+     web app either way. -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="/icons/favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<!-- iOS ignores manifest.json for "installed app" behavior — these three
+     are what it actually reads for Add to Home Screen. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Belople">
+<meta name="mobile-web-app-capable" content="yes">
+
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/design.css">
 <link rel="stylesheet" href="/design-2.css">
@@ -11,6 +31,7 @@
 <link rel="stylesheet" href="/design-4.css">
 <link rel="stylesheet" href="/design-5.css">
 <link rel="stylesheet" href="/design-feed.css">
+<link rel="stylesheet" href="/design-public.css">
 <style>
   /* design-4.css's --sk-base (#1C1C1C) on this app's pure #000 page is too
      close in value — on a real screen it reads as "nothing loaded" rather
@@ -25,17 +46,13 @@
      have silently dropped the double-tap heart animation, the comment
      sheet's shrink-to-clip video, ad slide sizing, the white message-inbox
      theme, and the speed/report sub-sheets, so they're preserved as-is. */
+  /* Positioning only — burstHeart() in index.html's script drives the
+     actual motion (transform/opacity) per heart via Element.animate(),
+     not a shared CSS @keyframes rule. */
   .heart-burst {
     position: absolute; z-index: 6; pointer-events: none;
     left: 0; top: 0; transform: translate(-50%,-50%) scale(.3); opacity: 0;
-    animation: heartburst .7s cubic-bezier(.17,.89,.32,1.49) forwards;
     filter: drop-shadow(0 4px 16px rgba(0,0,0,.4));
-  }
-  @keyframes heartburst {
-    0%   { transform: translate(-50%,-50%) scale(.3); opacity: 0; }
-    15%  { transform: translate(-50%,-50%) scale(1.15); opacity: 1; }
-    30%  { transform: translate(-50%,-50%) scale(1); opacity: 1; }
-    100% { transform: translate(-50%,-50%) scale(1); opacity: 0; }
   }
 
   .slide.commenting .overlay, .slide.commenting .rail {
@@ -60,8 +77,11 @@
 
   /* Inbox: white, like TikTok's — a deliberate break from the app's dark theme. */
   .page.msgs-page { background: #fff; color: #000; }
-  .msgs-page h2 { color: #000; }
-  .thread-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid #F0F0F0; }
+  .msgs-page h2 { color: #000; font-size: 28px; font-weight: 800; }
+  /* No divider line between rows on purpose — one continuous page, the same
+     way the WhatsApp reference reads, rather than a bordered list. Rows
+     separate on spacing alone. */
+  .thread-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: none; }
   .tav { position: relative; width: 52px; height: 52px; flex-shrink: 0; border-radius: 50%; overflow: hidden;
     background: #E4E4E6; display: grid; place-items: center; font-family: var(--display); font-weight: 700; color: #55555A; }
   .tav img { width: 100%; height: 100%; object-fit: cover; }
@@ -69,9 +89,25 @@
   .msgs-page .sk { background: var(--sk-sheet); }
   .msgs-page .sk::after { background: linear-gradient(90deg, transparent 0%, var(--sk-sheet-lift) 50%, transparent 100%); }
   .thread-name { margin: 0; font-size: 15px; font-weight: 600; color: #111; }
-  .thread-preview { margin: 2px 0 0; font-size: 13px; color: #8A8A8E; }
+  .thread-preview { margin: 2px 0 0; font-size: 13px; color: #8A8A8E; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thread-row.unread .thread-name { font-weight: 700; }
   .thread-row.unread .thread-preview { color: #111; font-weight: 600; }
   .thread-time { font-size: 11px; color: #8A8A8E; flex-shrink: 0; }
+
+  /* Inbox search — borderless pill, background-only distinction from the
+     page (no outline), placeholder just says "Search" rather than
+     mimicking an AI-assistant prompt. */
+  .msgs-page .search-pill {
+    display: flex; align-items: center; gap: 10px;
+    background: #F5F5F6; border-radius: 20px;
+    padding: 10px 14px; margin-bottom: 10px;
+  }
+  .msgs-page .search-pill svg { flex-shrink: 0; color: #8A8A8E; }
+  .msgs-page .search-pill input {
+    flex: 1; min-width: 0; background: none; border: none; outline: none;
+    color: #111; font-size: 14px; font-family: inherit;
+  }
+  .msgs-page .search-pill input::placeholder { color: #8A8A8E; }
 
   .speed-opt, .report-reason {
     display: flex; justify-content: space-between; align-items: center; width: 100%;
@@ -91,19 +127,6 @@
      gesture off on the slide is what makes the double-tap reliable. */
   .slide { touch-action: manipulation; }
 
-  /* Adding the sound row (design-5.css section D) gave the overlay a third
-     line, but .overlay's bottom offset (88px) was set for two lines — its
-     bottom edge landed inside the scrub bar's own band (bottom 84-106px),
-     so the sound row and the scrubber visually collided. Lifting the
-     overlay clears the scrub bar entirely. */
-  .overlay { bottom: 118px; }
-
-  /* design-5.css's .sound-disc sits at bottom:88px, right in the scrub bar's
-     own band (84-106px) and under it in stacking order (.scrub has an
-     explicit z-index, the disc doesn't) — the same collision as above, this
-     time on the right edge. Raised to clear it, roughly where the rail's
-     own bottom edge (132px) leaves room. */
-  .sound-disc { bottom: 146px; }
 </style>
 </head>
 <body>
@@ -119,6 +142,7 @@
 </div>
 
 <script type="module">
+import { mountPublic, mountCreatePost } from "./public.js";
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
 const app = document.getElementById("app");
 
@@ -132,6 +156,7 @@ const I = {
   gear: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H7a1.7 1.7 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V7a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>`,
   mail: `<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 6l-10 7L2 6"/></svg>`,
   play: `<svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M5 3l14 9-14 9V3z"/></svg>`,
+  pause: `<svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`,
   video: `<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg>`,
   plus: `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>`,
   userplus: `<svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>`,
@@ -145,12 +170,14 @@ const I = {
   dots: `<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`,
   speedIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="14" r="8"/><path d="M12 14l3-3"/><path d="M9 2h6"/></svg>`,
   flagIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22V3"/></svg>`,
+  trash: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>`,
   heartOffIcon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L9.5 18"/><path d="M3 3l18 18"/></svg>`,
   home: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>`,
   bell: `<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
   user: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>`,
   more: `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`,
   send: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2 21 22 12 2 3l0 7 13 2-13 2z"/></svg>`,
+  replyIcon: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a5 5 0 0 1 5 5v2"/></svg>`,
   // "Buy me a coffee"-style branding for anything money/earnings related —
   // replaces a literal $/wallet glyph so it reads as "support this
   // creator" rather than a bank icon.
@@ -182,6 +209,14 @@ const dayLabel = (ts) => {
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, ch =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+
+// True when this page is running inside the installed Android app (a
+// Trusted Web Activity launched from Play Store) rather than a normal
+// mobile/desktop browser tab or the "Add to Home Screen" PWA. Chrome sets
+// this referrer for TWAs specifically. Play's payments policy requires
+// Google Play Billing for anything sold from inside that context, so coin
+// purchases route out to the regular browser instead (see walletPage()).
+const isAndroidTWA = () => document.referrer.startsWith("android-app://");
 
 // ---------- api ----------
 const store = {
@@ -256,13 +291,62 @@ function requireLogin(msg) {
   return false;
 }
 
-// The big heart that pops at (x, y) inside `container` and fades on its own.
+// A large programmatic scrollTop jump on a scroll-snap-stop:always
+// container (.feed) can make some mobile browsers (iOS Safari in
+// particular) enforce stopping at every snap point in between, one after
+// another, instead of landing directly on the target — visually a fast
+// sweep through every video from wherever it started, even though the JS
+// only ever set scrollTop once with no animation of its own. Disabling
+// snap for the jump, then restoring it a frame later, sidesteps that.
+const jumpScroll = (el, top) => {
+  const prevSnap = el.style.scrollSnapType;
+  el.style.scrollSnapType = "none";
+  el.scrollTop = top;
+  requestAnimationFrame(() => { el.style.scrollSnapType = prevSnap; });
+};
+
+// A shower of hearts at (x, y) inside `container` — not one heart, several
+// (8, within the 5-12 asked for), each with its own drift/rise/timing so
+// they read as a burst rather than N copies of the same animation stacked
+// on top of each other. Runs a little over 2s end to end (last heart's
+// delay + its own duration), even though any single heart's flight is
+// shorter than that.
+//
+// Driven by Element.animate() (Web Animations API) with the actual pixel
+// destinations computed in JS, rather than a CSS @keyframes rule reading
+// per-heart custom properties through calc()/scale(). That combination is
+// valid CSS, but it's also exactly the kind of thing that can silently
+// fail to render on a given device with nothing to show for it but hearts
+// that never appear — WAAPI keyframes are plain objects, nothing to parse.
 const burstHeart = (container, x, y) => {
-  const h = $(`<div class="heart-burst">${I.heartFill}</div>`);
-  h.style.left = `${x}px`;
-  h.style.top = `${y}px`;
-  container.appendChild(h);
-  setTimeout(() => h.remove(), 700);
+  const COUNT = 8;
+  for (let i = 0; i < COUNT; i++) {
+    const h = document.createElement("div");
+    h.className = "heart-burst";
+    h.innerHTML = I.heartFill;
+    h.style.left = `${x}px`;
+    h.style.top = `${y}px`;
+    container.appendChild(h);
+
+    const dx = Math.round((Math.random() - 0.5) * 100);
+    const rise = Math.round(110 + Math.random() * 90);
+    const scale = (0.65 + Math.random() * 0.55).toFixed(2);
+    const dur = 1300 + Math.random() * 700;   // 1.3–2s per heart
+    const delay = Math.random() * 300;        // staggered start
+
+    let anim;
+    try {
+      anim = h.animate([
+        { transform: "translate(-50%,-50%) scale(.3)", opacity: 0 },
+        { transform: `translate(-50%,-50%) scale(${scale})`, opacity: 1, offset: 0.2 },
+        { transform: `translate(calc(-50% + ${dx}px), calc(-50% - ${rise}px)) scale(${scale})`, opacity: 0 },
+      ], { duration: dur, delay, easing: "cubic-bezier(.17,.89,.32,1.49)", fill: "forwards" });
+    } catch {}
+    if (anim) anim.onfinish = () => h.remove();
+    // Belt and braces: remove it even if WAAPI isn't available at all, or
+    // onfinish never fires (e.g. the tab was backgrounded mid-animation).
+    setTimeout(() => h.remove(), dur + delay + 300);
+  }
 };
 
 // ---------- state ----------
@@ -278,10 +362,27 @@ let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: nu
               // into the upload flow. Cleared after posting or leaving upload.
               selectedSound: null,
               soundId: null,
+              // Set when a post is tapped in a profile's Public grid, so
+              // mountPublic can page in posts until it finds this one and
+              // scroll straight to it. Consumed once, same as sharedBy above.
+              publicJumpPostId: null,
               // Set by requireLogin() when a guest taps something that
               // needs an account — tells renderInner() to show authScreen
               // even on a page a guest can otherwise browse.
               authPrompt: false };
+
+// How far down the main feed you'd scrolled — outside `state` since it isn't
+// part of navigation identity, just where you were. Restored by renderInner()
+// when a back-navigation (sound page, a video's profile, ...) lands back on
+// the feed, instead of that landing at the first video every time.
+let feedScrollTop = 0;
+
+// Same idea, for userFeedPage's own scrollable list (a profile's video grid,
+// a notification's video, ...). null (rather than 0) means "nobody's scrolled
+// in this list yet" — the initial jump-to-tapped-video already handles that
+// case via state.startAt, so this only ever overrides it once there's an
+// actual remembered position to return to.
+let userFeedScrollTop = null;
 
 // ---------- feed ----------
 function slide(v) {
@@ -305,8 +406,10 @@ function slide(v) {
           </button>`}
         </div>
         ${v.repostOf ? `<p class="tap-sm repost-badge" data-user="${esc(v.user.username)}" style="color:#bbb;font-size:12px;margin:0 0 4px">Reposted by @${esc(v.user.username)}</p>` : ""}
-        <p class="caption clamped">${esc(v.caption || "")}</p>
-        <button class="caption-toggle tap-sm" style="display:none">more</button>
+        <div class="cap-row">
+          <p class="caption"></p>
+          <button class="caption-toggle tap-sm" style="display:none">more</button>
+        </div>
         ${v.soundId
           ? `<button class="sound is-link" data-sound="${v.soundId}"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${displayUser.username}`)}</span></button>`
           : `<p class="sound"><i class="sound-note">♪</i><span class="sound-name">${esc(v.song || `Original sound - ${displayUser.username}`)}</span></p>`}
@@ -314,7 +417,7 @@ function slide(v) {
       <div class="rail">
         <button class="like ${v.liked ? "liked" : ""}">${I.heart}<span class="n">${fmt(v.counts.likes)}</span></button>
         <button class="cmt">${I.comment}<span class="n">${fmt(v.counts.comments)}</span></button>
-        <button class="rep">${I.repost}<span class="n">${fmt(v.counts.reposts)}</span></button>
+        ${mine ? "" : `<button class="rep">${I.repost}<span class="n">${fmt(v.counts.reposts)}</span></button>`}
         <button class="shr">${I.share}<span class="n">${fmt(v.counts.shares)}</span></button>
         ${mine ? "" : `<button class="gift">${I.gift}<span class="n">${fmt(v.giftCoins || 0)}</span></button>`}
         <button class="more"><i></i><i></i><i></i></button>
@@ -378,20 +481,33 @@ function slide(v) {
     }
   });
 
-  // Same idea for a long caption: only show "more" if the 3-line clamp is
-  // actually cutting something off.
+  // A caption is one line, truncated with a native CSS ellipsis rather than
+  // a guessed character count — a fixed count either clips the "more"
+  // button off-screen on a narrow phone (too long) or wastes width showing
+  // less than could fit (too short). "more" is a separate flex sibling
+  // (.cap-row in the markup above), not appended inside the truncated
+  // paragraph itself, so it can never be part of what gets clipped.
   const captionEl = el.querySelector(".caption");
   const captionToggle = el.querySelector(".caption-toggle");
-  requestAnimationFrame(() => {
-    if (captionEl && captionEl.scrollHeight > captionEl.clientHeight + 2) {
-      captionToggle.style.display = "";
-    }
-  });
-  captionToggle?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const stillClamped = captionEl.classList.toggle("clamped");
-    captionToggle.textContent = stillClamped ? "more" : "less";
-  });
+  if (captionEl) {
+    const capText = v.caption || "";
+    captionEl.textContent = capText;
+    let expanded = false;
+    // Needs a real layout pass first — scrollWidth reads 0 on an element
+    // not yet in the document, which it isn't until the caller appends the
+    // slide right after this function returns.
+    requestAnimationFrame(() => {
+      if (captionToggle && captionEl.scrollWidth > captionEl.clientWidth + 1) {
+        captionToggle.style.display = "";
+      }
+    });
+    captionToggle?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      expanded = !expanded;
+      captionEl.classList.toggle("expanded", expanded);
+      captionToggle.textContent = expanded ? "less" : "more";
+    });
+  }
 
   // ---- scrubber: drag-to-seek ----
   const scrub = el.querySelector(".scrub");
@@ -503,9 +619,13 @@ function slide(v) {
   // both hit the same endpoint, so both need to agree on whether it already
   // happened. Without this, doing it from one place left the other unaware,
   // so a second tap there fired a real second request instead of a no-op.
+  // repBtn doesn't exist at all for your own video (see the rail markup
+  // above) — reposting your own video to your own profile isn't a real
+  // action, so el._doRepost is simply never set in that case, and
+  // openMoreOptions() hides its own Repost row the same way.
   const repBtn = el.querySelector(".rep");
   let repostBusy = false;
-  const doRepost = async () => {
+  const doRepost = repBtn ? async () => {
     if (!requireLogin()) return false;
     if (repostBusy || repBtn.classList.contains("on")) return repBtn.classList.contains("on");
     repostBusy = true;
@@ -529,8 +649,8 @@ function slide(v) {
       repostBusy = false;
       repBtn.classList.remove("working", "on-dark");
     }
-  };
-  repBtn.addEventListener("click", (e) => { e.stopPropagation(); doRepost(); });
+  } : null;
+  repBtn?.addEventListener("click", (e) => { e.stopPropagation(); doRepost(); });
   // Exposed so the "More" sheet's Repost row (built by openMoreOptions,
   // outside this closure) shares the same guarded call instead of firing
   // its own independent request.
@@ -677,13 +797,19 @@ async function downloadVideo(v) {
 // and there's no endpoint for that yet — a button that quietly does nothing
 // useful is worse than no button (see design-3.css's own note on this).
 function openMoreOptions(v, slideEl) {
+  // "Delete video" only exists for the person who posted it — everyone else
+  // gets Report in that slot instead. Both are "danger" styled so the slot's
+  // weight in the grid doesn't shift depending on who's looking.
+  const isOwner = store.user && v.user.id === store.user.id;
   const sheet = $(`
     <div class="sheet opt-sheet">
       <div class="sheet-head"><span class="title">More</span><button class="x">${I.x}</button></div>
       <div class="opt-grid">
         <button class="opt" data-a="save"><i class="opt-ic">${I.download}</i><span>Save video</span></button>
         <button class="opt" data-a="speed"><i class="opt-ic">${I.speedIcon}</i><span>Speed</span></button>
-        <button class="opt danger" data-a="report"><i class="opt-ic">${I.flagIcon}</i><span>Report</span></button>
+        ${isOwner
+          ? `<button class="opt danger" data-a="delete"><i class="opt-ic">${I.trash}</i><span>Delete</span></button>`
+          : `<button class="opt danger" data-a="report"><i class="opt-ic">${I.flagIcon}</i><span>Report</span></button>`}
       </div>
       <div class="share-row">
         <span class="share-label">Share with</span>
@@ -697,9 +823,10 @@ function openMoreOptions(v, slideEl) {
           <button data-app="copy" style="background:#F1F1F2;color:#111" aria-label="Copy link">${I.x /* placeholder, replaced below */}</button>
         </div>
       </div>
+      ${isOwner ? "" : `
       <button class="repost-row" data-a="repost">
         <i class="repost-ic">${I.repost}</i><span>Repost</span><i class="chev">›</i>
-      </button>
+      </button>`}
       <div class="sheet-body" id="sendList"><div class="spin" style="border-color:#eee;border-top-color:#000"></div></div>
     </div>
   `);
@@ -713,13 +840,27 @@ function openMoreOptions(v, slideEl) {
 
   sheet.querySelector('[data-a="save"]').onclick = () => { close(); downloadVideo(v); };
   sheet.querySelector('[data-a="speed"]').onclick = () => { close(); openSpeedSheet(v, slideEl); };
-  sheet.querySelector('[data-a="report"]').onclick = () => {
+  sheet.querySelector('[data-a="report"]')?.addEventListener("click", () => {
     close();
     if (!requireLogin("Log in to report a video")) return;
     openReportSheet(v);
-  };
+  });
 
-  sheet.querySelector('[data-a="repost"]').onclick = async () => {
+  sheet.querySelector('[data-a="delete"]')?.addEventListener("click", async () => {
+    if (!confirm("Delete this video? This can't be undone.")) return;
+    close();
+    try {
+      await api(`/videos/${v.id}`, { method: "DELETE" });
+      toast("Video deleted");
+      // Removing it live from a snap-scrolling feed mid-playback is its own
+      // can of worms (IntersectionObserver, buffered neighbours, scroll
+      // position) — going back to a fresh load is simple and correct instead.
+      if (state.page === "userfeed") { state.userVideos = []; state.startAt = 0; history.back(); }
+      else render();
+    } catch (e) { toast(e.message); }
+  });
+
+  sheet.querySelector('[data-a="repost"]')?.addEventListener("click", async () => {
     close();
     if (!requireLogin()) return;
     // Goes through the same guarded call the rail's repost icon uses, so
@@ -734,7 +875,7 @@ function openMoreOptions(v, slideEl) {
         if (cnt) cnt.textContent = fmt(v.counts.reposts + 1);
       } catch (err) { toast(err.message); }
     }
-  };
+  });
 
   // Share links get built lazily, off the same share endpoint the rail's
   // share button uses. The count only moves once markShared() below runs —
@@ -854,6 +995,213 @@ function openReportSheet(v) {
       toast("Thanks — we'll take a look");
     } catch (e) { toast(e.message); }
   });
+}
+
+// A single-action sheet for a Public post — right now that's only "Delete",
+// but it's its own sheet (rather than a bare confirm()) so a second option
+// (e.g. edit caption) has somewhere to go later without restructuring this.
+function openPostOptions(p, onDeleted) {
+  const sheet = $(`
+    <div class="sheet" style="height:auto;max-height:40%">
+      <div class="sheet-head"><span class="title">Post options</span><button class="x">${I.x}</button></div>
+      <button class="repost-row" data-a="delete">
+        <i class="repost-ic" style="background:#C4162E;color:#fff">${I.trash}</i>
+        <span style="color:#C4162E">Delete post</span>
+      </button>
+    </div>`);
+  const close = mountSheet(sheet);
+  sheet.querySelector(".x").onclick = close;
+  sheet.querySelector('[data-a="delete"]').onclick = async () => {
+    if (!confirm("Delete this post? This can't be undone.")) return;
+    close();
+    try {
+      await api(`/posts/${p.id}`, { method: "DELETE" });
+      toast("Post deleted");
+      onDeleted?.();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+// "Delete for everyone" only ever shows up when every selected message is
+// eligible (mine, not already deleted, sent under 15 minutes ago) — the
+// caller (chatPage's #selDelete handler) works that out before opening this.
+function openDeleteMessageSheet(ids, canEveryone, onDone) {
+  const sheet = $(`
+    <div class="sheet" style="height:auto;max-height:40%">
+      <div class="sheet-head"><span class="title">Delete ${ids.length > 1 ? `${ids.length} messages` : "message"}</span><button class="x">${I.x}</button></div>
+      <button class="repost-row" data-a="me">
+        <i class="repost-ic" style="background:#C4162E;color:#fff">${I.trash}</i>
+        <span style="color:#C4162E">Delete for me</span>
+      </button>
+      ${canEveryone ? `
+      <button class="repost-row" data-a="everyone">
+        <i class="repost-ic" style="background:#C4162E;color:#fff">${I.trash}</i>
+        <span style="color:#C4162E">Delete for everyone</span>
+      </button>` : ""}
+    </div>`);
+  const close = mountSheet(sheet);
+  sheet.querySelector(".x").onclick = close;
+  const runDelete = async (scope) => {
+    close();
+    try {
+      await Promise.all(ids.map(id => api(`/messages/${id}/delete`, { method: "POST", body: { scope } })));
+      onDone?.();
+    } catch (e) { toast(e.message); }
+  };
+  sheet.querySelector('[data-a="me"]').onclick = () => runDelete("me");
+  sheet.querySelector('[data-a="everyone"]')?.addEventListener("click", () => runDelete("everyone"));
+}
+
+// A preview-with-caption step before a chat photo actually sends, same as
+// WhatsApp's send-photo flow — the object URL is revoked either way once
+// the sheet closes (sent or cancelled), not just on send.
+function openImageCaptionSheet(file, onConfirm) {
+  const url = URL.createObjectURL(file);
+  const sheet = $(`
+    <div class="sheet" style="height:auto;max-height:85%">
+      <div class="sheet-head"><span class="title">Send photo</span><button class="x">${I.x}</button></div>
+      <div style="padding:0 16px"><img src="${url}" style="width:100%;max-height:50vh;object-fit:contain;border-radius:12px;display:block"></div>
+      <div style="display:flex;gap:8px;align-items:center;padding:14px 16px">
+        <input id="capInput" placeholder="Add a caption..." maxlength="1000" style="flex:1;min-width:0;background:var(--surface);border:none;border-radius:20px;padding:11px 16px;color:#fff;outline:none;font-size:14px">
+        <button id="capSend" style="background:#25D366;color:#fff;border-radius:50%;width:44px;height:44px;display:grid;place-items:center;flex-shrink:0">${I.send}</button>
+      </div>
+    </div>`);
+  const close = mountSheet(sheet, () => URL.revokeObjectURL(url));
+  sheet.querySelector(".x").onclick = close;
+  const send = () => {
+    const caption = sheet.querySelector("#capInput").value.trim();
+    close();
+    onConfirm(caption);
+  };
+  sheet.querySelector("#capSend").onclick = send;
+  sheet.querySelector("#capInput").addEventListener("keydown", e => e.key === "Enter" && send());
+}
+
+// A library of sounds pulled from other creators' videos (the same "use
+// this sound" system a sound's own detail page already offers) — reachable
+// straight from the camera now instead of only after first stumbling onto
+// someone else's video that happens to use one. Reuses GET
+// /api/sounds/search, so this is the search bar, not a separate catalog.
+function openSoundPicker(onPick) {
+  const sheet = $(`
+    <div class="sheet" style="height:80%">
+      <div class="sheet-head"><span class="title">Add a sound</span><button class="x">${I.x}</button></div>
+      <div style="padding:10px 16px 0">
+        <div class="field" style="margin-bottom:0"><input id="soundQ" placeholder="Search sounds or creators" autocapitalize="none"></div>
+      </div>
+      <div class="sheet-body" id="soundResults" style="padding-top:8px">
+        <p class="empty-sub" style="text-align:center;margin-top:24px">Search for a sound to add to your video.</p>
+      </div>
+    </div>`);
+  const close = mountSheet(sheet, () => previewEl?.pause());
+  sheet.querySelector(".x").onclick = close;
+
+  const input = sheet.querySelector("#soundQ");
+  const results = sheet.querySelector("#soundResults");
+  let previewEl = null, previewingId = null, debounceTimer = null;
+
+  const render = (sounds) => {
+    if (!sounds.length) {
+      results.innerHTML = `<p class="empty-sub" style="text-align:center;margin-top:24px">No sounds found.</p>`;
+      return;
+    }
+    results.innerHTML = sounds.map(s => `
+      <div class="row" data-sid="${s.id}">
+        <button class="tap-sm sound-preview" style="width:38px;height:38px;border-radius:50%;background:var(--surface);color:#fff;display:grid;place-items:center;flex-shrink:0">${I.play}</button>
+        <div style="flex:1;min-width:0">
+          <p style="margin:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.title)}</p>
+          <p style="margin:2px 0 0;font-size:12px;color:var(--muted)">${esc(s.author.displayName || s.author.username)} · ${fmt(s.uses)} video${s.uses === 1 ? "" : "s"}</p>
+        </div>
+        <button class="tap-sm use-sound-btn" data-sid="${s.id}" style="background:#fff;color:#000;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:600;flex-shrink:0">Use</button>
+      </div>`).join("");
+
+    results.querySelectorAll(".sound-preview").forEach(btn => {
+      const row = btn.closest("[data-sid]");
+      const s = sounds.find(x => x.id === row.dataset.sid);
+      btn.onclick = () => {
+        if (previewingId === s.id && previewEl && !previewEl.paused) { previewEl.pause(); return; }
+        if (!previewEl) previewEl = new Audio();
+        previewEl.src = s.audioUrl;
+        previewEl.play().catch(() => {});
+        previewingId = s.id;
+      };
+    });
+    results.querySelectorAll(".use-sound-btn").forEach(btn => {
+      const s = sounds.find(x => x.id === btn.dataset.sid);
+      btn.onclick = () => {
+        previewEl?.pause();
+        close();
+        onPick({ id: s.id, title: s.title, audioUrl: s.audioUrl });
+      };
+    });
+  };
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    const q = input.value.trim();
+    if (!q) { results.innerHTML = `<p class="empty-sub" style="text-align:center;margin-top:24px">Search for a sound to add to your video.</p>`; return; }
+    debounceTimer = setTimeout(async () => {
+      try {
+        const r = await api(`/sounds/search?q=${encodeURIComponent(q)}`);
+        render(r.sounds);
+      } catch { results.innerHTML = `<p class="empty-sub" style="text-align:center;margin-top:24px">Couldn't search sounds right now.</p>`; }
+    }, 300);
+  });
+  input.focus();
+}
+
+// Expands a tapped chat photo from its exact on-screen position/size into a
+// full-screen viewer via a FLIP transform (scale+translate only, GPU-cheap,
+// no width/height/object-fit interpolation glitches) instead of an abrupt
+// cut to a full-screen element.
+function openChatImageViewer(triggerImg, url) {
+  const rect = triggerImg.getBoundingClientRect();
+  const backdrop = $(`<div class="img-viewer-backdrop"></div>`);
+  const full = $(`<img class="img-viewer-img" src="${esc(url)}">`);
+  document.body.appendChild(backdrop);
+  document.body.appendChild(full);
+
+  const scaleX = rect.width / window.innerWidth;
+  const scaleY = rect.height / window.innerHeight;
+  const startX = rect.left + rect.width / 2 - window.innerWidth / 2;
+  const startY = rect.top + rect.height / 2 - window.innerHeight / 2;
+  const startTransform = `translate(${startX}px, ${startY}px) scale(${scaleX}, ${scaleY})`;
+
+  // object-fit:contain on the full view (whole photo, no cropping) never
+  // quite matches the thumbnail's object-fit:cover (cropped) at the small
+  // end of the scale — rather than let that mismatch show as a pop, it's
+  // faded in as it grows, so the crop/letterbox difference blends away
+  // instead of jumping.
+  full.style.transform = startTransform;
+  full.style.opacity = "0";
+  backdrop.style.opacity = "0";
+  requestAnimationFrame(() => {
+    backdrop.style.transition = "opacity .22s ease";
+    backdrop.style.opacity = "1";
+    full.animate(
+      [{ transform: startTransform, opacity: 0 }, { transform: "none", opacity: 1 }],
+      { duration: 260, easing: "cubic-bezier(.2,.8,.2,1)", fill: "forwards" }
+    );
+  });
+
+  const close = () => {
+    backdrop.style.opacity = "0";
+    full.animate(
+      [{ transform: "none", opacity: 1 }, { transform: startTransform, opacity: 0 }],
+      { duration: 220, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" }
+    ).onfinish = () => { full.remove(); backdrop.remove(); };
+  };
+
+  // Both the hardware/gesture back button and tapping the photo go through
+  // history.back() — one throwaway entry, popped either way, so there's
+  // exactly one code path (the popstate branch in the global listener,
+  // guarded by viewerMarkerActive) that actually performs the close.
+  viewerMarkerActive = true;
+  activeImageViewerClose = close;
+  history.pushState({ ...snapshotState(), __imgViewer: true }, "");
+  const requestClose = () => { if (viewerMarkerActive) history.back(); };
+  backdrop.onclick = requestClose;
+  full.onclick = requestClose;
 }
 
 // Mounts a sheet with a dimmed backdrop, and gives back a close() that slides
@@ -1169,20 +1517,28 @@ async function cacheVideoForOffline(url) {
 const WARM_AHEAD = 2;
 const WARM_BEHIND = 1;
 
-function warmNeighbours(index, slides) {
-  slides.forEach((s, i) => {
-    const v = s.querySelector("video");
-    if (!v) return;
-    const dist = i - index;
+// O(window size) — NOT O(every slide loaded into the feed so far). The
+// previous version scanned the entire `slides` array on every single swipe
+// (slides.forEach over everyone, checking a dist for each). Cheap at 15
+// videos, measurably not cheap after someone's scrolled through a few
+// hundred — a "gets heavier the longer the session runs" bug, not a
+// constant-cost one, which is a lot easier to miss testing on a fresh load.
+// warmSet tracks only the handful of indices actually holding a live
+// buffer right now, so both warming new ones and cooling old ones touch a
+// bounded number of elements (WARM_AHEAD + WARM_BEHIND + 1 = 4) regardless
+// of how long the feed has gotten. Returns the new warmSet — the caller
+// holds it (scoped per observePlayback() call, same lifetime lastWarmIndex
+// already had).
+function warmNeighbours(index, slides, warmSet) {
+  const from = Math.max(0, index - WARM_BEHIND);
+  const to = Math.min(slides.length - 1, index + WARM_AHEAD);
+  const next = new Set();
+  for (let i = from; i <= to; i++) next.add(i);
 
-    if (dist >= -WARM_BEHIND && dist <= WARM_AHEAD) {
-      // In the warm window: make sure the browser is actually fetching it.
-      if (v.preload !== "auto") v.preload = "auto";
-      if (!v.dataset.warm) {
-        v.dataset.warm = "1";
-        v.load();
-      }
-    } else if (v.dataset.warm) {
+  warmSet.forEach(i => {
+    if (next.has(i)) return;
+    const v = slides[i]?.querySelector("video");
+    if (v && v.dataset.warm) {
       // Out of range: drop the buffer, keep the poster on screen.
       delete v.dataset.warm;
       v.preload = "none";
@@ -1191,6 +1547,17 @@ function warmNeighbours(index, slides) {
       v.setAttribute("src", v.dataset.src);
     }
   });
+  next.forEach(i => {
+    const v = slides[i]?.querySelector("video");
+    if (!v) return;
+    // In the warm window: make sure the browser is actually fetching it.
+    if (v.preload !== "auto") v.preload = "auto";
+    if (!v.dataset.warm) {
+      v.dataset.warm = "1";
+      v.load();
+    }
+  });
+  return next;
 }
 
 let lastWarmIndex = -1;
@@ -1199,6 +1566,12 @@ function observePlayback() {
   io?.disconnect();
   lastWarmIndex = -1;
   const slides = [...document.querySelectorAll(".slide")];
+  // Stamped once here (O(n), but once per page of videos loaded — not once
+  // per swipe) so the callback below can read a slide's position directly
+  // instead of slides.indexOf(en.target), which is also O(n) and was
+  // running on every single intersection change, for every slide.
+  slides.forEach((s, i) => { s.dataset.idx = i; });
+  let warmSet = new Set();
 
   io = new IntersectionObserver((entries) => {
     entries.forEach(en => {
@@ -1222,20 +1595,32 @@ function observePlayback() {
       if (en.isIntersecting && en.intersectionRatio >= 0.25) {
         if (v) {
           v.play().catch(() => {});
-          const idx = slides.indexOf(en.target);
+          const idx = parseInt(en.target.dataset.idx, 10);
           // The 0 / 0.25 / 0.6 thresholds can all fire for the same slide
-          // within one settle — re-scanning every slide's warm state three
-          // times for no change is exactly the kind of per-scroll work that
-          // adds up into a laggy feed as the list grows.
+          // within one settle — re-running warmNeighbours three times for
+          // no change is exactly the kind of per-scroll work that adds up
+          // into a laggy feed, even now that it's cheap per call.
           if (idx !== lastWarmIndex) {
-            lastWarmIndex = idx; warmNeighbours(idx, slides);
+            lastWarmIndex = idx; warmSet = warmNeighbours(idx, slides, warmSet);
             // A snap that only relies on scroll-snap's own easing reads as
             // soft — this quick, springy scale (same overshoot curve as a
             // button press) is what makes landing on a slide feel like it
             // arrived with force instead of just drifting to a stop.
-            en.target.classList.remove("landed");
-            void en.target.offsetWidth; // restart the animation if it's already mid-play
-            en.target.classList.add("landed");
+            //
+            // Element.animate(), not the classList.remove/void
+            // offsetWidth/classList.add restart trick this used to be —
+            // that offsetWidth read forces a synchronous layout flush of
+            // the ENTIRE document, not just this element, on every single
+            // swipe. Measured (long-task profiling on the live feed) at up
+            // to 460ms on one occasion — almost certainly this: reading
+            // layout geometry forces content-visibility:auto to resolve
+            // layout for every off-screen slide it had been skipping, all
+            // at once, synchronously. animate() restarts cleanly with no
+            // forced layout read at all.
+            en.target.animate(
+              [{ transform: "scale(.985)" }, { transform: "scale(1)" }],
+              { duration: 30, easing: "cubic-bezier(.2,.9,.3,1)" }
+            );
           }
         }
 
@@ -1265,7 +1650,7 @@ function observePlayback() {
   slides.forEach(s => io.observe(s));
   // Prime the first screenful straight away rather than waiting for a scroll.
   lastWarmIndex = 0;
-  warmNeighbours(0, slides);
+  warmSet = warmNeighbours(0, slides, warmSet);
 }
 
 // Matches the INTERESTS whitelist src/index.js validates signup against —
@@ -1475,16 +1860,94 @@ function authScreen() {
 // frames via a canvas's 2D context (same filter string, plus the vignette
 // drawn as a radial gradient) only while a take is actually rolling — so the
 // exported video carries the look, not just the preview.
+// Each filter's icon is a small emoji drawn over its color swatch — a flat
+// color circle alone read as identical shapes with different tints, not as
+// distinct filters, at the small size these render at. Beauty is new:
+// a gentle brightness/contrast/saturation lift is the closest a plain CSS
+// filter() can get to flattering skin without real per-pixel smoothing
+// (that needs a face-aware blur, well beyond what filter() can express) —
+// still a real, noticeable softening rather than nothing.
 const FILTERS = [
-  { key: "none",      label: "Original",    swatch: "#8E8E93", css: "none", vignette: 0 },
-  { key: "cinematic", label: "Cinematic",   swatch: "#5C7A8A", css: "contrast(1.08) saturate(0.88) brightness(1.02) hue-rotate(-4deg)", vignette: 0.30 },
-  { key: "portra",    label: "Portra",      swatch: "#D9B99B", css: "sepia(0.12) saturate(1.1) contrast(0.95) brightness(1.04)", vignette: 0.16 },
-  { key: "rose",      label: "Rosé",        swatch: "#F0AEC4", css: "saturate(1.2) brightness(1.07) hue-rotate(-6deg) contrast(0.97)", vignette: 0.14 },
-  { key: "golden",    label: "Golden Hour", swatch: "#E8A85C", css: "sepia(0.22) saturate(1.3) brightness(1.08) contrast(1.02)", vignette: 0.22 },
-  { key: "noir",      label: "Noir",        swatch: "#4A4A4E", css: "grayscale(1) contrast(1.25) brightness(0.97)", vignette: 0.40 },
-  { key: "moody",     label: "Moody",       swatch: "#3E4A52", css: "saturate(0.65) contrast(1.18) brightness(0.93)", vignette: 0.36 },
-  { key: "editorial", label: "Editorial",   swatch: "#C2453A", css: "contrast(1.22) saturate(1.15) brightness(1.01)", vignette: 0.18 },
+  { key: "none",      label: "Original",    icon: "⚪", swatch: "#8E8E93", css: "none", vignette: 0 },
+  { key: "beauty",    label: "Beauty",      icon: "✨", swatch: "#F2C6D0", css: "brightness(1.08) contrast(0.92) saturate(1.08) hue-rotate(-2deg)", vignette: 0.08 },
+  { key: "cinematic", label: "Cinematic",   icon: "🎬", swatch: "#5C7A8A", css: "contrast(1.08) saturate(0.88) brightness(1.02) hue-rotate(-4deg)", vignette: 0.30 },
+  { key: "portra",    label: "Portra",      icon: "🍂", swatch: "#D9B99B", css: "sepia(0.12) saturate(1.1) contrast(0.95) brightness(1.04)", vignette: 0.16 },
+  { key: "rose",      label: "Rosé",        icon: "🌸", swatch: "#F0AEC4", css: "saturate(1.2) brightness(1.07) hue-rotate(-6deg) contrast(0.97)", vignette: 0.14 },
+  { key: "golden",    label: "Golden Hour", icon: "🌅", swatch: "#E8A85C", css: "sepia(0.22) saturate(1.3) brightness(1.08) contrast(1.02)", vignette: 0.22 },
+  { key: "noir",      label: "Noir",        icon: "🎭", swatch: "#4A4A4E", css: "grayscale(1) contrast(1.25) brightness(0.97)", vignette: 0.40 },
+  { key: "moody",     label: "Moody",       icon: "🌙", swatch: "#3E4A52", css: "saturate(0.65) contrast(1.18) brightness(0.93)", vignette: 0.36 },
+  { key: "editorial", label: "Editorial",   icon: "🔥", swatch: "#C2453A", css: "contrast(1.22) saturate(1.15) brightness(1.01)", vignette: 0.18 },
 ];
+
+// Public's text-only post type — same /api/posts endpoint as a photo post,
+// just with no image field in the form. Large type by design (see the
+// font-size below): this is meant to read like a short public note, not a
+// cramped caption field.
+function textPostPage() {
+  const el = $(`
+    <div class="page">
+      <div class="pagehead"><button id="back">${I.back}</button><h2>Write for Public</h2></div>
+      <textarea id="txt" maxlength="2000" placeholder="Say something..."
+        style="width:100%;min-height:200px;background:var(--surface);border:none;border-radius:14px;
+        padding:16px;color:#fff;font-size:15px;line-height:1.4;font-weight:600;outline:none;resize:none;font-family:inherit"></textarea>
+      <button class="btn-primary" id="post" style="margin-top:16px" disabled>Post</button>
+      <p class="err" id="err" style="display:none"></p>
+    </div>`);
+  el.querySelector("#back").onclick = () => history.back();
+  const txt = el.querySelector("#txt");
+  const post = el.querySelector("#post");
+  const err = el.querySelector("#err");
+  txt.addEventListener("input", () => { post.disabled = !txt.value.trim(); });
+  post.onclick = async () => {
+    const content = txt.value.trim();
+    if (!content) return;
+    post.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append("content", content);
+      await api("/posts", { method: "POST", body: fd });
+      toast("Posted to Public");
+      state.page = null; state.tab = "feed"; state.feedTab = "public";
+      render();
+    } catch (e) {
+      err.textContent = e.message;
+      err.style.display = "block";
+      post.disabled = false;
+    }
+  };
+  return el;
+}
+
+function publicUploadPage() {
+  const el = $(`
+    <div class="page">
+      <div class="pagehead">
+        <button id="back">${I.back}</button>
+        <h2>New photo post</h2>
+      </div>
+      <div id="pub-create"></div>
+    </div>`);
+
+  el.querySelector("#back").onclick = () => history.back();
+
+  // Set by the camera's PHOTO mode (capturePhoto() in uploadPage) — a live
+  // capture hands straight into this exact same flow a gallery pick uses,
+  // rather than a second upload path to keep in sync.
+  const initialFile = state.capturedPhoto || null;
+  state.capturedPhoto = null;
+
+  mountCreatePost(el.querySelector("#pub-create"), {
+    token: store.token,
+    initialFile,
+    onDone: () => {
+      toast("Posted to Public");
+      state.page = null; state.tab = "feed"; state.feedTab = "public";
+      render();
+    },
+  });
+
+  return el;
+}
 
 function uploadPage() {
   // Two steps: "camera" (record or pick) then "post" (describe and publish).
@@ -1503,6 +1966,7 @@ function uploadPage() {
   let recorder = null;
   let chunks = [];
   let facing = "user";
+  let captureMode = "video"; // "video" | "photo" — chosen by the mode strip
   let limit = 60;            // seconds, chosen by the mode strip
   let ticker = null;
   let startedAt = 0;
@@ -1690,17 +2154,6 @@ function uploadPage() {
           transition:opacity .15s ease;
           background:radial-gradient(ellipse at center, rgba(0,0,0,0) 35%, rgba(0,0,0,.85) 100%)"></div>
 
-        <!-- A rough, equal-margin guide for how much of the frame the feed's
-             own top/bottom black bands will end up covering — not a pixel
-             match for design-feed.css's actual (deliberately unequal)
-             --feed-top/--feed-bottom, this screen isn't trying to preview
-             the exact chrome, just give a sense of safe framing so a
-             close-up shot doesn't end up with its subject crowding an edge
-             that's about to sit under a band. Doesn't affect the actual
-             recording — beginRecording()'s canvas draw loop still captures
-             the full, uncropped frame regardless of this overlay. -->
-        <div style="position:absolute;top:0;left:0;right:0;height:8%;z-index:1;pointer-events:none;background:rgba(0,0,0,.4)"></div>
-        <div style="position:absolute;bottom:0;left:0;right:0;height:8%;z-index:1;pointer-events:none;background:rgba(0,0,0,.4)"></div>
 
         <div id="deny" style="position:absolute;inset:0;display:none;place-items:center;padding:0 32px;text-align:center">
           <div>
@@ -1746,6 +2199,8 @@ function uploadPage() {
           </div>
           <button id="removeText" style="position:absolute;top:-9px;right:-9px;width:22px;height:22px;border-radius:50%;
             background:#fff;color:#000;display:grid;place-items:center;font-size:12px;line-height:1">${I.x}</button>
+          <button id="textColorBtn" title="Change color" style="position:absolute;bottom:-9px;right:-9px;width:22px;height:22px;border-radius:50%;
+            background:#fff;border:2px solid #000;display:block"></button>
         </div>
 
         <div id="timer" style="position:absolute;top:18px;left:50%;transform:translateX(-50%);background:#FF3B30;color:#fff;font-family:var(--mono);font-size:12px;padding:4px 10px;border-radius:12px;display:none;z-index:2">
@@ -1753,31 +2208,42 @@ function uploadPage() {
         </div>
 
         ${sound ? `
-          <div id="soundStrip" style="position:absolute;bottom:148px;left:50%;transform:translateX(-50%);
+          <div id="soundStrip" style="position:absolute;top:16px;left:50%;transform:translateX(-50%);
             background:rgba(0,0,0,.55);border-radius:20px;padding:6px 8px 6px 14px;display:flex;align-items:center;gap:8px;
-            z-index:2;max-width:80%;white-space:nowrap">
+            z-index:2;max-width:60%;white-space:nowrap">
             <span style="color:#fff;font-size:12px;overflow:hidden;text-overflow:ellipsis">🎵 ${esc(sound.title)}</span>
             <button id="clearSound" style="width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,.2);color:#fff;
               font-size:14px;line-height:1;display:grid;place-items:center;flex-shrink:0">×</button>
           </div>
-        ` : ""}
+        ` : `
+          <button id="addSoundBtn" style="position:absolute;top:16px;left:50%;transform:translateX(-50%);
+            background:rgba(0,0,0,.55);border-radius:20px;padding:8px 16px;display:flex;align-items:center;gap:6px;
+            z-index:2;color:#fff;font-size:12px;font-weight:600;white-space:nowrap">
+            🎵 Add sound
+          </button>
+        `}
 
         <div style="position:absolute;bottom:0;left:0;right:0;padding-bottom:22px;z-index:2">
           <div id="filters" style="display:flex;gap:14px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 20px 14px;scrollbar-width:none">
             ${FILTERS.map(f => `
               <button class="filt tap-sm ${f.key === activeFilter ? "on" : ""}" data-f="${f.key}"
                 style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;background:none;border:none">
-                <i style="width:44px;height:44px;border-radius:50%;background:${f.swatch};display:block;
-                  border:2px solid ${f.key === activeFilter ? "#fff" : "transparent"}"></i>
+                <i style="width:44px;height:44px;border-radius:50%;background:${f.swatch};display:grid;place-items:center;font-size:19px;font-style:normal;line-height:1;
+                  border:2px solid ${f.key === activeFilter ? "#fff" : "transparent"}">${f.icon}</i>
                 <span style="color:#fff;font-size:10px;font-weight:600;text-shadow:0 1px 4px rgba(0,0,0,.6)">${f.label}</span>
               </button>`).join("")}
           </div>
 
-          <div id="modes" style="display:flex;justify-content:center;gap:18px;margin-bottom:16px">
-            ${[["10m", 600], ["60s", 60], ["15s", 15]].map(([l, s]) =>
+          <div id="modes" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-bottom:16px;overflow-x:auto;padding:0 12px">
+            <span style="color:rgba(255,255,255,.5);font-size:11px;font-weight:700;letter-spacing:.03em;flex-shrink:0;padding:0 2px">SHORTS</span>
+            ${[["15s", 15], ["30s", 30], ["1m", 60]].map(([l, s]) =>
               `<button data-s="${s}" class="mode ${s === 60 ? "on" : ""}"
-                style="color:#fff;font-size:13px;font-weight:600;padding:5px 12px;border-radius:14px">${l}</button>`
+                style="color:#fff;font-size:13px;font-weight:600;padding:5px 12px;border-radius:14px;flex-shrink:0">${l}</button>`
             ).join("")}
+            <button data-mode="photo" class="mode"
+              style="color:#fff;font-size:13px;font-weight:600;padding:5px 12px;border-radius:14px;flex-shrink:0">PUBLIC</button>
+            <button data-mode="text" class="mode"
+              style="color:#fff;font-size:13px;font-weight:600;padding:5px 12px;border-radius:14px;flex-shrink:0">TEXT</button>
           </div>
 
           <div style="display:flex;align-items:center;justify-content:center;gap:34px">
@@ -1824,6 +2290,20 @@ function uploadPage() {
       sound = null;
       el.querySelector("#soundStrip")?.remove();
       start();
+    });
+    el.querySelector("#addSoundBtn")?.addEventListener("click", () => {
+      if (!canCaptureSound()) {
+        toast("This browser can't record with a picked sound yet — try Chrome or Firefox");
+        return;
+      }
+      openSoundPicker((picked) => {
+        sound = picked;
+        // Simplest correct way to get every piece of state that depends on
+        // whether a sound is attached — the strip's markup, audio:false on
+        // the next getUserMedia call, the preloaded <audio> element — back
+        // in sync, the same reset #clearSound already relies on above.
+        cameraStep();
+      });
     });
 
     // The live preview gets the filter as plain CSS — instant, GPU-composited,
@@ -1885,6 +2365,17 @@ function uploadPage() {
     const positionOverlay = () => {
       textOverlay.style.left = `${overlayText.xNorm * 100}%`;
       textOverlay.style.top = `${overlayText.yNorm * 100}%`;
+      el.querySelector("#textContent").style.fontSize = `${17 * (overlayText.scale || 1)}px`;
+    };
+
+    // Tapped through, not a picker — a small fixed set covers what this is
+    // actually for (a caption you can still read against video), and skips
+    // building real color-picker UI for a feature this size.
+    const TEXT_COLORS = ["#fff", "#000", "#FF3B30", "#FFD60A", "#34C759", "#0A84FF", "#FF2D91"];
+    const applyTextColor = () => {
+      const color = overlayText.color || "#fff";
+      el.querySelector("#textContent").style.color = color;
+      el.querySelector("#textColorBtn").style.background = color;
     };
 
     el.querySelector("#addText").onclick = () => {
@@ -1892,27 +2383,61 @@ function uploadPage() {
       if (!text || !text.trim()) return;
       overlayText = overlayText
         ? { ...overlayText, text: text.trim() }
-        : { text: text.trim(), xNorm: 0.5, yNorm: 0.07, inSafeZone: true };
+        : { text: text.trim(), xNorm: 0.5, yNorm: 0.07, inSafeZone: true, scale: 1, color: "#fff" };
       el.querySelector("#textContent").textContent = overlayText.text;
       textOverlay.style.display = "block";
       positionOverlay();
       paintOverlayStyle();
+      applyTextColor();
     };
     el.querySelector("#removeText").onclick = (e) => {
       e.stopPropagation();
       overlayText = null;
       textOverlay.style.display = "none";
     };
+    el.querySelector("#textColorBtn").onclick = (e) => {
+      e.stopPropagation();
+      const i = TEXT_COLORS.indexOf(overlayText.color || "#fff");
+      overlayText.color = TEXT_COLORS[(i + 1) % TEXT_COLORS.length];
+      applyTextColor();
+    };
 
+    // Single finger drags; a second finger switches to pinch-to-resize
+    // instead (tracked by pointer id so drag and pinch never fight over the
+    // same gesture). Font size lives as a scale multiplier on overlayText,
+    // read back in beginRecording()'s drawOverlayText so a resize actually
+    // bakes into the exported video, not just the live preview.
     let dragging = false;
+    const activePointers = new Map(); // pointerId -> {x, y}
+    let pinchStartDist = null, pinchStartScale = 1;
+    const ptDist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
     textOverlay.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#removeText")) return;
-      dragging = true;
+      if (e.target.closest("#removeText") || e.target.closest("#textColorBtn")) return;
       textOverlay.setPointerCapture(e.pointerId);
-      textOverlay.style.cursor = "grabbing";
-      safeZones.style.opacity = "1";
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (activePointers.size === 1) {
+        dragging = true;
+        textOverlay.style.cursor = "grabbing";
+        safeZones.style.opacity = "1";
+      } else if (activePointers.size === 2) {
+        dragging = false;
+        const [a, b] = [...activePointers.values()];
+        pinchStartDist = ptDist(a, b);
+        pinchStartScale = overlayText.scale || 1;
+      }
     });
     textOverlay.addEventListener("pointermove", (e) => {
+      if (!activePointers.has(e.pointerId)) return;
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (activePointers.size >= 2 && pinchStartDist) {
+        const [a, b] = [...activePointers.values()];
+        const scale = Math.min(2.5, Math.max(0.5, pinchStartScale * (ptDist(a, b) / pinchStartDist)));
+        overlayText.scale = scale;
+        positionOverlay();
+        return;
+      }
       if (!dragging) return;
       const box = cam.getBoundingClientRect();
       overlayText.xNorm = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
@@ -1920,7 +2445,9 @@ function uploadPage() {
       positionOverlay();
     });
     const endDragText = (e) => {
-      if (!dragging) return;
+      activePointers.delete(e.pointerId);
+      if (activePointers.size < 2) pinchStartDist = null;
+      if (activePointers.size > 0 || !dragging) return;
       dragging = false;
       textOverlay.style.cursor = "grab";
       safeZones.style.opacity = "0";
@@ -1942,16 +2469,22 @@ function uploadPage() {
       textOverlay.style.display = "block";
       positionOverlay();
       paintOverlayStyle();
+      applyTextColor();
     }
 
     el.querySelectorAll(".mode").forEach(b => b.onclick = () => {
+      // Text doesn't happen inside the camera at all — it's a straight
+      // handoff to the text composer, same destination as the old
+      // create-choose screen's Text row.
+      if (b.dataset.mode === "text") { state.page = "text-post"; render(); return; }
       el.querySelectorAll(".mode").forEach(x => {
         x.classList.remove("on");
         x.style.background = "none"; x.style.color = "#fff";
       });
       b.classList.add("on");
       b.style.background = "#fff"; b.style.color = "#000";
-      limit = parseInt(b.dataset.s);
+      if (b.dataset.mode === "photo") { captureMode = "photo"; }
+      else { captureMode = "video"; limit = parseInt(b.dataset.s); }
     });
     // reflect the default selection
     const def = el.querySelector('.mode[data-s="60"]');
@@ -2062,8 +2595,21 @@ function uploadPage() {
       // camera's own resolution so nothing is downscaled, then record THAT
       // canvas's stream. Runs only while a take is rolling — idle preview
       // stays pure CSS, so this costs nothing before the shutter is pressed.
+      //
+      // Only actually done when there's a filter or overlay text to bake in
+      // — the audio track always comes straight off the mic (or the sound's
+      // own captureStream), completely outside this canvas relay. Running
+      // every recording through it regardless, even with no filter picked,
+      // meant its video timing depended on requestAnimationFrame keeping up
+      // with a *separate* fixed-rate captureStream(30) clock — under any
+      // load (a slower phone especially) those two clocks drift apart from
+      // each other, and the recorded video drifts out of sync with the
+      // untouched real-time audio track over the length of a take. Recording
+      // the camera's own track directly for the plain-no-filter case (the
+      // common one) removes that whole relay, and with it the drift.
+      const needsCanvas = activeFilter !== "none" || !!overlayText?.text;
       let videoTrackForRecording = track;
-      if (typeof HTMLCanvasElement.prototype.captureStream === "function") {
+      if (needsCanvas && typeof HTMLCanvasElement.prototype.captureStream === "function") {
         const canvas = document.createElement("canvas");
         canvas.width = cw; canvas.height = ch;
         const ctx = canvas.getContext("2d");
@@ -2093,8 +2639,9 @@ function uploadPage() {
           ctx.save();
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          const fontSize = Math.round(ch * 0.032);
+          const fontSize = Math.round(ch * 0.032 * (overlayText.scale || 1));
           ctx.font = `700 ${fontSize}px 'Space Grotesk', system-ui, sans-serif`;
+          const textColor = overlayText.color || "#fff";
 
           const maxWidth = cw * (overlayText.inSafeZone ? 0.86 : 0.7);
           const words = overlayText.text.split(/\s+/);
@@ -2113,14 +2660,14 @@ function uploadPage() {
             const barTop = overlayText.yNorm <= 0.5 ? 0 : ch - barHeight;
             ctx.fillStyle = "#000";
             ctx.fillRect(0, barTop, cw, barHeight);
-            ctx.fillStyle = "#fff";
+            ctx.fillStyle = textColor;
             const midY = barTop + barHeight / 2 - ((lines.length - 1) * lineHeight) / 2;
             lines.forEach((l, i) => ctx.fillText(l, cw / 2, midY + i * lineHeight));
           } else {
             const x = overlayText.xNorm * cw, y = overlayText.yNorm * ch;
             ctx.shadowColor = "rgba(0,0,0,.85)";
             ctx.shadowBlur = 6;
-            ctx.fillStyle = "#fff";
+            ctx.fillStyle = textColor;
             const midY = y - ((lines.length - 1) * lineHeight) / 2;
             lines.forEach((l, i) => ctx.fillText(l, x, midY + i * lineHeight));
           }
@@ -2144,7 +2691,11 @@ function uploadPage() {
           canvasRaf = requestAnimationFrame(drawFrame);
         };
         drawFrame();
-        videoTrackForRecording = canvas.captureStream(30).getVideoTracks()[0];
+        // No fixed frame rate argument — captureStream() then emits a frame
+        // every time the canvas is actually drawn to (driven by drawFrame's
+        // own rAF loop) instead of sampling it on an independent fixed-rate
+        // timer that can drift against that loop.
+        videoTrackForRecording = canvas.captureStream().getVideoTracks()[0];
       } else if (activeFilter !== "none" || overlayText?.text) {
         // Old Safari lacks canvas.captureStream — the filter/text still show
         // live but can't be burned into the file, so say so once rather
@@ -2198,8 +2749,34 @@ function uploadPage() {
       dot.style.width = "60px"; dot.style.height = "60px"; dot.style.borderRadius = "50%";
     };
 
+    // A single frame, not a recording — same filter baked in via the same
+    // ctx.filter approach beginRecording() uses for video, applied once
+    // instead of every rAF tick. Hands off into the exact same Public
+    // photo-post flow a gallery pick uses (mountCreatePost's initialFile),
+    // rather than a second, parallel upload path to keep in sync.
+    const capturePhoto = () => {
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings?.() || {};
+      const cw = settings.width || 1080, ch = settings.height || 1920;
+      const canvas = document.createElement("canvas");
+      canvas.width = cw; canvas.height = ch;
+      const ctx = canvas.getContext("2d");
+      const activePreset = FILTERS.find(f => f.key === activeFilter) || FILTERS[0];
+      ctx.filter = activePreset.css;
+      if (facing === "user") { ctx.translate(cw, 0); ctx.scale(-1, 1); }
+      ctx.drawImage(cam, 0, 0, cw, ch);
+      canvas.toBlob((blob) => {
+        if (!blob) { toast("Couldn't capture that photo"); return; }
+        state.capturedPhoto = new File([blob], "photo.jpg", { type: "image/jpeg" });
+        stop();
+        state.page = "post-public";
+        render();
+      }, "image/jpeg", 0.92);
+    };
+
     shoot.onclick = () => {
       if (!stream) return;
+      if (captureMode === "photo") { capturePhoto(); return; }
       recorder?.state === "recording" ? endRecording() : beginRecording();
     };
 
@@ -2331,7 +2908,7 @@ function settingsPage() {
 
       <p class="lbl">Bio</p>
       <textarea id="bio" rows="2" maxlength="160" placeholder="Tell people about yourself"
-        style="width:100%;background:var(--surface);border-radius:10px;padding:12px;color:#fff;font-size:14px;resize:none;outline:none">${u.bio || ""}</textarea>
+        style="width:100%;background:var(--surface);border:none;border-radius:10px;padding:12px;color:#fff;font-size:14px;resize:none;outline:none;font-family:inherit">${u.bio || ""}</textarea>
 
       <p class="lbl" style="margin-top:12px">Email</p>
       <div class="field"><input id="email" value="${u.email}" autocapitalize="none"></div>
@@ -2422,11 +2999,41 @@ function settingsPage() {
           Works only while the site has no admin yet. After that it stops working for everyone.
         </p>` : ""}
 
+      <p class="sect">App</p>
+      <button id="installApp" style="width:100%;border:1px solid var(--border);border-radius:10px;padding:12px 0;color:#fff;font-size:13px;margin-bottom:6px;display:none">
+        Install Belople
+      </button>
+      <p id="installHint" style="font-size:12px;color:var(--muted);margin:0;display:none"></p>
+
       <p class="sect">About</p>
       <p style="font-size:12px;color:var(--muted);margin:0">Version 1.0.0</p>
     `;
 
     el.querySelector("#back").onclick = () => history.back();
+
+    // Already running as an installed app — nothing to offer here. Android/
+    // Chrome gets a real install button (the beforeinstallprompt captured at
+    // page load, up top of the script); iOS never fires that event at all,
+    // so it gets the manual Share-sheet instructions instead — there's no
+    // programmatic install path there.
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    if (!isStandalone) {
+      const installBtn = el.querySelector("#installApp");
+      const installHint = el.querySelector("#installHint");
+      if (deferredInstallPrompt) {
+        installBtn.style.display = "";
+        installBtn.onclick = async () => {
+          installBtn.disabled = true;
+          deferredInstallPrompt.prompt();
+          const { outcome } = await deferredInstallPrompt.userChoice;
+          if (outcome === "accepted") { deferredInstallPrompt = null; installBtn.style.display = "none"; }
+          else installBtn.disabled = false;
+        };
+      } else if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
+        installHint.style.display = "";
+        installHint.textContent = 'Add to Home Screen: tap Share (⬆) at the bottom of Safari, then "Add to Home Screen."';
+      }
+    }
 
     // --- avatar ---
     el.querySelector("#monet").onclick = () => { state.page = "monetization"; render(); };
@@ -2591,7 +3198,13 @@ function profilePage() {
   const username = state.viewUser || store.user.username;
   const isMe = !state.viewUser || state.viewUser === store.user.username;
 
-  api(`/users/${encodeURIComponent(username)}`).then(r => {
+  // Painting is its own function, called from two places: an instant
+  // pre-paint from whatever sw.js's API_CACHE already has (below), and the
+  // live fetch that always still runs to reconcile — same
+  // stale-while-revalidate shape as loadFeed(). Without the cached path,
+  // this page sat on a skeleton for a full round trip on every single open,
+  // even for a profile that had already loaded moments earlier.
+  const paintProfile = (r) => {
     const u = r.user;
 
     el.innerHTML = `
@@ -2601,10 +3214,20 @@ function profilePage() {
           <h2 style="margin:0">${esc(u.username)}</h2>
         </div>
         ${isMe ? `
-          <button id="wallet" style="width:38px;height:38px;border-radius:50%;background:var(--surface);
-            border:1px solid var(--border);display:grid;place-items:center;color:var(--accent)">
-            ${I.coffee}
-          </button>` : ""}
+          <div style="display:flex;gap:8px">
+            <button id="notifBell" style="position:relative;width:38px;height:38px;border-radius:50%;background:var(--surface);
+              border:1px solid var(--border);display:grid;place-items:center;color:#fff">
+              ${I.bell}${state.unreadCount ? '<span class="badge dot"></span>' : ""}
+            </button>
+            <button id="settings" style="width:38px;height:38px;border-radius:50%;background:var(--surface);
+              border:1px solid var(--border);display:grid;place-items:center;color:#fff">
+              ${I.gear}
+            </button>
+            <button id="wallet" style="width:38px;height:38px;border-radius:50%;background:var(--surface);
+              border:1px solid var(--border);display:grid;place-items:center;color:var(--accent)">
+              ${I.coffee}
+            </button>
+          </div>` : ""}
       </div>
 
       <div style="display:flex;flex-direction:column;align-items:center;margin-bottom:20px">
@@ -2650,13 +3273,15 @@ function profilePage() {
         </div>
       `}
 
-      <!-- Own videos and reposts split into separate tabs — mixed together,
-           a repost reads as something this person filmed, which it isn't. -->
-      ${r.videos.some(v => v.repostOf) ? `
-        <div class="list-tabs" id="gridTabs">
-          <button class="on" data-t="videos">Videos<span class="n">${r.videos.filter(v => !v.repostOf).length}</span></button>
-          <button data-t="reposts">Reposts<span class="n">${r.videos.filter(v => v.repostOf).length}</span></button>
-        </div>` : ""}
+      <!-- Own videos, reposts, and Public photo posts split into separate
+           tabs — mixed together, a repost reads as something this person
+           filmed (which it isn't), and a photo post has no video to play. -->
+      <div class="list-tabs" id="gridTabs">
+        <button class="on" data-t="videos">Videos<span class="n">${r.videos.filter(v => !v.repostOf).length}</span></button>
+        ${r.videos.some(v => v.repostOf) ? `
+          <button data-t="reposts">Reposts<span class="n">${r.videos.filter(v => v.repostOf).length}</span></button>` : ""}
+        <button data-t="posts">Public<span class="n">${(r.posts || []).length}</span></button>
+      </div>
       <div class="grid" id="grid"></div>
       <p class="empty" id="gridEmpty" style="display:none"></p>
     `;
@@ -2665,6 +3290,7 @@ function profilePage() {
 
     const ownVideos = r.videos.filter(v => !v.repostOf);
     const repostVideos = r.videos.filter(v => v.repostOf);
+    let posts = r.posts || [];
     const gridEl = el.querySelector("#grid");
     const emptyEl = el.querySelector("#gridEmpty");
 
@@ -2676,7 +3302,9 @@ function profilePage() {
         <div class="cell tap-cell" data-i="${i}">
           ${v.thumbUrl ? `<img src="${v.thumbUrl}">` : `<video src="${v.videoUrl}#t=0.1" muted playsinline preload="metadata"></video>`}
           ${v.repostOf ? `<span style="position:absolute;top:5px;right:5px;background:rgba(0,0,0,.6);border-radius:4px;padding:2px 4px;display:flex">${I.repost}</span>` : ""}
-          <span style="position:absolute;bottom:5px;left:5px;font-family:var(--mono);font-size:10px;text-shadow:0 1px 4px #000">${fmt(v.views)}</span>
+          <span style="position:absolute;bottom:6px;left:6px;display:flex;align-items:center;gap:4px;color:#fff;font-family:var(--mono);font-size:13px;font-weight:600;text-shadow:0 1px 4px #000">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff" stroke="none"><path d="M5 3l14 9-14 9V3z"/></svg>${fmt(v.views)}
+          </span>
         </div>`).join("");
 
       if (r.locked) {
@@ -2696,15 +3324,68 @@ function profilePage() {
         };
       });
     };
+    // Photo posts from the Public tab — same grid, a "•••" in the corner
+    // instead of a view count, and only for the profile's own owner, since
+    // nobody else can delete this person's posts.
+    const drawPostGrid = (list) => {
+      gridEl.innerHTML = list.map((p, i) => `
+        <div class="cell" data-i="${i}">
+          ${p.mediaUrl ? `<img src="${esc(p.mediaUrl)}">` : `
+            <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+                 padding:8px;text-align:center;font-size:11px;color:var(--muted)">${esc((p.content || "").slice(0, 60))}</div>`}
+          <span style="position:absolute;bottom:5px;left:5px;display:flex;align-items:center;gap:3px;
+                font-family:var(--mono);font-size:10px;color:#fff;text-shadow:0 1px 4px #000">
+            ${I.cheart}${fmt(p.counts.likes)}
+          </span>
+          ${isMe ? `
+            <button class="tap-sm" data-more="${i}" style="position:absolute;top:5px;right:5px;width:24px;height:24px;
+                    border-radius:50%;background:rgba(0,0,0,.55);display:grid;place-items:center;color:#fff">
+              ${I.more}
+            </button>` : ""}
+        </div>`).join("");
+
+      emptyEl.style.display = list.length ? "none" : "";
+      if (!list.length) emptyEl.textContent = "No posts yet.";
+
+      gridEl.querySelectorAll("[data-more]").forEach(btn => btn.onclick = (e) => {
+        e.stopPropagation();
+        const p = list[parseInt(btn.dataset.more)];
+        openPostOptions(p, () => {
+          posts = posts.filter(x => x.id !== p.id);
+          drawPostGrid(posts);
+          const n = el.querySelector('#gridTabs [data-t="posts"] .n');
+          if (n) n.textContent = posts.length;
+        });
+      });
+
+      // A thumbnail here was a dead end before — tapping it now opens the
+      // real Public feed, paged in to the exact post (see mountPublic's
+      // jumpToPostId), the same as tapping a video thumbnail opens the
+      // video feed at that video.
+      gridEl.querySelectorAll(".cell[data-i]").forEach(cell => {
+        cell.onclick = () => {
+          const p = list[parseInt(cell.dataset.i)];
+          state.publicJumpPostId = p.id;
+          state.tab = "feed";
+          state.page = null;
+          state.feedTab = "public";
+          render();
+        };
+      });
+    };
+
     drawGrid(ownVideos);
 
     el.querySelectorAll('#gridTabs button').forEach(b => b.onclick = () => {
       el.querySelectorAll('#gridTabs button').forEach(x => x.classList.remove("on"));
       b.classList.add("on");
-      drawGrid(b.dataset.t === "reposts" ? repostVideos : ownVideos);
+      if (b.dataset.t === "posts") drawPostGrid(posts);
+      else drawGrid(b.dataset.t === "reposts" ? repostVideos : ownVideos);
     });
 
     el.querySelector("#wallet")?.addEventListener("click", () => { state.page = "wallet"; render(); });
+    el.querySelector("#notifBell")?.addEventListener("click", () => { state.page = "notifications"; render(); });
+    el.querySelector("#settings")?.addEventListener("click", () => { state.page = "settings"; render(); });
     el.querySelector("#edit")?.addEventListener("click", () => { state.page = "settings"; render(); });
 
     el.querySelectorAll(".stat[data-kind]").forEach(b => b.onclick = () => {
@@ -2738,11 +3419,34 @@ function profilePage() {
       state.page = "chat";
       render();
     });
+  };
+
+  let painted = false;
+
+  // The instant pre-paint. Reads the exact cache sw.js's isCachedApi rule
+  // for /api/users/:handle writes to — fires alongside the live fetch
+  // below, not before it, so a fast connection isn't held up waiting on a
+  // cache read that usually loses the race anyway.
+  (async () => {
+    if (!("caches" in window)) return;
+    try {
+      const cache = await caches.open("geereel-api-v1");
+      const cached = await cache.match(new Request(`${location.origin}/api/users/${encodeURIComponent(username)}`));
+      const r = cached && await cached.clone().json();
+      if (r?.user && !painted) { paintProfile(r); painted = true; }
+    } catch {}
+  })();
+
+  api(`/users/${encodeURIComponent(username)}`).then(r => {
+    paintProfile(r);
+    painted = true;
   }).catch(e => {
+    // Only a real dead end if the cache never had anything to show either —
     // /api/users/:handle is cached by sw.js, so this only hits when this
-    // particular profile has never loaded on this device before — the
-    // global offline banner already explains why, if that's the cause.
-    el.innerHTML = `<p class="empty">${esc(e.status === undefined ? "This profile hasn't loaded on this device yet." : e.message)}</p>`;
+    // particular profile has never loaded on this device before.
+    if (!painted) {
+      el.innerHTML = `<p class="empty">${esc(e.status === undefined ? "This profile hasn't loaded on this device yet." : e.message)}</p>`;
+    }
   });
 
   return el;
@@ -2775,17 +3479,29 @@ function userFeedPage() {
   const feed = el.querySelector("#uf");
   state.userVideos.forEach(v => feed.appendChild(slide(v)));
 
+  feed.addEventListener("scroll", () => { userFeedScrollTop = feed.scrollTop; }, { passive: true });
+
   el.querySelector("#back").onclick = () => {
     state.userVideos = [];
     state.startAt = 0;
+    userFeedScrollTop = null;
     history.back();
   };
 
-  // Jump to the tapped video before the observer starts, so it doesn't
-  // briefly play the first one on the way past.
+  // Landed back here via history (tapped "Use this sound" or a video's
+  // profile from inside this same list, then came back) — resume exactly
+  // where the scroll was. jumpScroll (not a plain scrollTop assignment) —
+  // .feed's scroll-snap-stop:always makes some browsers enforce landing on
+  // every snap point between the old and new position in turn, which looks
+  // like the feed restarting from the first video and fast-scrolling back
+  // down, even though nothing here ever asked for an animated scroll.
   requestAnimationFrame(() => {
-    const target = feed.children[state.startAt || 0];
-    if (target) feed.scrollTop = target.offsetTop;
+    if (restoringFromHistory && userFeedScrollTop != null) {
+      jumpScroll(feed, userFeedScrollTop);
+    } else {
+      const target = feed.children[state.startAt || 0];
+      if (target) jumpScroll(feed, target.offsetTop);
+    }
     observePlayback();
   });
 
@@ -2920,58 +3636,202 @@ function chatPage() {
   if (!who) { state.page = null; render(); return $(`<div></div>`); }
   let chatAudioEl = null; // one <audio>, reused across every voice note tap
 
+  // Decoded once per audio URL and cached for the life of this screen — a
+  // poll re-rendering the thread every 2.5s must not re-download/re-decode
+  // a voice note it already drew a waveform for.
+  const wavePeaksCache = new Map();
+  const WAVE_STATIC_BARS = 34;
+  const getWavePeaks = async (url) => {
+    if (wavePeaksCache.has(url)) return wavePeaksCache.get(url);
+    const promise = (async () => {
+      const buf = await (await fetch(url)).arrayBuffer();
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuf = await ctx.decodeAudioData(buf);
+      ctx.close().catch(() => {});
+      const raw = audioBuf.getChannelData(0);
+      const blockSize = Math.max(1, Math.floor(raw.length / WAVE_STATIC_BARS));
+      const peaks = [];
+      for (let i = 0; i < WAVE_STATIC_BARS; i++) {
+        let sum = 0;
+        for (let j = 0; j < blockSize; j++) sum += Math.abs(raw[i * blockSize + j] || 0);
+        peaks.push(sum / blockSize);
+      }
+      const max = Math.max(...peaks, 0.02);
+      return peaks.map(p => Math.max(0.12, p / max));
+    })();
+    wavePeaksCache.set(url, promise);
+    return promise;
+  };
+
+  // One voice bubble at a time reflects live progress/play-state, matching
+  // the single shared <audio> element — switching notes naturally resets
+  // whichever bubble was previously "active" back to its idle look.
+  let activeVoiceMsg = null;
+  const resetVoiceMsgUi = (container) => {
+    if (!container) return;
+    const btn = container.querySelector(".voice-play");
+    if (btn) btn.innerHTML = I.play;
+    container.querySelectorAll(".voice-wave-static i").forEach(b => b.classList.remove("played"));
+  };
+
+  const setupVoiceMsg = (container) => {
+    const url = container.dataset.audio;
+    const wave = container.querySelector(".voice-wave-static");
+    const playBtn = container.querySelector(".voice-play");
+    const timeEl = container.querySelector(".voice-time");
+
+    if (!wave.dataset.built) {
+      wave.dataset.built = "1";
+      for (let i = 0; i < WAVE_STATIC_BARS; i++) wave.insertAdjacentHTML("beforeend", `<i style="height:5px"></i>`);
+      wave.insertAdjacentHTML("beforeend", `<span class="voice-thumb"></span>`);
+      getWavePeaks(url).then(peaks => {
+        if (!wave.isConnected) return;
+        wave.querySelectorAll("i").forEach((bar, i) => bar.style.height = `${Math.round(peaks[i] * 26)}px`);
+      }).catch(() => {});
+    }
+    const thumb = wave.querySelector(".voice-thumb");
+
+    const seekFromEvent = (e) => {
+      if (selecting) { toggleSelect(container.closest(".msg-row")); return; }
+      if (!chatAudioEl || chatAudioEl.src !== new URL(url, location.href).href) return;
+      const rect = wave.getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      if (chatAudioEl.duration) chatAudioEl.currentTime = frac * chatAudioEl.duration;
+    };
+    wave.onclick = seekFromEvent;
+
+    playBtn.onclick = () => {
+      if (selecting) { toggleSelect(container.closest(".msg-row")); return; }
+      const src = url;
+      if (chatAudioEl && !chatAudioEl.paused && activeVoiceMsg === container) { chatAudioEl.pause(); return; }
+      if (activeVoiceMsg && activeVoiceMsg !== container) resetVoiceMsgUi(activeVoiceMsg);
+      activeVoiceMsg = container;
+      if (!chatAudioEl) chatAudioEl = new Audio();
+      if (chatAudioEl.src !== new URL(src, location.href).href) chatAudioEl.src = src;
+      chatAudioEl.playbackRate = 1;
+      chatAudioEl.play().catch(() => {});
+
+      playBtn.innerHTML = I.pause;
+      chatAudioEl.onpause = () => { if (activeVoiceMsg === container) playBtn.innerHTML = I.play; };
+      chatAudioEl.onplay = () => { if (activeVoiceMsg === container) playBtn.innerHTML = I.pause; };
+      chatAudioEl.onended = () => {
+        if (activeVoiceMsg !== container) return;
+        playBtn.innerHTML = I.play;
+        wave.querySelectorAll("i").forEach(b => b.classList.remove("played"));
+        thumb.style.left = "0%";
+      };
+      chatAudioEl.ontimeupdate = () => {
+        if (activeVoiceMsg !== container || !chatAudioEl.duration) return;
+        const frac = chatAudioEl.currentTime / chatAudioEl.duration;
+        const bars = [...wave.querySelectorAll("i")];
+        const cut = Math.round(frac * bars.length);
+        bars.forEach((b, i) => b.classList.toggle("played", i < cut));
+        // A visible dot marking exactly where playback is, not just the
+        // color split — the color alone was reported as too subtle to
+        // notice at a glance.
+        thumb.style.left = `${Math.min(100, frac * 100)}%`;
+        const s = Math.floor(chatAudioEl.currentTime);
+        timeEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      };
+    };
+  };
+
   const el = $(`
-    <div class="page" style="padding:0;display:flex;flex-direction:column">
-      <div style="position:sticky;top:0;z-index:2;background:var(--bg);display:flex;align-items:center;gap:10px;padding:16px 16px 12px;border-bottom:1px solid var(--border)">
-        <button id="back">${I.back}</button>
-        <div class="av has-dot" id="chatAv" style="width:34px;height:34px">${avatarInner(who)}</div>
+    <div class="page" style="padding:0;padding-top:78px;display:flex;flex-direction:column">
+      <div id="chatHead" style="position:fixed;top:0;left:0;right:0;z-index:5;background:var(--bg);display:flex;align-items:center;gap:10px;padding:16px 16px 12px;border-bottom:1px solid var(--border)">
+        <button id="back" class="chat-icon-btn">${I.back}</button>
+        <div class="av" id="chatAv" style="width:34px;height:34px">${avatarInner(who)}</div>
         <div style="flex:1;min-width:0" class="tap" id="chatHeaderInfo">
           <p style="margin:0;font-size:14px;font-weight:600">${esc(who.displayName || who.username)}</p>
           <span class="last-seen" id="chatStatus">${esc(who.username)}</span>
         </div>
-        <button id="chatMenu">${I.more || "⋮"}</button>
+        <button id="chatMenu" class="chat-icon-btn">${I.more || "⋮"}</button>
+        <div id="selectBar" style="display:none;position:absolute;inset:0;background:var(--bg);z-index:2;align-items:center;gap:6px;padding:16px 16px 12px">
+          <button id="selCancel" class="chat-icon-btn">${I.x}</button>
+          <div id="selCount" style="flex:1;font-size:15px;font-weight:600"></div>
+          <button id="selReply" class="chat-icon-btn reply-btn" style="display:none">${I.replyIcon}<span>Reply</span></button>
+          <button id="selDelete" class="chat-icon-btn" title="Delete">${I.trash}</button>
+        </div>
       </div>
       <div id="thread" style="flex:1;overflow-y:auto;padding:14px 16px"><div class="spin"></div></div>
       <div id="reqBanner" style="display:none;padding:12px 16px;border-top:1px solid var(--border);text-align:center"></div>
-      <div id="composer" style="position:sticky;bottom:0;background:var(--bg);padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">
-        <input id="msg" placeholder="Message..." maxlength="1000" style="flex:1;background:var(--surface);
-          border:1px solid var(--border);border-radius:20px;padding:11px 16px;color:#fff;
-          outline:none;font-size:14px">
-        <input type="file" id="imgFile" accept="image/*" hidden>
-        <button id="attachBtn" title="Send a photo" style="width:38px;height:38px;border-radius:50%;background:var(--surface);color:#fff;display:grid;place-items:center;flex-shrink:0">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-        </button>
-        <button id="micBtn" title="Record a voice note" style="width:38px;height:38px;border-radius:50%;background:var(--surface);color:#fff;display:grid;place-items:center;flex-shrink:0">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
-        </button>
-        <button id="send" style="display:none;background:#fff;color:#000;border-radius:20px;padding:0 16px;
-          height:38px;font-weight:600;font-size:13px;flex-shrink:0">Send</button>
+      <div id="replyBar" class="reply-bar" style="display:none">
+        <div class="reply-bar-line"></div>
+        <div class="reply-bar-body">
+          <p class="reply-bar-name"></p>
+          <p class="reply-bar-snippet"></p>
+        </div>
+        <button id="cancelReply" class="chat-icon-btn">${I.x}</button>
       </div>
+      <div id="composer" style="position:sticky;bottom:0;background:var(--bg);padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:flex-end">
+        <div style="flex:1;background:var(--surface);border-radius:22px;display:flex;align-items:center;gap:2px;padding:3px 4px 3px 8px;min-width:0">
+          <button id="emojiBtn" title="Emoji" class="chat-icon-btn" style="color:var(--muted)">
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/></svg>
+          </button>
+          <input id="msg" placeholder="Message" maxlength="1000" style="flex:1;min-width:0;background:none;
+            border:none;padding:6px 4px;color:#fff;outline:none;font-size:14px">
+          <input type="file" id="imgFile" accept="image/*" hidden>
+          <input type="file" id="camFile" accept="image/*" capture="environment" hidden>
+          <button id="attachBtn" title="Choose a photo" class="chat-icon-btn" style="color:var(--muted)">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <button id="camBtn" title="Take a photo" class="chat-icon-btn" style="color:var(--muted)">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </button>
+        </div>
+        <button id="micBtn" title="Record a voice note" style="width:46px;height:46px;border-radius:50%;background:#25D366;color:#fff;display:grid;place-items:center;flex-shrink:0">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
+        </button>
+        <button id="send" style="display:none;background:#25D366;color:#fff;border-radius:50%;width:46px;height:46px;place-items:center;flex-shrink:0">${I.send}</button>
+      </div>
+      <div id="emojiRow" class="emoji-row" style="display:none"></div>
       <div id="voiceBar" style="display:none;position:sticky;bottom:0;background:var(--bg);padding:10px 12px;border-top:1px solid var(--border);align-items:center;gap:10px">
-        <button id="cancelVoice" style="color:var(--muted)">${I.x}</button>
-        <span style="width:8px;height:8px;border-radius:50%;background:#FF3B30;animation:pulse 1s ease infinite"></span>
-        <span id="voiceTimer" style="font-family:var(--mono);font-size:14px;flex:1">0:00</span>
-        <button id="sendVoice" style="background:#fff;color:#000;border-radius:50%;width:38px;height:38px;display:grid;place-items:center">${I.send || "➤"}</button>
+        <button id="cancelVoice" class="chat-icon-btn" style="color:#FF3B30">${I.trash}</button>
+        <span id="voiceTimer" style="font-family:var(--mono);font-size:14px;flex-shrink:0">0:00</span>
+        <div id="voiceWave" class="live-wave"></div>
+        <button id="pauseVoice" title="Pause" class="chat-icon-btn" style="color:#fff">${I.pause}</button>
+        <button id="sendVoice" style="background:#25D366;color:#fff;border-radius:50%;width:42px;height:42px;display:grid;place-items:center;flex-shrink:0">${I.send || "➤"}</button>
       </div>
     </div>
   `);
 
   const thread = el.querySelector("#thread");
   const input = el.querySelector("#msg");
+  const chatHead = el.querySelector("#chatHead");
 
-  // Same keyboard problem as the comment sheet: the header sits sticky at
-  // the top of this flex column, so as long as the column's own height
-  // shrinks to match the visual viewport, flexbox keeps the header fixed in
-  // place on its own — only the (flex:1) thread area gives up space, and the
-  // input bar's sticky bottom ends up sitting right above the keyboard.
+  // The header is position:fixed (see the markup above) — pinned to the true
+  // top of the viewport no matter what the keyboard does to anything else,
+  // rather than trusting a sticky/flex layout to hold it there on its own.
+  // Taking it out of flow like that opens a gap where it used to sit, so the
+  // rest of the column gets that height back as top padding once it's known.
+  requestAnimationFrame(() => { el.style.paddingTop = `${chatHead.offsetHeight}px`; });
+
+  // The composer/voice bar stay sticky within this flex column, and the
+  // column's own height tracks the visual viewport (shrinking as the
+  // keyboard opens) so they end up sitting right above it — same idea as
+  // the comment sheet, just for a resizable column instead of a fixed one.
+  //
+  // #chatHead is position:fixed to the layout viewport, not the visual one —
+  // on Android especially, opening the keyboard scrolls the layout viewport
+  // to keep the focused input visible, and a plain `fixed` header scrolls
+  // right along with it instead of staying put. Explicitly translating it
+  // by visualViewport.offsetTop keeps it pinned to the true top of what's
+  // actually visible, keyboard open or not.
   const vv = window.visualViewport;
   const onViewport = () => {
     if (!vv) return;
     const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
     el.style.height = kb > 40 ? `${vv.height}px` : "";
+    chatHead.style.transform = vv.offsetTop > 1 ? `translateY(${vv.offsetTop}px)` : "";
   };
   vv?.addEventListener("resize", onViewport);
   vv?.addEventListener("scroll", onViewport);
+
+  // Opening the keyboard should bring the latest message into view right
+  // above the composer, not leave the thread scrolled wherever it was.
+  input.addEventListener("focus", () => {
+    setTimeout(() => { thread.scrollTop = thread.scrollHeight; }, 300);
+  });
 
   el.querySelector("#back").onclick = () => {
     vv?.removeEventListener("resize", onViewport);
@@ -2983,78 +3843,283 @@ function chatPage() {
   // handler above — stop playback/recording regardless of how we leave.
   el.addEventListener("screen-exit", () => chatAudioEl?.pause());
 
-  // Read receipt: a single check once it's sent, a second (blue) once the
-  // other person has actually opened the thread — the same escalation
-  // WhatsApp uses, so it reads as familiar rather than invented.
+  // Read receipt: a clock while still in flight (optimistic, not yet
+  // confirmed by the server), a single check once sent, a second (blue)
+  // once the other person has actually opened the thread — the same
+  // escalation WhatsApp uses, so it reads as familiar rather than invented.
   const checks = (m) => m.outgoing
-    ? `<span class="ticks ${m.read ? "read" : ""}">${m.read ? "✓✓" : "✓"}</span>`
+    ? `<span class="ticks ${m.read ? "read" : ""}">${m.pending ? "🕓" : m.read ? "✓✓" : "✓"}</span>`
     : "";
 
   // Read by the 3-dot menu (Block/Unblock label) and set by renderThread()
   // every time the thread reloads.
   let isBlocked = false;
 
+  // ---- long-press select mode: delete for me / delete for everyone ----
+  // A separate overlay (#selectBar) sits on top of the normal header rather
+  // than replacing its innerHTML, so the header's own listeners (back,
+  // profile tap, the 3-dot menu) never need re-wiring when selection starts
+  // or ends.
+  let selecting = false;
+  const selectedIds = new Set();
+  const selectBar = el.querySelector("#selectBar");
+  const selCount = el.querySelector("#selCount");
+  const selReplyBtn = el.querySelector("#selReply");
+
+  const exitSelectMode = () => {
+    selecting = false;
+    selectedIds.clear();
+    thread.classList.remove("selecting");
+    thread.querySelectorAll(".msg-row.selected").forEach(r => r.classList.remove("selected"));
+    selectBar.style.display = "none";
+  };
+
+  const toggleSelect = (row) => {
+    if (!row) return;
+    const mid = row.dataset.mid;
+    if (selectedIds.has(mid)) { selectedIds.delete(mid); row.classList.remove("selected"); }
+    else { selectedIds.add(mid); row.classList.add("selected"); }
+    if (selectedIds.size === 0) { exitSelectMode(); return; }
+    selCount.textContent = `${selectedIds.size} selected`;
+    // Replying to more than one message at once doesn't make sense — only
+    // offer it when exactly one bubble is selected.
+    selReplyBtn.style.display = selectedIds.size === 1 ? "" : "none";
+  };
+
+  const enterSelectMode = (row) => {
+    selecting = true;
+    thread.classList.add("selecting");
+    selectBar.style.display = "flex";
+    toggleSelect(row);
+  };
+
+  // ---- reply-to: pick from select mode, quoted above the composer until
+  // sent or cancelled, then rendered as a quote block inside the new
+  // message (see the reply block in the map() below and replyTo in the
+  // GET /api/messages/:id response). ----
+  const replyBar = el.querySelector("#replyBar");
+  let replyTarget = null; // { id, name, snippet }
+  const setReplyTarget = (target) => {
+    replyTarget = target;
+    if (target) {
+      replyBar.style.display = "flex";
+      replyBar.querySelector(".reply-bar-name").textContent = target.name;
+      replyBar.querySelector(".reply-bar-snippet").textContent = target.snippet;
+      input.focus();
+    } else {
+      replyBar.style.display = "none";
+    }
+  };
+  el.querySelector("#cancelReply").onclick = () => setReplyTarget(null);
+
+  const replySnippetFor = (m) => {
+    if (m.deleted) return "This message was deleted";
+    if (m.body) return m.body;
+    if (m.imageUrl) return "📷 Photo";
+    if (m.audioUrl) return "🎤 Voice message";
+    return "";
+  };
+  selReplyBtn.onclick = () => {
+    const mid = [...selectedIds][0];
+    const m = lastR?.messages.find(x => x.id === mid);
+    exitSelectMode();
+    if (!m) return;
+    setReplyTarget({ id: m.id, name: m.outgoing ? "You" : (who.displayName || who.username), snippet: replySnippetFor(m) });
+  };
+
+  el.querySelector("#selCancel").onclick = exitSelectMode;
+  el.querySelector("#selDelete").onclick = () => {
+    const rows = [...selectedIds].map(mid => thread.querySelector(`.msg-row[data-mid="${mid}"]`)).filter(Boolean);
+    const cutoff = Date.now() - 15 * 60 * 1000;
+    const canEveryone = rows.every(r => r.dataset.outgoing === "1" && r.dataset.deleted !== "1" && parseInt(r.dataset.created, 10) > cutoff);
+    openDeleteMessageSheet([...selectedIds], canEveryone, async () => {
+      exitSelectMode();
+      await load();
+    });
+  };
+
+  // Any real finger movement (scrolling the thread) cancels a pending
+  // long-press instead of triggering selection out of a scroll gesture.
+  let pressTimer = null, pressStart = null;
+  const cancelPress = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } };
+  thread.addEventListener("pointerdown", (e) => {
+    const row = e.target.closest(".msg-row");
+    if (!row) return;
+    pressStart = [e.clientX, e.clientY];
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      navigator.vibrate?.(15);
+      if (!selecting) enterSelectMode(row);
+      else toggleSelect(row);
+    }, 450);
+  });
+  thread.addEventListener("pointermove", (e) => {
+    if (!pressTimer || !pressStart) return;
+    if (Math.hypot(e.clientX - pressStart[0], e.clientY - pressStart[1]) > 10) cancelPress();
+  });
+  thread.addEventListener("pointerup", cancelPress);
+  thread.addEventListener("pointercancel", cancelPress);
+  thread.addEventListener("click", (e) => {
+    if (!selecting) return;
+    const row = e.target.closest(".msg-row");
+    if (!row) return;
+    toggleSelect(row);
+  });
+  // Double-tap a bubble to heart it, same shorthand Instagram/WhatsApp use —
+  // the quickest possible reaction, no menu needed.
+  thread.addEventListener("dblclick", async (e) => {
+    if (selecting) return;
+    const row = e.target.closest(".msg-row");
+    if (!row || row.dataset.deleted === "1") return;
+    try { await api(`/messages/${row.dataset.mid}/react`, { method: "POST", body: { emoji: "❤️" } }); await load(); } catch {}
+  });
+
   // Split out of load() so a cached copy (see load() below) and a fresh
   // fetch both go through the exact same rendering — no separate "instant"
-  // vs "real" code path to keep in sync.
-  const renderThread = (r) => {
+  // vs "real" code path to keep in sync. fromPoll changes only the scroll
+  // behavior: a poll shouldn't yank you to the bottom mid-read if you'd
+  // scrolled up to look at something earlier, the way the initial load
+  // (and sending your own message) should always do.
+  let lastMessageCount = -1;
+  let lastTypingState = false;
+  // "typing…" takes over the exact spot online/last-seen normally lives in
+  // the header, the same way WhatsApp does it, rather than a separate line
+  // of its own further down the screen.
+  const updateStatus = (r) => {
+    const statusEl = el.querySelector("#chatStatus");
+    if (!statusEl) return;
+    if (r.isTyping) {
+      statusEl.className = "online-tag";
+      statusEl.innerHTML = `typing…`;
+    } else if (r.with.online) {
+      statusEl.className = "online-tag";
+      statusEl.innerHTML = `Online`;
+    } else {
+      statusEl.className = "last-seen";
+      statusEl.innerHTML = esc(who.username);
+    }
+  };
+  let lastR = null;
+  const renderThread = (r, fromPoll = false, isCachePreview = false) => {
+      lastR = r;
       isBlocked = !!r.blocked;
-      const statusEl = el.querySelector("#chatStatus");
-      if (statusEl) {
-        statusEl.className = r.with.online ? "online-tag" : "last-seen";
-        statusEl.innerHTML = r.with.online ? `<i></i>Online` : esc(who.username);
-      }
-      const avEl = el.querySelector("#chatAv");
-      if (avEl && r.with.online && !avEl.querySelector(".dot")) {
-        avEl.insertAdjacentHTML("beforeend", `<i class="dot"></i>`);
-      }
+      lastTypingState = !!r.isTyping;
+      const wasNearBottom = thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 120;
+      const prevScrollTop = thread.scrollTop;
+      const prevScrollHeight = thread.scrollHeight;
+      lastMessageCount = r.messages.length;
+      updateStatus(r);
+
+      // Only a genuine, fresh-from-network open should jump to "first
+      // unread" instead of the bottom. Two things are excluded on purpose:
+      // a poll (marks whatever just arrived read in that same fetch, so its
+      // firstUnreadId is just what the poll itself is looking at live, not a
+      // real catch-up) and the cache preview (a snapshot from the LAST visit,
+      // when today's unread messages didn't exist yet — showing a divider
+      // off that stale snapshot and then a different one off the real fetch
+      // moments later is exactly the visible double-jump this was reported
+      // as: open → briefly see the bottom → jerk up to the real divider).
+      const unreadDividerId = (!fromPoll && !isCachePreview) ? r.firstUnreadId : null;
 
       // A long thread reads as one undated block without these — group by
       // calendar day, labeling the recent ones in words rather than dates.
       let lastDay = null;
       thread.innerHTML = r.messages.length ? r.messages.map(m => {
         const day = new Date(m.createdAt).toDateString();
-        const sep = day !== lastDay ? `<div class="day-sep"><span>${dayLabel(m.createdAt)}</span></div>` : "";
+        let sep = day !== lastDay ? `<div class="day-sep"><span>${dayLabel(m.createdAt)}</span></div>` : "";
+        if (m.id === unreadDividerId) sep += `<div class="unread-sep" id="unreadDivider"><span>Unread messages</span></div>`;
         lastDay = day;
         const linkUrl = m.body && CHAT_URL_RE.exec(m.body)?.[0];
+        const quote = m.replyTo
+          ? `<div class="msg-quote ${m.outgoing ? "on-light" : ""}">
+              <p class="msg-quote-name">${esc(m.replyTo.mine ? "You" : (who.displayName || who.username))}</p>
+              <p class="msg-quote-snippet">${esc(m.replyTo.snippet)}</p>
+            </div>`
+          : "";
 
         let inner;
-        if (m.imageUrl) {
-          inner = `<img src="${m.imageUrl}" style="display:block;max-width:220px;max-height:280px;border-radius:14px;object-fit:cover" alt="">`;
+        if (m.deleted) {
+          inner = `<span style="font-size:13px;font-style:italic;opacity:.6;display:flex;align-items:center;gap:6px">${I.banIcon || "🚫"} This message was deleted</span>`;
+        } else if (m.imageUrl) {
+          inner = `<img src="${m.imageUrl}" class="msg-img" style="display:block;width:100%;max-width:220px;max-height:280px;object-fit:cover" alt="">`;
         } else if (m.audioUrl) {
           const mins = Math.floor((m.audioDuration || 0) / 60), secs = Math.round((m.audioDuration || 0) % 60);
           inner = `
-            <div class="voice-msg tap" data-audio="${esc(m.audioUrl)}" style="display:flex;align-items:center;gap:10px;min-width:150px">
+            <div class="voice-msg tap" data-audio="${esc(m.audioUrl)}" data-outgoing="${m.outgoing ? 1 : 0}" style="display:flex;align-items:center;gap:8px;min-width:210px">
+              <div class="voice-av">${avatarInner(m.outgoing ? store.user : who)}</div>
               <button class="voice-play" style="width:32px;height:32px;border-radius:50%;background:${m.outgoing ? "#000" : "#fff"};color:${m.outgoing ? "#fff" : "#000"};display:grid;place-items:center;flex-shrink:0;padding:0">${I.play}</button>
-              <div style="flex:1;height:2px;background:${m.outgoing ? "rgba(0,0,0,.25)" : "rgba(255,255,255,.25)"};border-radius:2px"></div>
-              <span style="font-size:11px;opacity:.7;font-family:var(--mono)">${mins}:${String(secs).padStart(2, "0")}</span>
+              <div class="voice-wave-static ${m.outgoing ? "on-light" : ""}"></div>
+              <span class="voice-time" style="font-size:10px;opacity:.7;font-family:var(--mono);flex-shrink:0">${mins}:${String(secs).padStart(2, "0")}</span>
             </div>`;
         } else {
           inner = `<span style="font-size:14px;line-height:1.35;word-break:break-word">${esc(m.body || "")}</span>`
             + (linkUrl ? `<div class="link-preview" data-url="${esc(linkUrl)}" style="margin-top:8px;min-width:180px"></div>` : "");
         }
 
+        const reacts = m.reactions?.length
+          ? `<div class="msg-reacts" style="justify-content:${m.outgoing ? "flex-end" : "flex-start"}">${m.reactions.map(r => `<span class="rx ${r.mine ? "mine" : ""}">${r.emoji}</span>`).join("")}</div>`
+          : "";
+
+        const fg = m.outgoing ? "#000" : "#fff";
+        const bg = m.outgoing ? "#fff" : "var(--surface)";
+        const stamp = `<span style="font-size:10px;opacity:.5;margin-left:8px;white-space:nowrap">${ago(m.createdAt)}${checks(m)}</span>`;
+
+        // A plain photo (no caption, no quote) stays flush edge-to-edge with
+        // the timestamp overlaid on it, same as before — that's the common
+        // case. The moment there's a caption or a quoted reply, the bubble
+        // needs an actual background for that text to sit on, but the image
+        // itself should still butt right up against the bubble's rounded
+        // corners rather than getting boxed in by the same padding text
+        // gets — hence the image sitting outside the padded areas here,
+        // clipped to the corners via overflow:hidden on the bubble itself.
+        const imgExtras = m.imageUrl && !m.deleted && (m.body || m.replyTo);
+        let bubbleStyle, bubbleInner;
+        if (m.imageUrl && !m.deleted && !imgExtras) {
+          bubbleStyle = "";
+          bubbleInner = inner + `<span style="font-size:10px;opacity:.8;margin-left:8px;white-space:nowrap;color:${fg}">${ago(m.createdAt)}${checks(m)}</span>`;
+        } else if (m.imageUrl && !m.deleted) {
+          bubbleStyle = `background:${bg};border-radius:18px;padding:0;overflow:hidden`;
+          bubbleInner = (quote ? `<div style="padding:8px 14px 0;color:${fg}">${quote}</div>` : "")
+            + inner
+            + `<div style="padding:6px 14px 8px;color:${fg}">${m.body ? `<span style="font-size:13px;line-height:1.35;word-break:break-word">${esc(m.body)}</span>` : ""}${stamp}</div>`;
+        } else {
+          bubbleStyle = `background:${bg};color:${fg};border-radius:18px;padding:8px 14px`;
+          bubbleInner = quote + inner + (!m.deleted ? stamp : "");
+        }
+
         return `${sep}
-        <div style="display:flex;justify-content:${m.outgoing ? "flex-end" : "flex-start"};margin-bottom:8px">
-          <div style="max-width:78%;min-width:0;${m.imageUrl ? "" : `background:${m.outgoing ? "#fff" : "var(--surface)"};color:${m.outgoing ? "#000" : "#fff"};border-radius:18px;padding:8px 14px`}">
-            ${inner}
-            <span style="font-size:10px;opacity:.5;margin-left:8px;white-space:nowrap;${m.imageUrl ? `color:${m.outgoing ? "#000" : "#fff"}` : ""}">${ago(m.createdAt)}${checks(m)}</span>
+        <div class="msg-row" data-mid="${m.id}" data-outgoing="${m.outgoing ? 1 : 0}" data-created="${m.createdAt}" data-deleted="${m.deleted ? 1 : 0}" style="display:flex;justify-content:${m.outgoing ? "flex-end" : "flex-start"};margin-bottom:8px">
+          <span class="msg-check"></span>
+          <div class="msg-col" style="max-width:78%;min-width:0">
+            <div class="bubble-hit" style="${bubbleStyle}">${bubbleInner}</div>
+            ${reacts}
           </div>
         </div>`;
       }).join("")
         : `<p class="empty">No messages yet. Say hello.</p>`;
-      thread.scrollTop = thread.scrollHeight;
+      const unreadDividerEl = unreadDividerId ? thread.querySelector("#unreadDivider") : null;
+      if (unreadDividerEl) {
+        unreadDividerEl.scrollIntoView({ block: "start" });
+      } else if (!fromPoll || wasNearBottom) {
+        thread.scrollTop = thread.scrollHeight;
+      } else {
+        // Not at the bottom (reading something earlier) — hold the same
+        // spot rather than resetting to 0, which replacing innerHTML would
+        // otherwise do. New messages appended at the bottom changed
+        // scrollHeight; carry that delta over.
+        thread.scrollTop = prevScrollTop + (thread.scrollHeight - prevScrollHeight);
+      }
       pollUnread();
 
       // One <audio> reused across taps, so starting a new note stops
       // whatever was already playing rather than layering sound on sound.
-      thread.querySelectorAll(".voice-play").forEach(btn => {
-        btn.onclick = () => {
-          const src = btn.closest(".voice-msg").dataset.audio;
-          if (chatAudioEl && !chatAudioEl.paused && chatAudioEl.src.endsWith(src)) { chatAudioEl.pause(); return; }
-          if (!chatAudioEl) chatAudioEl = new Audio();
-          chatAudioEl.src = src;
-          chatAudioEl.play().catch(() => {});
+      thread.querySelectorAll(".voice-msg").forEach(container => setupVoiceMsg(container));
+
+      thread.querySelectorAll(".msg-img").forEach(img => {
+        img.onclick = () => {
+          const row = img.closest(".msg-row");
+          if (selecting) { toggleSelect(row); return; }
+          openChatImageViewer(img, img.src);
         };
       });
 
@@ -3141,7 +4206,7 @@ function chatPage() {
         const cache = await caches.open("geereel-api-v1");
         const cached = await cache.match(new Request(`${location.origin}/api/messages/${who.id}`));
         const r = cached && await cached.clone().json();
-        if (r?.messages) { renderThread(r); fromCache = true; }
+        if (r?.messages) { renderThread(r, false, true); fromCache = true; }
       } catch {}
     }
     try {
@@ -3161,69 +4226,200 @@ function chatPage() {
   };
   load();
 
+  // No WebSocket here — Durable Objects (what real-time push would need)
+  // is a paid-plan feature, so this is the free-tier-friendly stand-in:
+  // poll the thread while it's actually open, fast enough to feel live
+  // without hammering the API between messages. Only re-renders when the
+  // message count has actually changed, so a poll that finds nothing new
+  // doesn't rebuild the DOM or disturb anything (scroll position, in-
+  // progress audio playback) for no reason.
+  const CHAT_POLL_MS = 2500;
+  const pollTimer = setInterval(async () => {
+    if (document.hidden) return; // no point polling a backgrounded tab
+    try {
+      const r = await api(`/messages/${who.id}`);
+      if (r.messages.length !== lastMessageCount) {
+        renderThread(r, true);
+      } else if (!!r.isTyping !== lastTypingState) {
+        // Only the typing indicator changed — update the header status
+        // directly rather than a full renderThread, which would also touch
+        // scroll position for no reason.
+        lastTypingState = !!r.isTyping;
+        updateStatus(r);
+      }
+    } catch {}
+  }, CHAT_POLL_MS);
+  el.addEventListener("screen-exit", () => clearInterval(pollTimer));
+
   const send = async () => {
     const body = input.value.trim();
     if (!body) return;
     input.value = "";
     swapComposerIcons();
+    const replyToId = replyTarget?.id || null;
+    const replyToShown = replyTarget ? { id: replyTarget.id, mine: replyTarget.name === "You", snippet: replyTarget.snippet } : null;
+    setReplyTarget(null);
+
+    // Show it in the thread the instant Send is tapped (a clock icon while
+    // unconfirmed) instead of waiting on the full POST + reload round trip
+    // — that round trip is what made a normal send look stalled/offline for
+    // a couple seconds.
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    if (lastR) {
+      renderThread({ ...lastR, messages: [...lastR.messages, { id: tempId, body, createdAt: Date.now(), outgoing: true, read: false, pending: true, replyTo: replyToShown }] });
+    }
     try {
-      await api("/messages", { method: "POST", body: { recipientId: who.id, body } });
+      await api("/messages", { method: "POST", body: { recipientId: who.id, body, replyToId } });
       await load();
     } catch (e) {
+      if (lastR) renderThread({ ...lastR, messages: lastR.messages.filter(m => m.id !== tempId) });
       input.value = body; // don't lose what they typed
       swapComposerIcons();
       toast(e.status === undefined ? "Couldn't send — check your connection" : e.message);
     }
   };
 
-  // Typing shows Send; an empty box shows attach-photo + record-voice
-  // instead, same as the reference.
+  // Typing shows Send; an empty box shows attach-photo/camera + record-voice
+  // instead, same as the reference. Explicit "grid"/"none" rather than
+  // ""/"none" — falling back to "" would drop to the button's default
+  // inline-block display, un-centering the icon inside it.
   const sendBtn = el.querySelector("#send");
   const attachBtn = el.querySelector("#attachBtn");
+  const camBtn = el.querySelector("#camBtn");
   const micBtn = el.querySelector("#micBtn");
   const swapComposerIcons = () => {
     const typing = input.value.trim().length > 0;
-    sendBtn.style.display = typing ? "" : "none";
-    attachBtn.style.display = typing ? "none" : "";
-    micBtn.style.display = typing ? "none" : "";
+    sendBtn.style.display = typing ? "grid" : "none";
+    attachBtn.style.display = typing ? "none" : "grid";
+    camBtn.style.display = typing ? "none" : "grid";
+    micBtn.style.display = typing ? "none" : "grid";
   };
+  swapComposerIcons();
   input.addEventListener("input", swapComposerIcons);
+
+  // Throttled, not on every keystroke — the recipient's poll only checks
+  // every CHAT_POLL_MS anyway, so pinging more often than that just adds
+  // requests with no visible benefit. Best-effort: nothing here ever
+  // blocks typing or shows an error if it fails.
+  let lastTypingPing = 0;
+  input.addEventListener("input", () => {
+    if (!input.value.trim()) return;
+    const t = Date.now();
+    if (t - lastTypingPing < CHAT_POLL_MS) return;
+    lastTypingPing = t;
+    api(`/messages/${who.id}/typing`, { method: "POST" }).catch(() => {});
+  });
 
   sendBtn.onclick = send;
   input.addEventListener("keydown", e => e.key === "Enter" && send());
 
-  // ---- photo attach ----
-  const imgFile = el.querySelector("#imgFile");
-  attachBtn.onclick = () => imgFile.click();
-  imgFile.addEventListener("change", async () => {
-    const file = imgFile.files[0];
-    imgFile.value = "";
+  // ---- photo attach: paperclip picks from the gallery, camera icon opens
+  // the device camera directly (capture="environment" on #camFile) — same
+  // split the reference shows, both landing on the same upload path. ----
+  const sendImageFile = async (file, caption) => {
     if (!file) return;
+    const replyToId = replyTarget?.id || null;
+    const replyToShown = replyTarget ? { id: replyTarget.id, mine: replyTarget.name === "You", snippet: replyTarget.snippet } : null;
+    setReplyTarget(null);
+    const tempId = `temp-img-${Date.now()}`;
+    const objectUrl = URL.createObjectURL(file);
+    if (lastR) {
+      renderThread({ ...lastR, messages: [...lastR.messages, { id: tempId, imageUrl: objectUrl, body: caption || null, createdAt: Date.now(), outgoing: true, read: false, pending: true, replyTo: replyToShown }] });
+    }
     try {
       const fd = new FormData();
       fd.append("recipientId", who.id);
       fd.append("kind", "image");
+      if (caption) fd.append("body", caption);
+      if (replyToId) fd.append("replyToId", replyToId);
       fd.append("file", file);
       await api("/messages/media", { method: "POST", body: fd });
       await load();
-    } catch (e) { toast(e.message); }
+    } catch (e) {
+      if (lastR) renderThread({ ...lastR, messages: lastR.messages.filter(m => m.id !== tempId) });
+      toast(e.message);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  };
+  const imgFile = el.querySelector("#imgFile");
+  attachBtn.onclick = () => imgFile.click();
+  imgFile.addEventListener("change", () => {
+    const f = imgFile.files[0]; imgFile.value = "";
+    if (f) openImageCaptionSheet(f, (caption) => sendImageFile(f, caption));
   });
 
-  // ---- voice notes: tap mic to start, tap again (or the send-voice
-  // button) to stop and send, X to discard ----
+  const camFile = el.querySelector("#camFile");
+  camBtn.onclick = () => camFile.click();
+  camFile.addEventListener("change", () => {
+    const f = camFile.files[0]; camFile.value = "";
+    if (f) openImageCaptionSheet(f, (caption) => sendImageFile(f, caption));
+  });
+
+  // ---- emoji quick row: tap the smiley to reveal it, tap an emoji to
+  // insert it at the cursor (not just append at the end). ----
+  const emojiBtn = el.querySelector("#emojiBtn");
+  const emojiRow = el.querySelector("#emojiRow");
+  const QUICK_EMOJI = ["😀","😂","😍","😢","😮","🙏","👍","❤️","🔥","🎉","😅","😎","🥳","😘","🤔","👏"];
+  emojiRow.innerHTML = QUICK_EMOJI.map(e => `<button type="button">${e}</button>`).join("");
+  emojiRow.querySelectorAll("button").forEach(btn => btn.onclick = () => {
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = input.value.slice(0, start) + btn.textContent + input.value.slice(end);
+    input.focus();
+    input.selectionStart = input.selectionEnd = start + btn.textContent.length;
+    swapComposerIcons();
+  });
+  emojiBtn.onclick = () => {
+    const open = emojiRow.style.display !== "none";
+    emojiRow.style.display = open ? "none" : "flex";
+    if (!open) input.focus();
+  };
+
+  // ---- voice notes: tap mic to start, pause/resume, trash to discard, the
+  // green button to stop and send. The waveform tracks real mic amplitude
+  // via an AnalyserNode — a scrolling VU meter, not a decorative animation.
   const voiceBar = el.querySelector("#voiceBar");
   const voiceTimer = el.querySelector("#voiceTimer");
-  let voiceRecorder = null, voiceChunks = [], voiceStream = null, voiceStarted = 0, voiceTick = null;
+  const voiceWave = el.querySelector("#voiceWave");
+  const pauseVoiceBtn = el.querySelector("#pauseVoice");
+  const WAVE_BARS = 32;
+  for (let i = 0; i < WAVE_BARS; i++) voiceWave.insertAdjacentHTML("beforeend", `<i></i>`);
+  const waveBarEls = [...voiceWave.children];
+  const waveHeights = new Array(WAVE_BARS).fill(3);
+  const renderWave = () => waveBarEls.forEach((b, i) => b.style.height = `${waveHeights[i]}px`);
+
+  let voiceRecorder = null, voiceChunks = [], voiceStream = null;
+  let voiceStarted = 0, pausedAt = 0, pausedMs = 0, isPaused = false;
+  let voiceTick = null, waveTick = null, audioCtx = null, analyser = null;
+  const elapsedMs = () => Date.now() - voiceStarted - pausedMs - (isPaused ? Date.now() - pausedAt : 0);
+
+  const sampleWave = () => {
+    if (!analyser) return;
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteTimeDomainData(data);
+    let peak = 0;
+    for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i] - 128));
+    waveHeights.shift();
+    waveHeights.push(Math.max(3, Math.min(28, Math.round((peak / 128) * 28))));
+    renderWave();
+  };
+
   el.addEventListener("screen-exit", () => {
     if (voiceRecorder?.state !== "inactive") voiceRecorder?.stop();
     voiceStream?.getTracks().forEach(t => t.stop());
-    clearInterval(voiceTick);
+    clearInterval(voiceTick); clearInterval(waveTick);
+    audioCtx?.close().catch(() => {});
   });
 
   const stopVoiceUi = () => {
-    clearInterval(voiceTick);
+    clearInterval(voiceTick); clearInterval(waveTick);
     voiceStream?.getTracks().forEach(t => t.stop());
     voiceStream = null;
+    audioCtx?.close().catch(() => {});
+    audioCtx = null; analyser = null; isPaused = false;
+    pauseVoiceBtn.innerHTML = I.pause;
+    waveHeights.fill(3); renderWave();
     voiceBar.style.display = "none";
     el.querySelector("#composer").style.display = "flex";
   };
@@ -3237,13 +4433,38 @@ function chatPage() {
     voiceRecorder.ondataavailable = e => { if (e.data.size) voiceChunks.push(e.data); };
     voiceRecorder.start();
     voiceStarted = Date.now();
+    pausedMs = 0; isPaused = false;
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    audioCtx.createMediaStreamSource(voiceStream).connect(analyser);
+
     el.querySelector("#composer").style.display = "none";
     voiceBar.style.display = "flex";
     voiceTimer.textContent = "0:00";
     voiceTick = setInterval(() => {
-      const s = Math.floor((Date.now() - voiceStarted) / 1000);
+      const s = Math.floor(elapsedMs() / 1000);
       voiceTimer.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
     }, 250);
+    waveTick = setInterval(sampleWave, 80);
+  };
+
+  pauseVoiceBtn.onclick = () => {
+    if (!voiceRecorder || voiceRecorder.state === "inactive") return;
+    if (isPaused) {
+      voiceRecorder.resume();
+      pausedMs += Date.now() - pausedAt;
+      isPaused = false;
+      pauseVoiceBtn.innerHTML = I.pause;
+      waveTick = setInterval(sampleWave, 80);
+    } else {
+      voiceRecorder.pause();
+      pausedAt = Date.now();
+      isPaused = true;
+      pauseVoiceBtn.innerHTML = I.play;
+      clearInterval(waveTick);
+    }
   };
 
   el.querySelector("#cancelVoice").onclick = () => {
@@ -3254,20 +4475,34 @@ function chatPage() {
 
   el.querySelector("#sendVoice").onclick = () => {
     if (!voiceRecorder || voiceRecorder.state === "inactive") return;
-    const duration = (Date.now() - voiceStarted) / 1000;
+    const duration = elapsedMs() / 1000;
+    const replyToId = replyTarget?.id || null;
+    const replyToShown = replyTarget ? { id: replyTarget.id, mine: replyTarget.name === "You", snippet: replyTarget.snippet } : null;
+    setReplyTarget(null);
     voiceRecorder.onstop = async () => {
       stopVoiceUi();
       const blob = new Blob(voiceChunks, { type: voiceChunks[0]?.type || "audio/webm" });
       if (blob.size < 500) return; // too short to be a real note
+      const tempId = `temp-voice-${Date.now()}`;
+      const objectUrl = URL.createObjectURL(blob);
+      if (lastR) {
+        renderThread({ ...lastR, messages: [...lastR.messages, { id: tempId, audioUrl: objectUrl, audioDuration: duration, createdAt: Date.now(), outgoing: true, read: false, pending: true, replyTo: replyToShown }] });
+      }
       try {
         const fd = new FormData();
         fd.append("recipientId", who.id);
         fd.append("kind", "audio");
         fd.append("duration", duration);
+        if (replyToId) fd.append("replyToId", replyToId);
         fd.append("file", blob, "voice.webm");
         await api("/messages/media", { method: "POST", body: fd });
         await load();
-      } catch (e) { toast(e.message); }
+      } catch (e) {
+        if (lastR) renderThread({ ...lastR, messages: lastR.messages.filter(m => m.id !== tempId) });
+        toast(e.message);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
     };
     voiceRecorder.stop();
   };
@@ -3326,7 +4561,7 @@ function searchPage() {
   const el = $(`
     <div class="page">
       <div class="pagehead"><button id="back">${I.back}</button>
-        <div class="field" style="flex:1;margin:0"><input id="q" placeholder="Search accounts, videos" autocapitalize="none"></div>
+        <div class="field" style="flex:1;margin:0"><input id="q" placeholder="Search accounts, videos, public" autocapitalize="none"></div>
       </div>
       <div id="res"></div>
     </div>`);
@@ -3383,7 +4618,7 @@ function searchPage() {
       res.innerHTML = `<div class="spin"></div>`;
       try {
         const r = await api(`/search?q=${encodeURIComponent(q)}`);
-        if (r.accounts.length || r.videos.length) addRecentSearch({ type: "text", value: q });
+        if (r.accounts.length || r.videos.length || r.posts.length) addRecentSearch({ type: "text", value: q });
         res.innerHTML = `
           ${r.accounts.length ? `<p style="font-size:13px;font-weight:600;margin:8px 0">Accounts</p>` : ""}
           ${r.accounts.map(u => `
@@ -3396,12 +4631,22 @@ function searchPage() {
             </div>`).join("")}
           ${r.videos.length ? `<p style="font-size:13px;font-weight:600;margin:16px 0 8px">Videos</p>` : ""}
           <div class="grid">${r.videos.map(v => `<div class="cell">${v.thumbUrl ? `<img src="${v.thumbUrl}">` : ""}</div>`).join("")}</div>
-          ${!r.accounts.length && !r.videos.length ? `<p class="empty">Nothing found.</p>` : ""}`;
+          ${r.posts.length ? `<p style="font-size:13px;font-weight:600;margin:16px 0 8px">Public</p>` : ""}
+          <div class="grid">${r.posts.map(p => `<div class="cell post-hit" data-user="${esc(p.user.username)}">${p.mediaUrl ? `<img src="${p.mediaUrl}">` : ""}</div>`).join("")}</div>
+          ${!r.accounts.length && !r.videos.length && !r.posts.length ? `<p class="empty">Nothing found.</p>` : ""}`;
 
         res.querySelectorAll(".acct").forEach(row => row.onclick = () => {
           const u = r.accounts.find(a => a.username === row.dataset.user);
           if (u) addRecentSearch({ type: "account", user: { username: u.username, displayName: u.displayName, avatarUrl: u.avatarUrl } });
           state.viewUser = row.dataset.user;
+          state.page = "profile";
+          render();
+        });
+        // A public post has no page of its own — opening the author's
+        // profile (where their public posts already show) is the closest
+        // real destination, same as tapping an account result.
+        res.querySelectorAll(".post-hit").forEach(cell => cell.onclick = () => {
+          state.viewUser = cell.dataset.user;
           state.page = "profile";
           render();
         });
@@ -3435,15 +4680,21 @@ function messagesPage() {
     const requests = r.threads.filter(m => m.requestStatus === "pending" && !m.requestedByMe);
     const normal = r.threads.filter(m => !(m.requestStatus === "pending" && !m.requestedByMe));
 
+    const threadPreviewText = (m) => {
+      if (m.requestStatus === "pending" && m.requestedByMe) return "Message request sent";
+      if (m.deleted) return "This message was deleted";
+      return `${m.outgoing ? "You: " : ""}${esc(m.body || (m.hasImage ? "📷 Photo" : m.hasAudio ? "🎤 Voice message" : "Sent a video"))}`;
+    };
+
     const threadRow = (m) => `
-      <div class="thread-row row tap" data-u="${esc(m.with.username)}">
+      <div class="thread-row row tap ${m.unreadCount ? "unread" : ""}" data-u="${esc(m.with.username)}" data-name="${esc((m.with.displayName || m.with.username || "").toLowerCase())}">
         <div class="tav has-dot">
           ${m.with.avatarUrl ? `<img src="${m.with.avatarUrl}" alt="">` : esc((m.with.username || "?")[0].toUpperCase())}
           ${m.with.online ? `<i class="dot"></i>` : ""}
         </div>
         <div style="flex:1;min-width:0">
           <p class="thread-name">${esc(m.with.displayName || m.with.username)}</p>
-          <p class="thread-preview">${m.requestStatus === "pending" && m.requestedByMe ? "Message request sent" : `${m.outgoing ? "You: " : ""}${esc(m.body || (m.hasImage ? "📷 Photo" : m.hasAudio ? "🎤 Voice message" : "Sent a video"))}`}</p>
+          <p class="thread-preview">${threadPreviewText(m)}</p>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
           <span class="thread-time">${ago(m.createdAt)}</span>
@@ -3454,6 +4705,10 @@ function messagesPage() {
     el.innerHTML = `
       <div style="margin-bottom:14px">
         <h2 style="margin:0">Inbox</h2>
+      </div>
+      <div class="search-pill">
+        ${I.search}
+        <input id="threadSearch" placeholder="Search" autocapitalize="none">
       </div>
       ${requests.length ? `
         <div class="row tap" id="reqRow" style="color:#111">
@@ -3466,27 +4721,32 @@ function messagesPage() {
       <div id="threads">${normal.length ? normal.map(threadRow).join("")
         : `<div class="empty" style="color:#8A8A8E"><div class="empty-icon" style="background:#F6F6F7;border-color:#EDEDED">${I.mail}</div>No messages yet.<p class="empty-sub" style="color:#8A8A8E">Tap + to find friends.</p></div>`}</div>`;
 
-    // The thread list carries usernames; the chat screen wants the id too,
-    // so resolve it on tap rather than widening the messages payload —
-    // sw.js caches this lookup (see the isCachedApi list there), so it
-    // still works offline for anyone already messaged before. If even that
-    // fails (never cached, no signal), fall back to what the inbox already
-    // had in hand: chatPage()/its /api/messages/:id calls all accept a
-    // username in place of a real id (every such route matches "id = ? OR
-    // username = ?" — see src/index.js), so a thin object with no real id
-    // still opens the conversation instead of the tap just failing.
+    // Filters the already-loaded list client-side by name — instant, no
+    // network round trip, since the whole inbox is already in hand.
+    el.querySelector("#threadSearch").addEventListener("input", (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      el.querySelectorAll(".thread-row").forEach(row => {
+        row.style.display = !q || row.dataset.name.includes(q) ? "" : "none";
+      });
+    });
+
+    // The thread list carries usernames; the chat screen would ALSO like the
+    // real id, but doesn't need it to open or use the thread — every
+    // /api/messages/... route matches "id = ? OR username = ?" (see
+    // src/index.js), so a username-only object works everywhere a real id
+    // would. Open instantly with what's already in hand, and fetch the real
+    // id in the background afterward rather than making the tap wait on a
+    // network round trip just to open a conversation that's already right
+    // there in the list.
     const withByUsername = new Map(r.threads.map(t => [t.with.username, t.with]));
-    const openChat = async (username) => {
-      try {
-        const p = await api(`/users/${encodeURIComponent(username)}`);
-        state.chatWith = p.user;
-      } catch (e) {
-        const fallback = withByUsername.get(username);
-        if (!fallback) { toast(e.message); return; }
-        state.chatWith = { id: username, ...fallback };
-      }
+    const openChat = (username) => {
+      const known = withByUsername.get(username);
+      state.chatWith = known ? { id: username, ...known } : { id: username, username };
       state.page = "chat";
       render();
+      api(`/users/${encodeURIComponent(username)}`).then(p => {
+        if (state.chatWith?.username === username) state.chatWith = p.user;
+      }).catch(() => {});
     };
     el.querySelectorAll(".thread-row").forEach(row => row.onclick = () => openChat(row.dataset.u));
     el.querySelector("#reqRow")?.addEventListener("click", () => { state.page = "message-requests"; render(); });
@@ -3537,13 +4797,19 @@ function messageRequestsPage() {
         <button class="tap-sm decline-req" style="color:var(--muted);font-size:12px;font-weight:600">Decline</button>
       </div>`).join("") : `<p class="empty">No pending requests.</p>`;
 
-    body.querySelectorAll("[data-open]").forEach(el2 => el2.addEventListener("click", async () => {
+    // Same fix as messagesPage()'s openChat() — open instantly with what's
+    // already in `requests` (every /api/messages/... route accepts a
+    // username in place of a real id), enrich with the real id afterward.
+    const withByUsername = new Map(requests.map(m => [m.with.username, m.with]));
+    body.querySelectorAll("[data-open]").forEach(el2 => el2.addEventListener("click", () => {
       const username = el2.closest(".row").dataset.u;
-      const p = await api(`/users/${encodeURIComponent(username)}`).catch(() => null);
-      if (!p) return;
-      state.chatWith = p.user;
+      const known = withByUsername.get(username);
+      state.chatWith = known ? { id: username, ...known } : { id: username, username };
       state.page = "chat";
       render();
+      api(`/users/${encodeURIComponent(username)}`).then(p => {
+        if (state.chatWith?.username === username) state.chatWith = p.user;
+      }).catch(() => {});
     }));
     body.querySelectorAll(".accept-req, .decline-req").forEach(btn => btn.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -3563,6 +4829,16 @@ function messageRequestsPage() {
 }
 
 // ---------- gift sheet (opens from a video) ----------
+
+// The catalog is effectively static (an admin-managed price list, not
+// something that changes between one gift and the next in the same
+// session), so it's fetched once and reused — and the coin balance from
+// the last time this sheet was open is a fine placeholder until the real
+// one lands. Without these, the sheet opened as an empty shell every
+// single time, waiting on two round trips before there was anything to
+// even tap.
+let giftCatalogCache = null;
+let lastKnownCoins = null;
 
 function openGifts(v, slideEl) {
   const sheet = $(`
@@ -3592,9 +4868,7 @@ function openGifts(v, slideEl) {
   const grid = sheet.querySelector(".gg");
   const bal = sheet.querySelector(".bal");
 
-  Promise.all([api("/gifts/catalog"), api("/wallet")]).then(([cat, w]) => {
-    bal.textContent = fmt(w.coins);
-
+  const paintGrid = (cat) => {
     grid.innerHTML = cat.gifts.map(g => `
       <button data-k="${g.key}" data-c="${g.coins}" style="
         background:#F6F6F7;border:1px solid #EDEDED;border-radius:10px;padding:10px 4px;
@@ -3622,6 +4896,7 @@ function openGifts(v, slideEl) {
         grid.querySelectorAll("button").forEach(x => x.disabled = true);
         try {
           const r = await api("/gifts", { method: "POST", body: { videoId: v.id, giftKey: b.dataset.k } });
+          lastKnownCoins = r.coinsLeft;
           bal.textContent = fmt(r.coinsLeft);
           flyGift(r.gift.emoji);
 
@@ -3638,7 +4913,22 @@ function openGifts(v, slideEl) {
         }
       };
     });
-  }).catch(e => { grid.innerHTML = `<p class="empty" style="color:#8A8A8E">${esc(e.message)}</p>`; });
+  };
+
+  if (giftCatalogCache) paintGrid(giftCatalogCache);
+  if (lastKnownCoins != null) bal.textContent = fmt(lastKnownCoins);
+
+  Promise.all([
+    giftCatalogCache ? Promise.resolve(giftCatalogCache) : api("/gifts/catalog"),
+    api("/wallet"),
+  ]).then(([cat, w]) => {
+    giftCatalogCache = cat;
+    lastKnownCoins = w.coins;
+    bal.textContent = fmt(w.coins);
+    paintGrid(cat);
+  }).catch(e => {
+    if (!giftCatalogCache) grid.innerHTML = `<p class="empty" style="color:#8A8A8E">${esc(e.message)}</p>`;
+  });
 }
 
 // A gift should feel like something happened, not like a form submit.
@@ -3745,16 +5035,27 @@ function walletPage() {
       </div>
 
       <div id="packs" style="display:none;margin-bottom:18px">
-        <p class="sect" style="margin-top:0">Choose a pack</p>
-        ${w.coinPacks.map(p => `
-          <button data-coins="${p.coins}" class="pack">
-            <span style="font-size:15px;color:#fff">🪙 ${fmt(p.coins)} coins</span>
-            <span style="font-family:var(--mono);font-size:14px;color:var(--muted)">${money(p.cents)}</span>
-          </button>`).join("")}
-        <p style="font-size:11px;color:var(--faint);line-height:1.5;margin:8px 0 0">
-          There's no card payment wired up yet. Pick a pack, send the money by Mobile Money,
-          and an admin adds the coins once it lands.
-        </p>
+        ${isAndroidTWA() ? `
+          <p class="sect" style="margin-top:0">Get coins</p>
+          <p style="font-size:13px;color:var(--muted);line-height:1.6;margin:0 0 14px">
+            Coin purchases happen on the Belople website, not in the app.
+          </p>
+          <button id="openBrowser" style="width:100%;background:#fff;color:#000;border-radius:10px;
+                  padding:12px 0;font-size:13px;font-weight:600">
+            Open in browser
+          </button>
+        ` : `
+          <p class="sect" style="margin-top:0">Choose a pack</p>
+          ${w.coinPacks.map(p => `
+            <button data-coins="${p.coins}" class="pack">
+              <span style="font-size:15px;color:#fff">🪙 ${fmt(p.coins)} coins</span>
+              <span style="font-family:var(--mono);font-size:14px;color:var(--muted)">${money(p.cents)}</span>
+            </button>`).join("")}
+          <p style="font-size:11px;color:var(--faint);line-height:1.5;margin:8px 0 0">
+            There's no card payment wired up yet. Pick a pack, send the money by Mobile Money,
+            and an admin adds the coins once it lands.
+          </p>
+        `}
       </div>
 
       <button id="hist" style="width:100%;border:1px solid var(--border);border-radius:10px;
@@ -3778,6 +5079,12 @@ function walletPage() {
     el.querySelector("#buy").onclick = () => {
       packs.style.display = packs.style.display === "none" ? "block" : "none";
     };
+
+    // Opens the real website (not this TWA) so the purchase happens outside
+    // the installed app — see isAndroidTWA()'s comment for why.
+    el.querySelector("#openBrowser")?.addEventListener("click", () => {
+      window.open(location.origin + "/?open=wallet", "_blank", "noopener,noreferrer");
+    });
 
     el.querySelectorAll(".pack").forEach(b => b.onclick = async () => {
       const ref = prompt(
@@ -4412,6 +5719,15 @@ let restoringFromHistory = false;
 let hasPushedInitial = false;
 let lastHistoryKey = null;
 
+// A full-screen overlay (right now just the chat photo viewer) can push one
+// throwaway history entry so the hardware/gesture back button closes it
+// instead of navigating the app away. The global popstate listener below
+// checks this FIRST and, if set, only closes the overlay — it does not run
+// the normal state-restore/render(), which would otherwise rebuild the
+// whole page underneath just to dismiss a photo.
+let viewerMarkerActive = false;
+let activeImageViewerClose = null;
+
 const snapshotState = () => ({
   page: state.page, tab: state.tab, feedTab: state.feedTab,
   viewUser: state.viewUser,
@@ -4436,6 +5752,12 @@ function trackHistory() {
 }
 
 window.addEventListener("popstate", (e) => {
+  if (viewerMarkerActive) {
+    viewerMarkerActive = false;
+    activeImageViewerClose?.();
+    activeImageViewerClose = null;
+    return;
+  }
   restoringFromHistory = true;
   const snap = e.state || { page: null, tab: "feed", feedTab: "foryou", viewUser: null, chatWith: null, followList: null };
   lastHistoryKey = JSON.stringify(snap);
@@ -4486,6 +5808,8 @@ function renderInner() {
   }
 
   if (state.page === "upload") { app.appendChild(uploadPage()); return; }
+  if (state.page === "post-public") { app.appendChild(publicUploadPage()); return; }
+  if (state.page === "text-post") { app.appendChild(textPostPage()); return; }
   if (state.page === "friends") { app.appendChild(friendsPage()); return; }
   if (state.page === "profile") {
     const p = profilePage();
@@ -4517,14 +5841,20 @@ function renderInner() {
   // the feed's videos.
   if (!isMsg) app.appendChild($(`<div class="chrome-backdrop"></div>`));
 
+  // Tabs live inside .topbar's center column now — level with the avatar and
+  // search icons, not a separate row further down the screen. Only rendered
+  // on the home surface (not Messages), which is why the middle cell is
+  // conditional rather than a fixed three-column grid.
   app.appendChild($(`
     <div class="topbar">
       <button class="me-btn" id="me">${avatarInner(store.user)}</button>
-      <div class="chrome-pill">
-        <button id="search">${I.search}</button>
-        <button id="notifBell">${I.bell}${state.unreadCount ? '<span class="badge dot"></span>' : ""}</button>
-        <button id="settings">${I.gear}</button>
-      </div>
+      ${!isMsg ? `
+      <div class="tabs${state.feedTab === "public" ? " on-public" : ""}">
+        <button class="${state.feedTab === "following" ? "on" : ""}" data-t="following">Following</button>
+        <button class="${state.feedTab === "foryou" ? "on" : ""}" data-t="foryou">For you</button>
+        <button class="${state.feedTab === "public" ? "on" : ""}" data-t="public">Public</button>
+      </div>` : ""}
+      <button class="search-btn" id="search">${I.search}</button>
     </div>`));
 
   app.querySelector("#me").onclick = () => {
@@ -4532,14 +5862,14 @@ function renderInner() {
     state.viewUser = null; state.tab = "profile"; state.page = "profile"; render();
   };
   app.querySelector("#search").onclick = () => { state.tab = "search"; state.page = "search"; render(); };
-  app.querySelector("#notifBell").onclick = () => {
-    if (!requireLogin("Log in to see notifications")) return;
-    state.page = "notifications"; render();
-  };
-  app.querySelector("#settings").onclick = () => {
-    if (!requireLogin()) return;
-    state.page = "settings"; render();
-  };
+
+  if (!isMsg) {
+    app.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+      if (b.dataset.t === "following" && !requireLogin("Log in to see videos from people you follow")) return;
+      state.feedTab = b.dataset.t; render();
+      if (state.feedTab !== "public") loadFeed(true);
+    });
+  }
 
   if (isMsg) {
     // Defense in depth — the nav tab click already gates this (see
@@ -4548,33 +5878,72 @@ function renderInner() {
     if (!store.token) { app.appendChild(authScreen()); return; }
     app.appendChild(messagesPage());
   } else {
-    app.appendChild($(`
-      <div class="tabs">
-        <button class="${state.feedTab === "following" ? "on" : ""}" data-t="following">Following</button>
-        <button class="${state.feedTab === "foryou" ? "on" : ""}" data-t="foryou">For you</button>
-      </div>`));
-    app.appendChild($(`<div class="feed"></div>`));
-
-    app.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
-      if (b.dataset.t === "following" && !requireLogin("Log in to see videos from people you follow")) return;
-      state.feedTab = b.dataset.t; render(); loadFeed(true);
-    });
-
-    const feed = app.querySelector(".feed");
-    // Fetch the next page while there are still ~3 videos to go, so the feed
-    // never runs dry mid-flick. rAF-throttled: the raw scroll event fires
-    // hundreds of times per swipe and doesn't need answering that often.
-    let pending = false;
-    feed.addEventListener("scroll", () => {
-      if (pending) return;
-      pending = true;
-      requestAnimationFrame(() => {
-        pending = false;
-        const remaining = feed.scrollHeight - (feed.scrollTop + feed.clientHeight);
-        if (remaining < feed.clientHeight * 3 && state.cursor) loadFeed(false);
+    if (state.feedTab === "public") {
+      const pub = $(`<div></div>`);
+      app.appendChild(pub);
+      // Consumed once: a post tapped in a profile's Public grid sets this,
+      // and it shouldn't reappear if Public is later left and reopened some
+      // other way — same convention as userFeedPage's sharedBy.
+      const jumpToPostId = state.publicJumpPostId;
+      state.publicJumpPostId = null;
+      const stop = mountPublic(pub, {
+        token: store.token,
+        me: store.user,
+        jumpToPostId,
+        onOpenUser: (username) => { state.viewUser = username; state.page = "profile"; render(); },
+        // Same mechanism as tapping a video in a profile grid: a list plus a
+        // start index, handed to userFeedPage so the rest of that list keeps
+        // scrolling normally once the tapped video opens.
+        onOpenVideo: (videos, idx) => {
+          state.userVideos = videos;
+          state.startAt = idx;
+          state.page = "userfeed";
+          render();
+        },
       });
-    }, { passive: true });
-    loadFeed(true);
+      // Same teardown convention as uploadPage's camera: renderInner() fires
+      // this on every direct child of #app right before wiping it, so the
+      // scroll listener and any open comment sheet don't outlive the page.
+      pub.addEventListener("screen-exit", stop);
+    } else {
+      app.appendChild($(`<div class="feed"></div>`));
+      const feed = app.querySelector(".feed");
+      // Fetch the next page while there are still ~3 videos to go, so the feed
+      // never runs dry mid-flick. rAF-throttled: the raw scroll event fires
+      // hundreds of times per swipe and doesn't need answering that often.
+      let pending = false;
+      feed.addEventListener("scroll", () => {
+        feedScrollTop = feed.scrollTop;
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(() => {
+          pending = false;
+          const remaining = feed.scrollHeight - (feed.scrollTop + feed.clientHeight);
+          if (remaining < feed.clientHeight * 3 && state.cursor) loadFeed(false);
+        });
+      }, { passive: true });
+
+      // Landed back here via the back button/gesture (the sound page, a
+      // video's profile, ...) with videos already sitting in state — redraw
+      // them as-is and resume exactly where the scroll was, instead of the
+      // normal loadFeed(true), which wipes state.videos and refetches. That
+      // reset is right for an actual tab switch or first load, but here it
+      // would both drop back to the first video AND can reorder "For you"
+      // out from under you, since its ranking decays with time on every
+      // fresh request.
+      if (restoringFromHistory && state.videos.length) {
+        state.videos.forEach(v => feed.appendChild(v.isAd ? adSlide(v) : slide(v)));
+        observePlayback();
+        // jumpScroll, not a plain scrollTop assignment — see its own
+        // comment. .feed's scroll-snap-stop:always is what was still
+        // producing a visible fast-scroll sweep through every video even
+        // after switching this to an instant assignment; the assignment
+        // itself was never the animated part.
+        jumpScroll(feed, feedScrollTop);
+      } else {
+        loadFeed(true);
+      }
+    }
   }
 
   attachNav(app);
@@ -4622,7 +5991,12 @@ function notificationsPage() {
     return `<b>${name}</b> ${rest}`;
   };
 
-  api("/notifications").then(r => {
+  // Same stale-while-revalidate shape as profilePage()/loadFeed(): paint
+  // instantly from sw.js's API_CACHE if there's anything there, and always
+  // still run the live fetch to reconcile. markRead is only true for the
+  // live call — marking as read off a possibly-stale cached list isn't
+  // worth the risk of clearing a badge for something that arrived since.
+  const paintNotifications = (r, { markRead }) => {
     el.innerHTML = `
       <div class="pagehead"><button id="back">${I.back}</button><h2>Notifications</h2></div>
       ${r.notifications.length ? r.notifications.map(n => `
@@ -4641,24 +6015,53 @@ function notificationsPage() {
     el.querySelector("#back").onclick = () => history.back();
 
     el.querySelectorAll(".notif").forEach(row => {
-      row.onclick = () => {
-        if (row.dataset.type === "follow") {
-          if (!row.dataset.user) return;
-          state.viewUser = row.dataset.user;
-          state.page = "profile";
-          render();
-        } else if (row.dataset.video) {
-          openVideoById(row.dataset.video);
-        }
+      const openProfile = () => {
+        if (!row.dataset.user) return;
+        state.viewUser = row.dataset.user;
+        state.page = "profile";
+        render();
       };
+      // The avatar always means "that person" — gift, like, comment, repost,
+      // follow, whatever the notification type. Before this, only a follow
+      // notification could reach the actor's profile at all; a gift/like/
+      // comment notification's row only ever opened the video, with no way
+      // to see who actually sent it.
+      row.querySelector(".notif-av")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openProfile();
+      });
+      row.addEventListener("click", () => {
+        if (row.dataset.type === "follow") openProfile();
+        else if (row.dataset.video) openVideoById(row.dataset.video);
+      });
     });
 
-    // Opening the list is what clears it, same as TikTok's inbox.
-    if (r.notifications.some(n => !n.read)) {
-      api("/notifications/read", { method: "POST" }).catch(() => {});
+    if (markRead) {
+      // Opening the list is what clears it, same as TikTok's inbox.
+      if (r.notifications.some(n => !n.read)) {
+        api("/notifications/read", { method: "POST" }).catch(() => {});
+      }
+      state.unreadCount = 0;
     }
-    state.unreadCount = 0;
-  }).catch(e => { el.innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+  };
+
+  let painted = false;
+  (async () => {
+    if (!("caches" in window)) return;
+    try {
+      const cache = await caches.open("geereel-api-v1");
+      const cached = await cache.match(new Request(`${location.origin}/api/notifications`));
+      const r = cached && await cached.clone().json();
+      if (r?.notifications && !painted) { paintNotifications(r, { markRead: false }); painted = true; }
+    } catch {}
+  })();
+
+  api("/notifications").then(r => {
+    paintNotifications(r, { markRead: true });
+    painted = true;
+  }).catch(e => {
+    if (!painted) el.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
+  });
 
   return el;
 }
@@ -4687,7 +6090,15 @@ function attachNav(container, active) {
     </div>`);
   container.appendChild(nav);
 
-  nav.querySelector("#fab").onclick = () => { state.page = isMsg ? "friends" : "upload"; render(); };
+  nav.querySelector("#fab").onclick = () => {
+    if (isMsg) { state.page = "friends"; render(); return; }
+    if (!requireLogin("Log in to post")) return;
+    // Straight into the camera — Photo/Text are mode buttons inside it now
+    // (see cameraStep's #modes row), the same one-screen switch TikTok
+    // uses, rather than a separate chooser screen first.
+    state.page = "upload";
+    render();
+  };
   nav.querySelectorAll("button[data-tab]").forEach(b => b.onclick = () => {
     if (b.dataset.tab === "messages" && !requireLogin("Log in to see messages")) return;
     state.tab = b.dataset.tab;
@@ -4736,8 +6147,29 @@ async function enablePush() {
 function handleDeepLink(params) {
   const videoId = params.get("video");
   const username = params.get("user");
+  const chatWith = params.get("chat");
+  const open = params.get("open");
+  // Set by the "Reply" notification action (see sw.js) — the service
+  // worker can't actually send the reply itself (no localStorage access,
+  // so no auth token), so the honest version of that button is landing
+  // straight in the chat with the composer already focused.
+  const focusReply = params.get("focusReply") === "1";
   if (videoId) { openVideoById(videoId); return true; }
   if (username) { state.viewUser = username; state.page = "profile"; render(); return true; }
+  if (chatWith) {
+    // Same instant-open-then-enrich pattern as messagesPage()'s openChat()
+    // — a message notification should land straight in the thread, not
+    // wait on a profile lookup first.
+    state.chatWith = { id: chatWith, username: chatWith };
+    state.page = "chat";
+    render();
+    if (focusReply) requestAnimationFrame(() => document.querySelector("#msg")?.focus());
+    api(`/users/${encodeURIComponent(chatWith)}`).then(p => {
+      if (state.chatWith?.username === chatWith) state.chatWith = p.user;
+    }).catch(() => {});
+    return true;
+  }
+  if (open === "wallet") { state.page = "wallet"; render(); return true; }
   return false;
 }
 
@@ -4792,10 +6224,28 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
   navigator.serviceWorker.addEventListener("message", (event) => {
     if (event.data?.type === "navigate") {
-      handleDeepLink(new URL(event.data.url, location.origin).searchParams);
+      const url = new URL(event.data.url, location.origin);
+      if (event.data.focusReply) url.searchParams.set("focusReply", "1");
+      handleDeepLink(url.searchParams);
     }
   });
 }
+
+// Chrome/Android hold this event back until the browser decides the page is
+// "install-worthy," then fire it once — capturing it here (rather than only
+// wiring a listener inside settingsPage(), which usually doesn't exist yet
+// when this fires) is what lets the Settings "Install app" row show up and
+// actually work whenever this happened to fire, not just on a lucky reload.
+// iOS never fires this at all — there's no programmatic install prompt
+// there, only the manual Share > Add to Home Screen a person does
+// themselves, which is why the button is hidden without it (see
+// settingsPage()).
+let deferredInstallPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+});
+window.addEventListener("appinstalled", () => { deferredInstallPrompt = null; });
 
 // No point polling every 4s while the tab is backgrounded — pause, and
 // catch up the instant it's looked at again instead of waiting out the

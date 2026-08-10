@@ -1,116 +1,40 @@
 /* ============================================================================
-   design-feed.css — FULL-WIDTH VIDEO, SMALL TOP BAND, CAPTION BAND BELOW
+   design-feed.css — FULL-BLEED VIDEO, NO BLACK AT TOP, SHORT BLACK AT BOTTOM
    ============================================================================
 
-   FOR CLAUDE CODE:
-
-   Save at public/design-feed.css, linked AFTER design-5.css so it wins.
-   This changes the feed slide layout only. No HTML changes needed for the
-   core fix — it re-anchors elements that already exist. One optional markup
-   note is in section F (ads).
-
-   ---------------------------------------------------------------------------
-   WHAT IS WRONG NOW — measured, not a matter of taste
-
-   Today the video is `position: absolute; inset: 0` — it fills the entire
-   screen — and every control floats on top of it:
-
-       top bar      14px pad + 44px avatar     ~  58px sitting over the video
-       feed tabs    at top: 72px               ~  44px more
-       caption      at bottom: 88px
-       nav bar      62px tall + 16px pad       ~  78px over the video
-
-   So the video is centred in the *screen*, but ~100px of its top and ~165px
-   of its bottom sit underneath opaque controls. The part you can actually
-   SEE is not centred — it sits high, with a big black gap below and a small
-   one above. That is the imbalance in the screenshot.
-
-   Second problem: `.slide.cover video { object-fit: cover }` crops 9:16
-   videos to fill while every other ratio letterboxes. Two clips shot on the
-   same phone can display differently depending on whether that class is set
-   — one cropped, one not. That is why videos from outside the app behave
-   differently from ones shot in it.
+   The spec, exactly as given:
+     - top: no black at all — the video runs to the very top edge, icons and
+       tabs float directly on the picture.
+     - bottom: a short black strip, just tall enough to sit behind the nav
+       pill and reach up to the scrub bar (the video-progress line) — and no
+       further. It does not climb up to the author/caption/sound text; that
+       floats on the picture too, same as the top.
 
    ---------------------------------------------------------------------------
-   WHAT THIS DOES INSTEAD
+   THE NUMBER BEHIND "reaches to the scrub line"
 
-       +-----------------+
-       |  small black    |  <- top bar + feed tabs
-       +-----------------+
-       |                 |
-       |  video, FULL    |  <- edge to edge across, never cropped
-       |  WIDTH          |
-       |                 |
-       +-----------------+
-       |  black + caption|  <- author, caption, nav
-       +-----------------+
+   .scrub (design-5.css) sits at bottom: 84px with a 22px touch target, so its
+   own footprint runs from 84px to ~106px. The nav pill (design.css) is 62px
+   tall with 16px of bottom padding, so its top edge is at 78px. A strip
+   112px tall covers both with a few px to spare and stops right there —
+   nothing above it is black.
 
-   The video spans the full width of the screen. Vertically it sits between a
-   small top band and a taller bottom band that carries the caption — so the
-   black is where you asked for it, and the sides are full.
-
-   THE ONE HONEST CAVEAT, because it is geometry and not a preference:
-
-   A 9:16 video is shorter than a modern phone screen, so something has to
-   give — either a strip of black appears, or the picture gets cropped. This
-   layout chooses black over cropping. On the common tall phones the bands
-   are sized so a portrait video lands at full width with essentially no side
-   black at all:
-
-       412 x 915  ->  side black  2px
-       412 x 950  ->  side black  0px
-
-   On genuinely short screens there isn't enough height to fit a full-width
-   9:16 video AND leave room for the nav bar, so a small side black appears:
-
-       393 x 786  ->  side black 20px
-       360 x 740  ->  side black 16px
-
-   The bands shrink on those screens to keep it that small. Cropping the
-   picture instead would remove it entirely — but then part of every video is
-   lost, which is the thing you said you didn't want.
+   .overlay and .rail are both placed just above that, at bottom: 116px, so
+   their content never touches the strip and never sits on the bare picture
+   at the same time — it's one or the other, cleanly.
 
    ---------------------------------------------------------------------------
    CONTENTS
-     A. Band sizes
-     B. Video — full width, never cropped
-     C. Top band
-     D. Bottom band — author, caption, fixed avatar
-     E. Action rail
-     F. Ads — no feed tabs, but keep a like button
+     A. Video — full bleed, cropped to fill
+     B. Top — nothing. Icons/tabs float on the picture with shadow only.
+     C. Bottom strip — behind nav + scrub bar, nothing more
+     D. Caption + rail — float on the picture, above the strip
+     E. Ads
    ========================================================================= */
 
 
 /* ============================================================================
-   A. BANDS
-   ---------------------------------------------------------------------------
-   Two numbers drive the layout. The bottom one has to clear the nav (78px)
-   plus the author row and one line of caption. The top one only has to clear
-   the bar and the tabs, so it stays small — which is what keeps the video
-   large and full-width.
-
-   Both shrink on short screens, because there the alternative is a wider
-   strip of black down each side.
-   ========================================================================= */
-:root {
-  --feed-top: 56px;
-  --feed-bottom: 132px;
-}
-
-@media (max-height: 800px) {
-  :root { --feed-top: 40px; --feed-bottom: 116px; }
-}
-@media (max-height: 720px) {
-  :root { --feed-top: 32px; --feed-bottom: 104px; }
-}
-
-
-/* ============================================================================
-   B. VIDEO
-   ---------------------------------------------------------------------------
-   Full width, contained vertically, centred in the space between the bands.
-   Any aspect ratio lands correctly — a portrait clip shot in the app and a
-   landscape one from somewhere else both fit without being cut.
+   A. VIDEO
    ========================================================================= */
 .slide {
   height: 100%; position: relative; background: #000;
@@ -119,119 +43,141 @@
 }
 
 .slide video {
-  position: absolute;
-  top: var(--feed-top);
-  bottom: var(--feed-bottom);
-  left: 0; right: 0;
-  width: 100%; height: auto;
-  max-height: calc(100% - var(--feed-top) - var(--feed-bottom));
-  object-fit: contain;
-  /* A 9:16 clip fills this box exactly, so this never shows for those —
-     but anything shot in a rounder ratio (a phone held for a close-up,
-     for instance) doesn't reach the box's full height, and centring it
-     (the object-fit default) splits the leftover space into a gap above
-     AND below the picture. Anchoring to the top instead sends all of
-     that leftover space to the bottom, where it merges into the already-
-     black band there instead of reading as a second, separate gap. */
-  object-position: center top;
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover; object-position: center center;
   background: #000;
 }
-
-/* Cropping is off for every ratio. A feed where some videos are cropped and
-   others aren't is the inconsistency described at the top of this file. If a
-   full-bleed look is wanted later it should be a deliberate per-video choice,
-   not a class that happens to be set on some uploads. */
-.slide.cover video { object-fit: contain; }
+.slide.cover video { object-fit: cover; }
 
 
 /* ============================================================================
-   C. TOP BAND
+   B. TOP — no black
    ---------------------------------------------------------------------------
-   The bar and tabs sit on black rather than over the picture, so they no
-   longer need a heavy shadow to stay readable — it is lightened, not
-   removed, since a wide video's edge can still reach into the band.
+   design.css's .chrome-backdrop was a flat black rectangle behind the top
+   bar; killed outright rather than left as a gradient. Bell and settings
+   moved to the profile page (next to the wallet button) — the top bar now
+   holds only the avatar (bigger, a real corner anchor) and search (also
+   bigger, floating directly on the picture with no pill behind it — a
+   drop-shadow on the icon itself is the only contrast it gets).
    ========================================================================= */
-.topbar { padding: 10px 16px 0; }
-.me-btn { width: 38px; height: 38px; }
-.chrome-pill button { width: 30px; height: 30px; }
+.chrome-backdrop { background: none; }
 
-.tabs { top: 14px; }
+/* align-items: center is already design.css's default for .topbar, but
+   design-2.css later overrode it to flex-start for an older two-row layout
+   (avatar+icons on row one, tabs on a separate row below). The tabs moved
+   back into this same row below (.topbar .tabs, position:static) without
+   ever restoring center — so the ~24px-tall tabs sat flush against the top
+   of the row while the 60px avatar/search boxes centered their icon inside
+   their own taller box, landing visibly lower. Restated here since it's
+   this file's layout that actually needs it. */
+.topbar { padding: 12px 16px 0; align-items: center; }
+
+.me-btn { width: 60px; height: 60px; font-size: 22px; }
+
+.search-btn {
+  width: 60px; height: 60px;
+  display: grid; place-items: center;
+  background: none; border: none; color: #fff;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.9)) drop-shadow(0 2px 10px rgba(0,0,0,.6));
+}
+/* Bigger glyph, same 60px button box — the touch target and the reserved
+   width in .topbar don't change, only how much of that box the icon fills. */
+.search-btn svg { width: 30px; height: 30px; }
+
+/* Tabs sit inside .topbar's center column now — level with the avatar and
+   search icons, not a separate row further down the screen. position:static
+   overrides .tabs's standalone-row absolute positioning from design.css;
+   flex:1 + justify-content:center gives it the leftover width between the
+   two fixed-size icons on either side. */
+.topbar .tabs {
+  position: static; flex: 1;
+  display: flex; justify-content: center; gap: 7px;
+}
+/* As bold and prominent as the 30px search icon beside them — not a subtle
+   label row anymore. */
 .tabs button {
-  font-size: 15px; padding-bottom: 5px;
-  text-shadow: 0 1px 6px rgba(0,0,0,.4);
+  font-size: 17px; padding-bottom: 4px;
+  text-shadow: 0 1px 6px rgba(0,0,0,.6);
 }
 
 
 /* ============================================================================
-   D. BOTTOM BAND — author, caption, fixed avatar
+   C. BOTTOM STRIP — nav + scrub bar only
    ---------------------------------------------------------------------------
-   The author row is pinned to a fixed offset from the bottom of the screen,
-   so it stays in exactly the same place on every slide no matter how tall the
-   video is or how long the caption runs. That was the other thing you asked
-   for — the profile picture shouldn't jump between videos.
+   Fixed height, not content-sized — it backs two fixed-size things (the nav
+   pill, the scrub bar), not the caption, so there's nothing here that can
+   grow or shrink and throw the number off. Sits below the caption/rail in
+   z-index so it reads as a floor they stand above, not a box around them.
+   ========================================================================= */
+.slide::after {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0; height: 112px;
+  background: #000;
+  pointer-events: none; z-index: 2;
+}
 
-   The caption is capped at two lines. An uncapped caption is what pushes the
-   author row up and reintroduces the drift, so the cap is doing real work
-   here, not just tidying.
+
+/* ============================================================================
+   D. CAPTION + RAIL — float on the picture, above the strip
    ========================================================================= */
 .overlay {
   position: absolute;
   left: 16px; right: 76px;   /* clears the rail */
-  bottom: 84px;              /* clears the 78px nav */
-  height: auto;              /* design.css's base rule sets a fixed
-                                 height (--feed-bottom, 132px) sized for a
-                                 full-width black band — left alone here,
-                                 that 132px box stayed under this bottom:
-                                 84px position, and the (shorter) actual
-                                 content sat at its top, leaving a slab of
-                                 unused black between the content and the
-                                 box's own bottom edge — the "black box
-                                 with a small drawer of content inside it"
-                                 look. This box is exactly as tall as its
-                                 content now, nothing more. */
+  bottom: 116px;             /* clears the strip in section C */
+  height: auto;              /* exactly as tall as its content, nothing more */
+  background: none;          /* on bare picture, not on black — the shadow
+                                 below is what keeps it readable */
   z-index: 4;
-  text-shadow: 0 1px 8px rgba(0,0,0,.5);
+  text-shadow: 0 1px 3px rgba(0,0,0,.9), 0 2px 14px rgba(0,0,0,.6);
 }
 
 .author { display: flex; align-items: center; gap: 8px; margin: 0 0 5px; }
 .author .aav { width: 44px; height: 44px; font-size: 17px; }
 
+/* .caption and .caption-toggle are flex siblings in .cap-row, not one
+   inline run — .caption alone gets clipped+ellipsized by its own
+   overflow:hidden, so "more" (flex-shrink:0) can never be the part that
+   gets cut off, whatever the caption's actual pixel width turns out to be
+   on a given phone. min-width:0 is what lets a flex item actually shrink
+   below its content's natural width instead of overflowing the row. */
+.cap-row { display: flex; align-items: baseline; gap: 4px; max-width: 100%; }
+
 .caption {
+  flex: 1 1 auto; min-width: 0;
   font-size: 14px; line-height: 1.35; margin: 0;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.caption.expanded { white-space: normal; overflow: visible; text-overflow: clip; }
+
+.caption-toggle {
+  flex-shrink: 0; display: inline; margin: 0; padding: 0;
+  background: none; border: none;
+  color: rgba(255,255,255,.75); font-size: 13px; font-weight: 600;
 }
 
-/* The sound line sits under the caption and gets one line only. */
 .sound { margin-top: 4px; }
 
-
-/* ============================================================================
-   E. ACTION RAIL
-   ---------------------------------------------------------------------------
-   Anchored above the bottom band so it never collides with the caption or
-   the nav, and tightened slightly so the whole column fits over the picture
-   without reaching the top band.
-   ========================================================================= */
 .rail {
   position: absolute;
   right: 10px;
-  bottom: calc(var(--feed-bottom) + 8px);
+  bottom: 116px;             /* same clearance as .overlay — level with it */
   z-index: 4;
-  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  display: flex; flex-direction: column; align-items: center; gap: 22px;
 }
+/* Scaled up rather than given new fixed widths — heart/comment/repost/
+   share/gift keep the same relative sizes to each other (heart was always
+   the biggest), just all bigger, and the touch target grows with them. */
+.rail button svg { filter: drop-shadow(0 1px 6px rgba(0,0,0,.65)); transform: scale(1.3); }
+.rail .n { font-size: 13px; text-shadow: 0 1px 6px rgba(0,0,0,.8); }
 
 
 /* ============================================================================
-   F. ADS
+   E. ADS
    ---------------------------------------------------------------------------
-   An ad isn't a feed you switch between, so the Following / For you tabs are
-   hidden on an ad slide — they'd offer a choice that doesn't apply.
-
-   The like button STAYS. Not as decoration: it is the cheapest honest signal
-   you have about whether an ad is landing or annoying people, and it costs
-   the viewer one tap. Removing it would leave you guessing about the one
-   thing you most need to know.
+   Same full-bleed treatment. No scrub bar on an ad slide, but the bottom
+   strip still gives the nav pill (and the sponsor tag/CTA sitting right
+   above it) a clean black floor instead of landing on bare picture.
 
    MARKUP: add class="ad" to the slide when the feed item has isAd === true.
    ========================================================================= */
@@ -244,25 +190,9 @@
 .slide.ad .rail .gift,
 .slide.ad .rail .more { display: none; }
 
-/* An ad's own bottom content (sponsor tag, name, one caption line, the CTA
-   button) is lighter than a real post's (author row, up to two caption
-   lines, sound line) — it doesn't need the full --feed-bottom reserved for
-   that, just enough to clear the nav underneath it and hold its own
-   content. Less black, more of the actual creative visible — which is
-   also just more useful to the advertiser. */
-:root { --ad-bottom: 96px; }
-
-/* Ad media is never cropped either, same reasoning as a real post — a
-   sponsor's differently-shaped image should show what their placement
-   actually looks like, not a crop of it — just against a smaller bottom
-   band. object-position anchors any letterboxing to the top for the same
-   reason as section B: a leftover gap belongs merged into the black band
-   at the bottom, not split into a second one floating above it. */
 .slide.ad img, .slide.ad video {
-  position: absolute;
-  top: var(--feed-top); bottom: var(--ad-bottom);
-  left: 0; right: 0;
-  width: 100%; height: auto;
-  max-height: calc(100% - var(--feed-top) - var(--ad-bottom));
-  object-fit: contain; object-position: center top; background: #000;
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover; object-position: center center;
+  background: #000;
 }

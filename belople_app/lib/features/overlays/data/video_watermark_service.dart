@@ -54,8 +54,8 @@ class VideoWatermarkService {
       // outro, duration to bound the watermark input so FFmpeg terminates
       // (an unbounded looped overlay image hangs the encode forever). Missing
       // either → skip branding and save the clean video rather than risk a hang.
-      if (srcW == null || srcH == null || srcW <= 0 || srcH <= 0) return sourcePath;
-      if (dur == null || dur <= 0) return sourcePath;
+      if (srcW == null || srcH == null || srcW <= 0 || srcH <= 0) return await _ensureMp4(sourcePath, width: width, height: height);
+      if (dur == null || dur <= 0) return await _ensureMp4(sourcePath, width: width, height: height);
 
       // Cap resolution (even numbers — x264 requires them) to keep the encode fast.
       final (w, h) = _capped(srcW, srcH);
@@ -103,10 +103,39 @@ class VideoWatermarkService {
 
       if (joined && File(outPath).existsSync()) return outPath;
       _quietDelete(outPath);
-      return sourcePath;
+      // Branding failed — still hand back a REAL mp4 (not the raw .webm the
+      // source often is), so the saved file plays and WhatsApp/others accept it.
+      return await _ensureMp4(sourcePath, width: width, height: height);
     } catch (_) {
-      return sourcePath;
+      return await _ensureMp4(sourcePath, width: width, height: height);
     }
+  }
+
+  /// Guarantees a valid H.264/AAC MP4 (faststart) — used as the fallback when
+  /// the full branding pipeline can't run. Crucially it RE-ENCODES the source
+  /// (which is usually .webm) into a real .mp4 while keeping its audio, so the
+  /// exact video the user is watching — with the sound that plays in it — is
+  /// what lands in the gallery, in a format WhatsApp and every player accept.
+  static Future<String> _ensureMp4(String sourcePath, {int? width, int? height}) async {
+    try {
+      final probe = await _probe(sourcePath);
+      final (w, h) = _capped(width ?? probe.width ?? 720, height ?? probe.height ?? 1280);
+      final dir = await getTemporaryDirectory();
+      final out = '${dir.path}/belople_mp4_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final args = <String>[
+        '-y', '-i', sourcePath,
+        '-vf', _scaleBase(w, h),
+        ..._vEnc,
+        // Keep the source audio (the sound that plays) if present; the mapping
+        // is optional so a silent clip still transcodes fine.
+        if (probe.hasAudio) ...['-map', '0:v:0', '-map', '0:a:0?', ..._aEnc] else ...['-an'],
+        '-movflags', '+faststart', out,
+      ];
+      final ok = await _run(args, totalMs: (probe.durationSeconds ?? 0) * 1000);
+      if (ok && File(out).existsSync()) return out;
+      _quietDelete(out);
+    } catch (_) {}
+    return sourcePath; // absolute last resort
   }
 
   /// Runs one FFmpeg session; resolves true on success, false on failure or if

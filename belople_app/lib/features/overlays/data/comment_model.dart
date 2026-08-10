@@ -26,7 +26,7 @@ class CommentModel {
   final String? myReaction;
   final List<CommentModel> replies;
 
-  CommentModel copyWith({int? likes, int? dislikes, String? myReaction}) {
+  CommentModel copyWith({int? likes, int? dislikes, String? myReaction, List<CommentModel>? replies}) {
     return CommentModel(
       id: id,
       body: body,
@@ -35,7 +35,7 @@ class CommentModel {
       likes: likes ?? this.likes,
       dislikes: dislikes ?? this.dislikes,
       myReaction: myReaction,
-      replies: replies,
+      replies: replies ?? this.replies,
     );
   }
 

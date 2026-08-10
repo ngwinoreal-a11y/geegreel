@@ -154,6 +154,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           delegate: SliverChildBuilderDelegate(
             (context, i) => _PostCell(
               post: posts[i],
+              // Open THIS post (pass it so it renders instantly), not the top of
+              // the public feed.
+              onTap: () => context.push('/p/${posts[i].id}', extra: posts[i]),
               onLongPress: isSelf ? () => _confirmDelete(kind: 'post', id: posts[i].id) : null,
             ),
             childCount: posts.length,
@@ -170,6 +173,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         delegate: SliverChildBuilderDelegate(
           (context, i) => _VideoCell(
             video: videos[i],
+            // Open a swipeable feed of this profile's videos starting here.
+            onTap: () => context.push('/profile-videos', extra: {'videos': videos, 'index': i}),
             onLongPress: isSelf ? () => _confirmDelete(kind: 'video', id: videos[i].id) : null,
           ),
           childCount: videos.length,
@@ -231,16 +236,15 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 }
 
 class _VideoCell extends StatelessWidget {
-  const _VideoCell({required this.video, this.onLongPress});
+  const _VideoCell({required this.video, required this.onTap, this.onLongPress});
   final VideoModel video;
+  final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      // Pass the video we already have so the player opens instantly (no
-      // loading spinner) instead of re-fetching it by id.
-      onTap: () => context.push('/v/${video.id}', extra: video),
+      onTap: onTap,
       onLongPress: onLongPress,
       child: Stack(
         fit: StackFit.expand,
@@ -329,16 +333,15 @@ class _FirstFrameThumbState extends State<_FirstFrameThumb> {
 }
 
 class _PostCell extends StatelessWidget {
-  const _PostCell({required this.post, this.onLongPress});
+  const _PostCell({required this.post, required this.onTap, this.onLongPress});
   final PostModel post;
+  final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      // Tapping a public post opens the Public feed (not a dead-end cell),
-      // matching the web grid's behaviour.
-      onTap: () => context.push('/public'),
+      onTap: onTap,
       onLongPress: onLongPress,
       child: DecoratedBox(
         decoration: const BoxDecoration(color: AppColors.raised),

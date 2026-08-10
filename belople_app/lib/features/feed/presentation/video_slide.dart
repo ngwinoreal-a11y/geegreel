@@ -531,7 +531,8 @@ class _ActionRail extends StatelessWidget {
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onCommentTap,
-          child: _RailButton(icon: Icons.mode_comment, color: Colors.white, count: video.counts.comments),
+          // Web uses a clean outline speech bubble, not a filled one.
+          child: _RailButton(icon: Icons.chat_bubble_outline, color: Colors.white, count: video.counts.comments),
         ),
         const SizedBox(height: 14),
         // Repost and gift are hidden on your own video — you can't repost or
@@ -541,7 +542,7 @@ class _ActionRail extends StatelessWidget {
             behavior: HitTestBehavior.opaque,
             onTap: onRepostTap,
             child: _RailButton(
-              icon: Icons.repeat_rounded,
+              icon: Icons.repeat,
               color: video.isReposted ? AppColors.badge : Colors.white,
               count: video.counts.reposts,
             ),
@@ -551,14 +552,16 @@ class _ActionRail extends StatelessWidget {
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onShareTap,
-          child: _RailButton(icon: Icons.reply, color: Colors.white, count: video.counts.shares, flipX: true),
+          // Web's share is a paper-plane (send), not a curved reply arrow.
+          child: _RailButton(icon: Icons.send, color: Colors.white, count: video.counts.shares),
         ),
         const SizedBox(height: 14),
         if (!isMine) ...[
           GestureDetector(
             behavior: HitTestBehavior.opaque,
+            // Web's gift is a white outline box, not an orange filled one.
             onTap: onGiftTap,
-            child: _RailButton(icon: Icons.card_giftcard, color: AppColors.accent, count: video.giftCoins),
+            child: _RailButton(icon: Icons.card_giftcard, color: Colors.white, count: video.giftCoins),
           ),
           const SizedBox(height: 14),
         ],
@@ -703,18 +706,17 @@ class _SoundDiscState extends State<_SoundDisc> with SingleTickerProviderStateMi
 }
 
 class _RailButton extends StatelessWidget {
-  const _RailButton({required this.icon, required this.color, required this.count, this.flipX = false});
+  const _RailButton({required this.icon, required this.color, required this.count});
   final IconData icon;
   final Color color;
   final int count;
-  final bool flipX;
 
   @override
   Widget build(BuildContext context) {
     final glyph = Icon(icon, color: color, size: 30, shadows: const [Shadow(color: Colors.black54, blurRadius: 6)]);
     return Column(
       children: [
-        flipX ? Transform.flip(flipX: true, child: glyph) : glyph,
+        glyph,
         const SizedBox(height: 4),
         Text(
           _formatCount(count),

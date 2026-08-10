@@ -120,7 +120,7 @@ class InboxScreen extends ConsumerWidget {
             child: BottomNavPill(
               items: const [
                 (icon: Icons.mail_outline, label: 'Messages'),
-                (icon: Icons.smart_display, label: 'Shorts'),
+                (icon: Icons.videocam, label: 'Feed'),
               ],
               activeIndex: 0,
               onTap: (i) {

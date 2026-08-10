@@ -1,6 +1,11 @@
 // Video app API — Cloudflare Worker
 // Bindings: DB (D1), MEDIA (R2)
 
+// Belo Flow — Belople's own recommendation engine (see src/belo_flow.js).
+import {
+  buildBeloFeed, recordExposure, loadConfig, mergeConfig, DEFAULT_CONFIG,
+} from "./belo_flow.js";
+
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 const json = (data, status = 200, extra = {}) =>
@@ -10,6 +15,7 @@ const err = (message, status = 400) => json({ error: message }, status);
 
 const uid = () => crypto.randomUUID();
 const now = () => Date.now();
+const round3 = (x) => (x == null || isNaN(x) ? 0 : Math.round(x * 1000) / 1000);
 
 // ---------- password hashing (PBKDF2, 100k iterations) ----------
 
@@ -287,7 +293,11 @@ async function hmacSha256(keyBytes, dataBytes) {
 // A short-lived JWT that identifies this server to the push service, signed
 // with the VAPID private key. One per request, scoped to that endpoint's origin.
 async function vapidHeader(env, endpoint) {
-  const jwk = JSON.parse(env.VAPID_PRIVATE_JWK);
+  // The secret was saved with a leading UTF-8 BOM at some point — JSON.parse
+  // rejects that byte outright, which silently killed every single push send
+  // from day one (an empty catch{} upstream hid the SyntaxError). Stripping
+  // it here is robust regardless of how the secret gets re-set in the future.
+  const jwk = JSON.parse(env.VAPID_PRIVATE_JWK.replace(/^﻿/, ""));
   const key = await crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
   const aud = new URL(endpoint).origin;
   const header = bytesToB64url(te.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
@@ -359,15 +369,32 @@ async function sendPush(env, userId, payloadObj) {
         headers: {
           "Content-Type": "application/octet-stream",
           "Content-Encoding": "aes128gcm",
-          "TTL": "60",
+          // A 60s TTL meant FCM silently dropped the message rather than
+          // queuing it for later if the device wasn't reachable at that
+          // exact instant (screen off, Android Doze mode) — the server saw
+          // a clean 201 either way, so this looked like success while the
+          // notification just never arrived. 4 weeks is the practical max
+          // that's still useful; Urgency: high asks FCM to prioritize
+          // waking the device rather than batching it with low-priority
+          // traffic, which matters specifically because of Doze/App
+          // Standby throttling non-urgent push on Android.
+          "TTL": "2419200",
+          "Urgency": "high",
           "Authorization": authHeader,
         },
         body,
       });
       if (res.status === 404 || res.status === 410) {
         await env.DB.prepare("DELETE FROM push_subscriptions WHERE id = ?").bind(sub.id).run();
+      } else if (!res.ok) {
+        // Was silently swallowed before — logged now (temporary, while
+        // diagnosing why nothing arrives) so `wrangler tail` actually shows
+        // what the push service objected to instead of nothing at all.
+        console.error("push failed", res.status, await res.text().catch(() => ""), sub.endpoint.slice(0, 60));
       }
-    } catch {}
+    } catch (e) {
+      console.error("push threw", e?.message || e);
+    }
   }));
 }
 
@@ -378,19 +405,26 @@ const NOTIF_TEXT = {
   follow: (name) => [`${name} started following you`, ""],
   gift: (name) => [`${name} sent you a gift`, ""],
   repost: (name) => [`${name} reposted your video`, ""],
+  ad_approved: () => ["Your ad is live", "It's now being shown to people."],
+  ad_rejected: () => ["Your ad wasn't approved", "It didn't meet the guidelines."],
+  ad_complete: () => ["Your ad finished", "It reached everyone it was paid for."],
 };
 
 // Writes the in-app notification (always) and fires a push (best-effort),
 // respecting the recipient's existing notify_* toggles — gifts are the one
 // exception, since money landing on your video shouldn't be optional.
 async function notify(env, ctx, userId, actorId, type, extra = {}) {
-  if (!userId || userId === actorId) return;
+  // ad_* are account notifications about your OWN ad, so a self-target is
+  // allowed there (ad_complete has no other actor); everything else blocks it.
+  if (!userId) return;
+  if (userId === actorId && !type.startsWith("ad_")) return;
   const recipient = await env.DB.prepare(
     "SELECT notify_likes, notify_comments, notify_follows FROM users WHERE id = ?"
   ).bind(userId).first();
   if (!recipient) return;
 
-  const pref = type === "follow" ? recipient.notify_follows
+  const pref = type.startsWith("ad_") ? 1 // ad approval/rejection/completion always notifies
+             : type === "follow" ? recipient.notify_follows
              : type === "like" || type === "repost" ? recipient.notify_likes
              : type === "gift" ? 1
              : recipient.notify_comments; // comment, reply
@@ -423,10 +457,12 @@ async function monetizeStats(env, userId) {
     SELECT
       (SELECT COUNT(*) FROM follows WHERE followee_id = ? AND status = 'accepted') AS followers,
       (SELECT COUNT(*) FROM likes l JOIN videos v ON v.id = l.video_id
-         WHERE v.user_id = ?) AS likes,
+         WHERE v.user_id = ?) +
+      (SELECT COUNT(*) FROM post_likes pl JOIN posts p ON p.id = pl.post_id
+         WHERE p.user_id = ?) AS likes,
       (SELECT COUNT(*) FROM videos WHERE user_id = ? AND repost_of IS NULL) AS videos,
       (SELECT COALESCE(SUM(views), 0) FROM videos WHERE user_id = ?) AS views
-  `).bind(userId, userId, userId, userId).first();
+  `).bind(userId, userId, userId, userId, userId).first();
 
   return {
     followers: row.followers,
@@ -516,6 +552,27 @@ const FEED_SQL = `
 // list is built (feed, search, profile), but not in admin views.
 const NOT_BANNED = " u.status != 'banned' ";
 
+// Round-robin rows across their creators so no single creator forms a run,
+// while preserving recency order within each creator's queue. Used by the
+// Following tab (Belo Flow handles this itself for the main feed). Gracefully
+// degrades: with only one creator it just returns them in order.
+function interleaveByCreator(rows, keyFn) {
+  const groups = new Map();
+  for (const r of rows) {
+    const k = keyFn(r);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  }
+  const queues = [...groups.values()];
+  const out = [];
+  let progress = true;
+  while (progress) {
+    progress = false;
+    for (const q of queues) if (q.length) { out.push(q.shift()); progress = true; }
+  }
+  return out;
+}
+
 const shapeVideo = r => ({
   id: r.id,
   caption: r.caption,
@@ -558,14 +615,52 @@ const shapeVideo = r => ({
 const shapeAd = r => ({
   id: r.id,
   isAd: true,
+  // 'admin' ads render minimal (one like, no author/comments); 'user' ads are
+  // self-serve and render with the creator + full engagement.
+  adKind: r.kind || "admin",
   adType: r.type,
-  mediaUrl: `/api/media/${r.media_key}`,
+  mediaUrl: r.media_key ? `/api/media/${r.media_key}` : null,
   sponsorName: r.sponsor_name,
   caption: r.caption,
   ctaText: r.cta_text,
   linkUrl: r.link_url,
   likes: r.like_count || 0,
   liked: !!r.liked,
+  comments: r.comment_count || 0,
+  reach: r.reach_target || null,
+  impressions: r.impressions || 0,
+  // The creator, shown as the author on user ads (null on admin ads).
+  user: r.owner_id ? {
+    id: r.owner_id,
+    username: r.owner_username,
+    displayName: r.owner_display_name || r.owner_username,
+    avatarUrl: r.owner_avatar_key ? `/api/media/${r.owner_avatar_key}` : null,
+  } : null,
+});
+
+const shapePost = (r) => ({
+  id: r.id,
+  content: r.content,
+  mediaUrl: r.media_key ? `/api/media/${r.media_key}` : null,
+  mediaType: r.media_type,            // 'image' | null
+  width: r.width,
+  height: r.height,
+  createdAt: r.created_at,
+  user: {
+    id: r.user_id,
+    username: r.username,
+    displayName: r.display_name,
+    avatarUrl: r.avatar_key ? `/api/media/${r.avatar_key}` : null,
+    // The verified tick is driven by this and nothing else. It's a claim
+    // about who someone is, so it has to come from the data.
+    role: r.role,
+  },
+  counts: { likes: r.like_count, comments: r.comment_count, shares: r.share_count },
+  liked: !!r.liked,
+  following: !!r.following,
+  // Only the last few comments ride along with the feed — see the note on
+  // the feed route below.
+  comments: r.preview_comments || [],
 });
 
 // ---------- routes ----------
@@ -1021,82 +1116,97 @@ async function handle(request, env, ctx) {
 
   // ----- feed -----
   if (path === "/api/feed" && method === "GET") {
-    const tab = url.searchParams.get("tab") || "foryou";
+    // "belo" is the real name of the main recommendation feed; "foryou" is kept
+    // as an alias for older clients. Both route through Belo Flow.
+    const tab = url.searchParams.get("tab") || "belo";
     const limit = Math.min(parseInt(url.searchParams.get("limit") || "15"), 30);
     const cursor = url.searchParams.get("cursor");
+    const seed = url.searchParams.get("session");
     const viewerId = user?.id || "";
 
-    let sql = FEED_SQL;
-    const binds = [viewerId, viewerId];
-
-    // Visibility gate, applied to every tab: your own videos always show;
-    // public shows to all UNLESS the owner's account is private; followers-only
-    // (or any video from a private account) needs an accepted follow; private
-    // videos never show to anyone else. The account-level "Private account"
-    // switch effectively downgrades that user's public videos to followers-only.
-    const visible = `(
-      v.user_id = ?
-      OR (v.visibility = 'public' AND u.is_private = 0)
-      OR ((v.visibility = 'followers' OR u.is_private = 1) AND v.visibility != 'private' AND EXISTS(
-            SELECT 1 FROM follows f
-            WHERE f.follower_id = ? AND f.followee_id = v.user_id AND f.status = 'accepted'
-          ))
-    )`;
-
-    let offset = 0;
-
+    // ----- FOLLOWING: explicit follows, freshest first, creator-interleaved -----
     if (tab === "following") {
       requireUser(user);
-      sql += ` WHERE ${NOT_BANNED} AND ${visible} AND v.user_id IN (
-                 SELECT followee_id FROM follows
-                 WHERE follower_id = ? AND status = 'accepted'
-               )`;
-      binds.push(viewerId, viewerId, user.id);
+      const visible = `(
+        v.user_id = ?
+        OR (v.visibility = 'public' AND u.is_private = 0)
+        OR ((v.visibility = 'followers' OR u.is_private = 1) AND v.visibility != 'private' AND EXISTS(
+              SELECT 1 FROM follows f
+              WHERE f.follower_id = ? AND f.followee_id = v.user_id AND f.status = 'accepted'))
+      )`;
+      let sql = FEED_SQL + ` WHERE ${NOT_BANNED} AND ${visible} AND v.user_id IN (
+                 SELECT followee_id FROM follows WHERE follower_id = ? AND status = 'accepted')`;
+      const binds = [viewerId, viewerId, viewerId, viewerId, user.id];
       if (cursor) { sql += " AND v.created_at < ?"; binds.push(parseInt(cursor)); }
+      // Pull a little extra so the interleave has room to separate creators.
       sql += " ORDER BY v.created_at DESC LIMIT ?";
-      binds.push(limit);
-    } else {
-      sql += ` WHERE ${NOT_BANNED} AND ${visible}`;
-      binds.push(viewerId, viewerId);
+      binds.push(limit + 6);
+      const { results } = await env.DB.prepare(sql).bind(...binds).all();
+      // Even in Following, don't show a run of one creator when others have
+      // fresh content — round-robin interleave, preserving recency within each.
+      const ordered = interleaveByCreator(results, (r) => r.repost_of_user_id || r.user_id).slice(0, limit);
+      const videos = ordered.map(shapeVideo);
+      const nextCursor = results.length > limit
+        ? String(ordered[ordered.length - 1].created_at) : null;
+      return json({ videos, nextCursor });
+    }
 
-      // "For you" ranks by recent engagement decayed by age (a small "hot"
-      // score) with a flat boost for creators the viewer follows, instead of
-      // pure recency — a feed that's only ever "newest first" never
-      // resurfaces something good that's an hour old. created_at stays as
-      // the tiebreaker so ties don't reorder between requests.
-      offset = cursor ? Math.max(0, parseInt(cursor)) : 0;
-      sql += `
+    // ----- BELO: the recommendation feed (Belo Flow) -----
+    let videos, nextCursor;
+    try {
+      const { rows, nextOffset } = await buildBeloFeed(env, { viewerId, limit, cursor, seed });
+      videos = rows.map((r) => {
+        const v = shapeVideo(r);
+        v.recoReason = r.recoReason || null;   // explainable "why you see this"
+        v.recoBucket = r.recoBucket || null;   // personalized|discovery|trending|exploration
+        return v;
+      });
+      nextCursor = nextOffset != null ? String(nextOffset) : null;
+    } catch (e) {
+      // Belo Flow needs the 002_belo_flow migration. Until it's applied, fall
+      // back to the legacy hot-score ranking so the feed is never empty.
+      console.error("Belo Flow fell back to legacy ranking:", e?.message || e);
+      const visible = `(
+        v.user_id = ?
+        OR (v.visibility = 'public' AND u.is_private = 0)
+        OR ((v.visibility = 'followers' OR u.is_private = 1) AND v.visibility != 'private' AND EXISTS(
+              SELECT 1 FROM follows f
+              WHERE f.follower_id = ? AND f.followee_id = v.user_id AND f.status = 'accepted'))
+      )`;
+      const offset = cursor ? Math.max(0, parseInt(cursor)) : 0;
+      const sql = FEED_SQL + ` WHERE ${NOT_BANNED} AND ${visible}
         ORDER BY (
           (COALESCE(like_count,0) * 3 + COALESCE(comment_count,0) * 4 +
            COALESCE(share_count,0) * 5 + COALESCE(repost_count,0) * 3 +
            v.views * 0.05 + 1)
           / pow((? - v.created_at) / 3600000.0 + 2, 1.5)
-          + (CASE WHEN EXISTS(
-               SELECT 1 FROM follows f2
-               WHERE f2.follower_id = ? AND f2.followee_id = v.user_id AND f2.status = 'accepted'
-             ) THEN 80 ELSE 0 END)
-        ) DESC, v.created_at DESC
-        LIMIT ? OFFSET ?
-      `;
-      binds.push(now(), viewerId, limit, offset);
+          + (CASE WHEN EXISTS(SELECT 1 FROM follows f2
+               WHERE f2.follower_id = ? AND f2.followee_id = v.user_id AND f2.status = 'accepted')
+             THEN 80 ELSE 0 END)
+        ) DESC, v.created_at DESC LIMIT ? OFFSET ?`;
+      const { results } = await env.DB.prepare(sql)
+        .bind(viewerId, viewerId, viewerId, viewerId, now(), viewerId, limit, offset).all();
+      videos = results.map(shapeVideo);
+      nextCursor = results.length === limit ? String(offset + limit) : null;
     }
 
-    const { results } = await env.DB.prepare(sql).bind(...binds).all();
-    const videos = results.map(shapeVideo);
-
-    let nextCursor;
-    if (tab === "following") {
-      nextCursor = videos.length === limit ? String(results[results.length - 1].created_at) : null;
-    } else {
-      nextCursor = results.length === limit ? String(offset + limit) : null;
+    {
       // One ad woven into each batch, a few videos in rather than first thing —
       // never on the (ad-free) following tab.
       if (videos.length >= 3) {
         const ad = await env.DB.prepare(`
           SELECT a.*,
-            (SELECT COUNT(*) FROM ad_likes WHERE ad_id = a.id) AS like_count,
-            EXISTS(SELECT 1 FROM ad_likes WHERE ad_id = a.id AND user_id = ?) AS liked
-          FROM ads a WHERE a.status = 'active' ORDER BY RANDOM() LIMIT 1
+            (SELECT COUNT(*) FROM ad_likes    WHERE ad_id = a.id) AS like_count,
+            (SELECT COUNT(*) FROM ad_comments WHERE ad_id = a.id) AS comment_count,
+            EXISTS(SELECT 1 FROM ad_likes WHERE ad_id = a.id AND user_id = ?) AS liked,
+            ou.id AS owner_id, ou.username AS owner_username,
+            ou.display_name AS owner_display_name, ou.avatar_key AS owner_avatar_key
+          FROM ads a
+          LEFT JOIN users ou ON ou.id = a.created_by AND a.kind = 'user'
+          WHERE a.status = 'active'
+            AND (a.kind = 'admin'
+                 OR (a.paid = 1 AND (a.reach_target IS NULL OR a.impressions < a.reach_target)))
+          ORDER BY RANDOM() LIMIT 1
         `).bind(user?.id || "").first();
         if (ad) videos.splice(Math.min(4, videos.length), 0, shapeAd(ad));
       }
@@ -1105,11 +1215,300 @@ async function handle(request, env, ctx) {
     return json({ videos, nextCursor });
   }
 
+  // ----- public: photo feed -----
+  if (path === "/api/posts" && method === "GET") {
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "15"), 30);
+    const cursor = url.searchParams.get("cursor");
+    const viewerId = user?.id || "";
+
+    let sql = `
+      SELECT p.id, p.content, p.media_key, p.media_type, p.width, p.height, p.created_at,
+             u.id AS user_id, u.username, u.display_name, u.avatar_key, u.role,
+             (SELECT COUNT(*) FROM post_likes    WHERE post_id = p.id) AS like_count,
+             (SELECT COUNT(*) FROM post_comments WHERE post_id = p.id) AS comment_count,
+             (SELECT COUNT(*) FROM post_shares   WHERE post_id = p.id) AS share_count,
+             EXISTS(SELECT 1 FROM post_likes WHERE post_id = p.id AND user_id = ?) AS liked,
+             EXISTS(SELECT 1 FROM follows f
+                     WHERE f.follower_id = ? AND f.followee_id = u.id
+                       AND f.status = 'accepted')                       AS following
+      FROM posts p JOIN users u ON u.id = p.user_id
+      WHERE u.status != 'banned'
+    `;
+    const binds = [viewerId, viewerId];
+    if (cursor) { sql += " AND p.created_at < ?"; binds.push(parseInt(cursor)); }
+    sql += " ORDER BY p.created_at DESC LIMIT ?";
+    binds.push(limit);
+
+    const { results } = await env.DB.prepare(sql).bind(...binds).all();
+
+    // Attach the two most recent comments per post in ONE query rather than one
+    // per post. With 15 posts that's the difference between 2 queries and 16 —
+    // and D1 charges per query, so the loop version gets expensive as the feed
+    // grows, not just slow.
+    if (results.length) {
+      const ids = results.map(r => r.id);
+      const marks = ids.map(() => "?").join(",");
+      const { results: cmts } = await env.DB.prepare(`
+        SELECT * FROM (
+          SELECT c.id, c.post_id, c.body, c.created_at,
+                 u.username, u.display_name, u.avatar_key,
+                 ROW_NUMBER() OVER (PARTITION BY c.post_id ORDER BY c.created_at DESC) AS rn
+          FROM post_comments c JOIN users u ON u.id = c.user_id
+          WHERE c.post_id IN (${marks}) AND u.status != 'banned'
+        ) WHERE rn <= 2
+      `).bind(...ids).all();
+
+      const byPost = new Map();
+      for (const c of cmts) {
+        if (!byPost.has(c.post_id)) byPost.set(c.post_id, []);
+        byPost.get(c.post_id).push({
+          id: c.id,
+          body: c.body,
+          createdAt: c.created_at,
+          user: {
+            username: c.username,
+            displayName: c.display_name,
+            avatarUrl: c.avatar_key ? `/api/media/${c.avatar_key}` : null,
+          },
+        });
+      }
+      // Oldest first within each post, so they read top to bottom like a
+      // conversation rather than newest-first like a list.
+      for (const r of results) r.preview_comments = (byPost.get(r.id) || []).reverse();
+    }
+
+    return json({
+      posts: results.map(shapePost),
+      nextCursor: results.length === limit
+        ? String(results[results.length - 1].created_at) : null,
+    });
+  }
+
+  if (path === "/api/posts" && method === "POST") {
+    requireUser(user);
+    const form = await request.formData();
+    const content = (form.get("content") || "").trim();
+    const file = form.get("image");
+    const hasFile = file && typeof file !== "string";
+
+    // Public is photos or text — never neither. Videos still go to the main
+    // feed. Enforced here, not just hidden in the UI, because a client can
+    // post whatever it likes and a genuinely empty row would render as a
+    // blank card in the feed.
+    if (!hasFile && !content) {
+      return err("Add a photo or write something");
+    }
+    if (content.length > 2000) return err("Post must be under 2000 characters");
+
+    const id = uid();
+    let mediaKey = null, mediaType = null, width = null, height = null;
+
+    if (file && typeof file !== "string") {
+      if (!/^image\//.test(file.type)) return err("That file isn't an image");
+      if (file.size > 10 * 1024 * 1024) return err("Image must be under 10MB");
+      const ext = (file.type.split("/")[1] || "jpg").split("+")[0];
+      mediaKey = `posts/${user.id}/${id}.${ext}`;
+      mediaType = "image";
+      width  = parseInt(form.get("width"))  || null;
+      height = parseInt(form.get("height")) || null;
+      await env.MEDIA.put(mediaKey, file.stream(), {
+        httpMetadata: { contentType: file.type },
+      });
+    }
+
+    await env.DB.prepare(`
+      INSERT INTO posts (id, user_id, content, media_key, media_type, width, height, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(id, user.id, content || null, mediaKey, mediaType, width, height, now()).run();
+
+    const row = await env.DB.prepare(`
+      SELECT p.*, u.id AS user_id, u.username, u.display_name, u.avatar_key,
+             0 AS like_count, 0 AS comment_count, 0 AS liked, 0 AS following
+      FROM posts p JOIN users u ON u.id = p.user_id WHERE p.id = ?
+    `).bind(id).first();
+    return json({ post: shapePost(row) }, 201);
+  }
+
+  const postLikeMatch = /^\/api\/posts\/([\w-]+)\/like$/.exec(path);
+  if (postLikeMatch && (method === "POST" || method === "DELETE")) {
+    requireUser(user);
+    const postId = postLikeMatch[1];
+    if (method === "POST") {
+      const post = await env.DB.prepare("SELECT user_id FROM posts WHERE id = ?").bind(postId).first();
+      if (!post) return err("Post not found", 404);
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO post_likes (post_id, user_id, created_at) VALUES (?, ?, ?)"
+      ).bind(postId, user.id, now()).run();
+    } else {
+      await env.DB.prepare(
+        "DELETE FROM post_likes WHERE post_id = ? AND user_id = ?"
+      ).bind(postId, user.id).run();
+    }
+    const c = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM post_likes WHERE post_id = ?"
+    ).bind(postId).first();
+    return json({ liked: method === "POST", count: c.n });
+  }
+
+  const postCommentsMatch = /^\/api\/posts\/([\w-]+)\/comments$/.exec(path);
+
+  if (postCommentsMatch && method === "GET") {
+    const { results } = await env.DB.prepare(`
+      SELECT c.id, c.body, c.created_at, c.parent_id,
+             u.id AS user_id, u.username, u.display_name, u.avatar_key, u.role,
+             (SELECT COUNT(*) FROM post_comment_likes WHERE comment_id = c.id) AS like_count,
+             EXISTS(SELECT 1 FROM post_comment_likes
+                     WHERE comment_id = c.id AND user_id = ?)                  AS liked
+      FROM post_comments c JOIN users u ON u.id = c.user_id
+      WHERE c.post_id = ? AND u.status != 'banned'
+      ORDER BY c.created_at ASC LIMIT 200
+    `).bind(user?.id || "", postCommentsMatch[1]).all();
+    return json({
+      comments: results.map(c => ({
+        id: c.id, body: c.body, createdAt: c.created_at, parentId: c.parent_id,
+        likes: c.like_count, liked: !!c.liked,
+        user: {
+          id: c.user_id, username: c.username, displayName: c.display_name,
+          avatarUrl: c.avatar_key ? `/api/media/${c.avatar_key}` : null,
+          role: c.role,
+        },
+      })),
+    });
+  }
+
+  if (postCommentsMatch && method === "POST") {
+    requireUser(user);
+    const { body, parentId } = await request.json();
+    if (!body?.trim()) return err("Write something first");
+    if (body.length > 500) return err("Comment must be under 500 characters");
+
+    // The post author's "who can comment" setting applies here exactly as it
+    // does on videos. Two comment systems with two different privacy rules
+    // would be a setting that silently doesn't mean what it says.
+    const post = await env.DB.prepare(`
+      SELECT p.user_id, u.allow_comments FROM posts p
+      JOIN users u ON u.id = p.user_id WHERE p.id = ?
+    `).bind(postCommentsMatch[1]).first();
+    if (!post) return err("Post not found", 404);
+    if (post.user_id !== user.id) {
+      const pref = post.allow_comments || "everyone";
+      if (pref === "nobody") return err("Comments are turned off for this post", 403);
+      if (pref === "followers") {
+        const f = await env.DB.prepare(
+          "SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ? AND status = 'accepted'"
+        ).bind(user.id, post.user_id).first();
+        if (!f) return err("Only followers can comment on this post", 403);
+      }
+    }
+
+    // A reply must actually point at a comment on this same post — otherwise
+    // a stray/forged parentId could nest a reply under an unrelated post's
+    // comment.
+    let parent = null;
+    if (parentId) {
+      parent = await env.DB.prepare(
+        "SELECT id, user_id FROM post_comments WHERE id = ? AND post_id = ?"
+      ).bind(parentId, postCommentsMatch[1]).first();
+      if (!parent) return err("That comment no longer exists", 404);
+    }
+
+    const id = uid();
+    await env.DB.prepare(
+      "INSERT INTO post_comments (id, post_id, user_id, body, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(id, postCommentsMatch[1], user.id, body.trim(), parent?.id || null, now()).run();
+    const c = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM post_comments WHERE post_id = ?"
+    ).bind(postCommentsMatch[1]).first();
+
+    if (parent && parent.user_id !== user.id) {
+      await notify(env, ctx, parent.user_id, user.id, "reply", { commentId: id, text: body.trim() });
+    }
+
+    return json({
+      comment: {
+        id, body: body.trim(), createdAt: now(), parentId: parent?.id || null,
+        likes: 0, liked: false,
+        user: { ...publicUser(user), role: user.role },
+      },
+      count: c.n,
+    }, 201);
+  }
+
+  const postShareMatch = /^\/api\/posts\/([\w-]+)\/share$/.exec(path);
+  if (postShareMatch && method === "POST") {
+    requireUser(user);
+    const post = await env.DB.prepare("SELECT id FROM posts WHERE id = ?").bind(postShareMatch[1]).first();
+    if (!post) return err("Post not found", 404);
+    await env.DB.prepare(
+      "INSERT INTO post_shares (id, post_id, user_id, created_at) VALUES (?, ?, ?, ?)"
+    ).bind(uid(), post.id, user.id, now()).run();
+    const c = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM post_shares WHERE post_id = ?"
+    ).bind(post.id).first();
+    return json({ count: c.n });
+  }
+  // Note this records every share, not one per person — the same person sharing
+  // twice counts twice, which is what a share count is supposed to mean. That's
+  // deliberately different from likes, where a second tap toggles rather than
+  // adding.
+
+  const cmtLikeMatch = /^\/api\/posts\/comments\/([\w-]+)\/like$/.exec(path);
+  if (cmtLikeMatch && (method === "POST" || method === "DELETE")) {
+    requireUser(user);
+    const cid = cmtLikeMatch[1];
+    if (method === "POST") {
+      const c = await env.DB.prepare("SELECT id FROM post_comments WHERE id = ?").bind(cid).first();
+      if (!c) return err("Comment not found", 404);
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO post_comment_likes (comment_id, user_id, created_at) VALUES (?, ?, ?)"
+      ).bind(cid, user.id, now()).run();
+    } else {
+      await env.DB.prepare(
+        "DELETE FROM post_comment_likes WHERE comment_id = ? AND user_id = ?"
+      ).bind(cid, user.id).run();
+    }
+    const n = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM post_comment_likes WHERE comment_id = ?"
+    ).bind(cid).first();
+    return json({ liked: method === "POST", count: n.n });
+  }
+
+  const postMatch = /^\/api\/posts\/([\w-]+)$/.exec(path);
+  if (postMatch && method === "DELETE") {
+    requireUser(user);
+    const p = await env.DB.prepare("SELECT * FROM posts WHERE id = ?").bind(postMatch[1]).first();
+    if (!p) return err("Post not found", 404);
+    if (p.user_id !== user.id) return err("That isn't your post", 403);
+    if (p.media_key) await env.MEDIA.delete(p.media_key).catch(() => {});
+    // Comment likes are cleared through their comments — deleting the comments
+    // alone would leave orphan rows in post_comment_likes that nothing can ever
+    // reach or clean up.
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM post_comment_likes WHERE comment_id IN
+                        (SELECT id FROM post_comments WHERE post_id = ?)`).bind(p.id),
+      env.DB.prepare("DELETE FROM post_likes    WHERE post_id = ?").bind(p.id),
+      env.DB.prepare("DELETE FROM post_comments WHERE post_id = ?").bind(p.id),
+      env.DB.prepare("DELETE FROM post_shares   WHERE post_id = ?").bind(p.id),
+      env.DB.prepare("DELETE FROM posts         WHERE id = ?").bind(p.id),
+    ]);
+    return json({ ok: true });
+  }
+
   // ----- ads: public view/click tracking -----
   const adViewMatch = /^\/api\/ads\/([\w-]+)\/view$/.exec(path);
   if (adViewMatch && method === "POST") {
     await env.DB.prepare("UPDATE ads SET impressions = impressions + 1 WHERE id = ?")
       .bind(adViewMatch[1]).run();
+    // A paid user ad that has reached its target audience stops showing, and
+    // the owner is notified it's done (with the final view count in stats).
+    const ad = await env.DB.prepare(
+      "SELECT created_by, kind, status, impressions, reach_target FROM ads WHERE id = ?"
+    ).bind(adViewMatch[1]).first();
+    if (ad && ad.kind === "user" && ad.status === "active"
+        && ad.reach_target && ad.impressions >= ad.reach_target) {
+      await env.DB.prepare("UPDATE ads SET status = 'complete' WHERE id = ?").bind(adViewMatch[1]).run();
+      await notify(env, ctx, ad.created_by, ad.created_by, "ad_complete", { adId: adViewMatch[1] });
+    }
     return json({ ok: true });
   }
 
@@ -1134,6 +1533,127 @@ async function handle(request, env, ctx) {
     }
     const c = await env.DB.prepare("SELECT COUNT(*) AS n FROM ad_likes WHERE ad_id = ?").bind(adLikeMatch[1]).first();
     return json({ liked: method === "POST", count: c.n });
+  }
+
+  // ----- self-serve ads (users create + pay; admin approves) -----
+  // reach → required price in cents, the single source of truth for pricing.
+  const AD_TIERS = { 1000: 200, 10000: 2000, 200000: 20000 };
+
+  if (path === "/api/ads" && method === "POST") {
+    requireUser(user);
+    const form = await request.formData();
+    const kind = (form.get("kind") || "").trim();          // 'video' | 'image' | 'link'
+    const reach = parseInt(form.get("reach")) || 0;
+    const priceCents = parseInt(form.get("priceCents")) || 0;
+    if (!AD_TIERS[reach]) return err("Pick a valid reach tier");
+    if (priceCents !== AD_TIERS[reach]) return err("Price doesn't match the selected reach");
+
+    const linkUrl = (form.get("linkUrl") || "").trim();
+    const caption = (form.get("caption") || "").trim();
+    const ctaText = (form.get("ctaText") || "Learn more").trim();
+
+    let type = null, mediaKey = null;
+    if (kind === "link") {
+      if (!/^https?:\/\//i.test(linkUrl)) return err("A valid link (http/https) is required");
+      type = "link";
+    } else {
+      const file = form.get("media");
+      if (!file || typeof file === "string") return err("A photo or video is required");
+      type = /^video\//.test(file.type) ? "video" : /^image\//.test(file.type) ? "image" : null;
+      if (!type) return err("File must be an image or a video");
+      const mid = uid();
+      const ext = (file.name?.split(".").pop() || (type === "video" ? "mp4" : "jpg")).toLowerCase();
+      mediaKey = `ads/${mid}.${ext}`;
+      await env.MEDIA.put(mediaKey, file.stream(), { httpMetadata: { contentType: file.type } });
+    }
+
+    const id = uid();
+    await env.DB.prepare(`
+      INSERT INTO ads (id, kind, type, media_key, sponsor_name, caption, cta_text, link_url,
+                       status, reach_target, price_cents, paid, impressions, clicks, created_by, created_at)
+      VALUES (?, 'user', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, 0, 0, ?, ?)
+    `).bind(id, type, mediaKey, user.display_name || user.username, caption, ctaText,
+            linkUrl || null, reach, priceCents, user.id, now()).run();
+    return json({ ad: { id } }, 201);
+  }
+
+  // Checkout — STUBBED until a real payment provider is wired in. Marks the ad
+  // paid so it enters the admin review queue. TODO: charge, only mark on success.
+  const adPayMatch = /^\/api\/ads\/([\w-]+)\/pay$/.exec(path);
+  if (adPayMatch && method === "POST") {
+    requireUser(user);
+    const ad = await env.DB.prepare("SELECT id, paid FROM ads WHERE id = ? AND created_by = ?")
+      .bind(adPayMatch[1], user.id).first();
+    if (!ad) return err("Ad not found", 404);
+    if (!ad.paid) await env.DB.prepare("UPDATE ads SET paid = 1 WHERE id = ?").bind(ad.id).run();
+    return json({ ok: true });
+  }
+
+  // The caller's own ads with live stats (views/clicks/status).
+  if (path === "/api/ads/mine" && method === "GET") {
+    requireUser(user);
+    const { results } = await env.DB.prepare(`
+      SELECT a.*, (SELECT COUNT(*) FROM ad_likes    WHERE ad_id = a.id) AS like_count,
+                  (SELECT COUNT(*) FROM ad_comments WHERE ad_id = a.id) AS comment_count
+      FROM ads a WHERE a.created_by = ? AND a.kind = 'user' ORDER BY a.created_at DESC
+    `).bind(user.id).all();
+    return json({ ads: results.map(a => ({
+      ...shapeAd(a), status: a.status, paid: !!a.paid,
+      reach: a.reach_target, impressions: a.impressions, clicks: a.clicks,
+      priceCents: a.price_cents, createdAt: a.created_at,
+    })) });
+  }
+
+  // Comments on a user ad (list + add).
+  const adCommentsMatch = /^\/api\/ads\/([\w-]+)\/comments$/.exec(path);
+  if (adCommentsMatch && method === "GET") {
+    const { results } = await env.DB.prepare(`
+      SELECT c.id, c.body, c.created_at, u.username, u.display_name, u.avatar_key
+      FROM ad_comments c JOIN users u ON u.id = c.user_id
+      WHERE c.ad_id = ? ORDER BY c.created_at ASC LIMIT 200
+    `).bind(adCommentsMatch[1]).all();
+    return json({ comments: results.map(c => ({
+      id: c.id, body: c.body, createdAt: c.created_at,
+      user: { username: c.username, displayName: c.display_name,
+              avatarUrl: c.avatar_key ? `/api/media/${c.avatar_key}` : null },
+    })) });
+  }
+  if (adCommentsMatch && method === "POST") {
+    requireUser(user);
+    const { body } = await request.json();
+    const text = (body || "").trim();
+    if (!text) return err("Comment can't be empty");
+    await env.DB.prepare("INSERT INTO ad_comments (id, ad_id, user_id, body, created_at) VALUES (?, ?, ?, ?, ?)")
+      .bind(uid(), adCommentsMatch[1], user.id, text, now()).run();
+    const c = await env.DB.prepare("SELECT COUNT(*) AS n FROM ad_comments WHERE ad_id = ?").bind(adCommentsMatch[1]).first();
+    return json({ ok: true, count: c.n }, 201);
+  }
+
+  // Admin review queue + approve/reject.
+  if (path === "/api/admin/ads/pending" && method === "GET") {
+    requireStaff(user);
+    const { results } = await env.DB.prepare(`
+      SELECT a.*, u.username AS owner_username, u.display_name AS owner_display_name, u.avatar_key AS owner_avatar_key,
+             a.created_by AS owner_id
+      FROM ads a JOIN users u ON u.id = a.created_by
+      WHERE a.kind = 'user' AND a.paid = 1 AND a.status = 'pending'
+      ORDER BY a.created_at ASC
+    `).all();
+    return json({ ads: results.map(a => ({
+      ...shapeAd(a), status: a.status, reach: a.reach_target, priceCents: a.price_cents, createdAt: a.created_at,
+    })) });
+  }
+  const adDecideMatch = /^\/api\/admin\/ads\/([\w-]+)\/(approve|reject)$/.exec(path);
+  if (adDecideMatch && method === "POST") {
+    requireStaff(user);
+    const ad = await env.DB.prepare("SELECT id, created_by FROM ads WHERE id = ?").bind(adDecideMatch[1]).first();
+    if (!ad) return err("Ad not found", 404);
+    const approve = adDecideMatch[2] === "approve";
+    await env.DB.prepare("UPDATE ads SET status = ? WHERE id = ?")
+      .bind(approve ? "active" : "rejected", ad.id).run();
+    await logAdmin(env, user.id, approve ? "ad_approved" : "ad_rejected", "ad", ad.id);
+    await notify(env, ctx, ad.created_by, user.id, approve ? "ad_approved" : "ad_rejected", { adId: ad.id });
+    return json({ ok: true, status: approve ? "active" : "rejected" });
   }
 
   // ----- admin: ads -----
@@ -1272,6 +1792,7 @@ async function handle(request, env, ctx) {
     if (endpoint) await env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?").bind(endpoint, user.id).run();
     return json({ ok: true });
   }
+
 
   // ----- upload -----
   if (path === "/api/videos" && method === "POST") {
@@ -1412,11 +1933,144 @@ async function handle(request, env, ctx) {
     return json({ ok: true });
   }
 
-  // ----- view counter -----
+  // ----- view + watch signal (feeds Belo Flow's "I just saw this" memory) -----
   const viewMatch = /^\/api\/videos\/([\w-]+)\/view$/.exec(path);
   if (viewMatch && method === "POST") {
-    await env.DB.prepare("UPDATE videos SET views = views + 1 WHERE id = ?").bind(viewMatch[1]).run();
+    const videoId = viewMatch[1];
+    // Raw counter stays (backwards compatible); ranking uses DISTINCT viewers.
+    await env.DB.prepare("UPDATE videos SET views = views + 1 WHERE id = ?").bind(videoId).run();
+
+    // Optional watch payload from the player: how long/how much was watched, and
+    // whether it was an early swipe, a replay, or a "not interested". All best-
+    // effort — a bare view (no body) still works. Only recorded for signed-in
+    // users, since exposures are per-viewer.
+    if (user) {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const meta = await env.DB.prepare(
+          "SELECT v.duration, v.caption, COALESCE(v.repost_of, v.id) AS content_id, " +
+          "COALESCE(ru.id, u.id) AS creator_id, cu.interests AS creator_interests " +
+          "FROM videos v JOIN users u ON u.id = v.user_id " +
+          "LEFT JOIN videos rv ON rv.id = v.repost_of LEFT JOIN users ru ON ru.id = rv.user_id " +
+          "LEFT JOIN users cu ON cu.id = COALESCE(ru.id, u.id) WHERE v.id = ?"
+        ).bind(videoId).first();
+        if (meta) {
+          const durationMs = Math.round(((body.durationMs ?? (meta.duration || 0) * 1000)) || 0);
+          const watchMs = Math.max(0, Math.round(body.watchMs || 0));
+          const completion = durationMs > 0 ? Math.min(1, watchMs / durationMs) : 0;
+          await recordExposure(env, {
+            viewerId: user.id,
+            videoId,
+            creatorId: meta.creator_id,
+            caption: meta.caption || "",
+            declaredInterests: meta.creator_interests || [],
+            watchMs,
+            durationMs,
+            completed: completion >= 0.9 || !!body.completed,
+            // An early swipe: less than 2s watched AND under 20% of the clip.
+            skipped: !!body.skipped || (watchMs > 0 && watchMs < 2000 && completion < 0.2),
+            replayed: !!body.replayed,
+            notInterested: !!body.notInterested,
+          });
+        }
+      } catch (_) { /* never let signal capture break the view call */ }
+    }
     return json({ ok: true });
+  }
+
+  // ----- "not interested" — a strong negative signal (hides similar content) -----
+  const notInterestedMatch = /^\/api\/videos\/([\w-]+)\/not-interested$/.exec(path);
+  if (notInterestedMatch && method === "POST") {
+    requireUser(user);
+    const videoId = notInterestedMatch[1];
+    const meta = await env.DB.prepare(
+      "SELECT v.caption, COALESCE(ru.id, u.id) AS creator_id, cu.interests AS creator_interests " +
+      "FROM videos v JOIN users u ON u.id = v.user_id " +
+      "LEFT JOIN videos rv ON rv.id = v.repost_of LEFT JOIN users ru ON ru.id = rv.user_id " +
+      "LEFT JOIN users cu ON cu.id = COALESCE(ru.id, u.id) WHERE v.id = ?"
+    ).bind(videoId).first();
+    if (meta) {
+      await recordExposure(env, {
+        viewerId: user.id, videoId, creatorId: meta.creator_id,
+        caption: meta.caption || "", declaredInterests: meta.creator_interests || [],
+        notInterested: true,
+      });
+    }
+    return json({ ok: true });
+  }
+
+  // ----- Belo Flow: runtime-tunable weights (admin) -----
+  if (path === "/api/reco/config" && method === "GET") {
+    requireUser(user);
+    if (!isAdmin(user)) throw new HttpError("Admins only", 403);
+    return json({ config: await loadConfig(env), defaults: DEFAULT_CONFIG });
+  }
+  if (path === "/api/reco/config" && method === "PATCH") {
+    requireUser(user);
+    if (!isAdmin(user)) throw new HttpError("Admins only", 403);
+    const patch = await request.json().catch(() => ({}));
+    // Validate by merging onto defaults, then persist the merged result.
+    const merged = mergeConfig(patch);
+    await env.DB.prepare(
+      "INSERT INTO reco_config (id, json, updated_at) VALUES (1, ?, ?) " +
+      "ON CONFLICT(id) DO UPDATE SET json = ?, updated_at = ?"
+    ).bind(JSON.stringify(merged), now(), JSON.stringify(merged), now()).run();
+    return json({ config: merged });
+  }
+
+  // ----- Belo Flow analytics: platform overview (admin) -----
+  if (path === "/api/analytics/overview" && method === "GET") {
+    requireUser(user);
+    if (!isAdmin(user)) throw new HttpError("Admins only", 403);
+    const dayAgo = now() - 24 * 3600 * 1000;
+    const weekAgo = now() - 7 * 24 * 3600 * 1000;
+    const [users, content, engagement, dau, wau] = await Promise.all([
+      env.DB.prepare("SELECT COUNT(*) AS n FROM users").first(),
+      env.DB.prepare("SELECT COUNT(*) AS n FROM videos").first(),
+      env.DB.prepare(
+        "SELECT COUNT(*) AS exposures, COUNT(DISTINCT user_id) AS viewers, " +
+        "AVG(completion) AS avg_completion, AVG(watch_ms) AS avg_watch_ms, " +
+        "SUM(CASE WHEN skipped > 0 THEN 1 ELSE 0 END) AS skip_events " +
+        "FROM video_exposures"
+      ).first().catch(() => ({})),
+      env.DB.prepare("SELECT COUNT(DISTINCT user_id) AS n FROM video_exposures WHERE last_seen_at > ?").bind(dayAgo).first().catch(() => ({ n: 0 })),
+      env.DB.prepare("SELECT COUNT(DISTINCT user_id) AS n FROM video_exposures WHERE last_seen_at > ?").bind(weekAgo).first().catch(() => ({ n: 0 })),
+    ]);
+    const exposures = engagement.exposures || 0;
+    return json({
+      users: users.n, videos: content.n,
+      dau: dau.n || 0, wau: wau.n || 0,
+      exposures, uniqueViewers: engagement.viewers || 0,
+      avgCompletion: round3(engagement.avg_completion), avgWatchMs: Math.round(engagement.avg_watch_ms || 0),
+      skipRate: exposures ? round3((engagement.skip_events || 0) / exposures) : 0,
+    });
+  }
+
+  // ----- Belo Flow analytics: a creator's own reach/discovery metrics -----
+  if (path === "/api/analytics/creator" && method === "GET") {
+    requireUser(user);
+    const followers = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM follows WHERE followee_id = ? AND status = 'accepted'"
+    ).bind(user.id).first();
+    const m = await env.DB.prepare(
+      "SELECT COUNT(DISTINCT e.user_id) AS unique_viewers, COUNT(*) AS exposures, " +
+      "AVG(e.completion) AS avg_completion, AVG(e.watch_ms) AS avg_watch_ms, " +
+      "SUM(e.replay_count) AS replays, SUM(e.followed_creator) AS follows_generated, " +
+      "SUM(e.skipped) AS skips " +
+      "FROM video_exposures e WHERE e.creator_id = ?"
+    ).bind(user.id).first().catch(() => ({}));
+    const vids = await env.DB.prepare("SELECT COUNT(*) AS n FROM videos WHERE user_id = ?").bind(user.id).first();
+    const uniq = m.unique_viewers || 0;
+    return json({
+      videos: vids.n, followers: followers.n,
+      uniqueViewers: uniq, exposures: m.exposures || 0,
+      avgWatchQuality: round3(m.avg_completion), avgWatchMs: Math.round(m.avg_watch_ms || 0),
+      replays: m.replays || 0,
+      // Follower conversion: of the people reached, how many followed.
+      followerConversion: uniq ? round3((m.follows_generated || 0) / uniq) : 0,
+      // Discovery rate: share of viewers who don't already follow the creator.
+      discoveryRate: uniq ? round3(Math.max(0, uniq - followers.n) / uniq) : 0,
+    });
   }
 
   // ----- likes -----
@@ -1714,6 +2368,7 @@ async function handle(request, env, ctx) {
     return json({
       sounds: results.map(s => ({
         id: s.id, title: s.title, uses: s.uses,
+        audioUrl: `/api/media/${s.r2_key}`,
         author: { username: s.author_username, displayName: s.author_display_name },
       })),
     });
@@ -1764,6 +2419,10 @@ async function handle(request, env, ctx) {
       ? await env.DB.prepare("SELECT * FROM videos WHERE id = ?").bind(target.repost_of).first()
       : target;
     if (!original) return err("Video not found", 404);
+    // The frontend already hides the repost button on your own video — this
+    // is the same rule enforced server-side, since the endpoint itself
+    // doesn't otherwise know or care who's calling it.
+    if (original.user_id === user.id) return err("You can't repost your own video", 400);
 
     const dupe = await env.DB.prepare(
       "SELECT id FROM videos WHERE user_id = ? AND repost_of = ?"
@@ -1795,6 +2454,22 @@ async function handle(request, env, ctx) {
 
     const row = await env.DB.prepare(FEED_SQL + " WHERE v.id = ?").bind(user.id, user.id, id).first();
     return json({ video: shapeVideo(row) }, 201);
+  }
+
+  // Un-repost (toggle off): remove the caller's repost of this video. Works
+  // whether they tapped the original or a repost of it — both resolve to the
+  // same true original the repost row points at.
+  if (repostMatch && method === "DELETE") {
+    requireUser(user);
+    const target = await env.DB.prepare("SELECT id, repost_of FROM videos WHERE id = ?")
+      .bind(repostMatch[1]).first();
+    if (!target) return err("Video not found", 404);
+    const originalId = target.repost_of || target.id;
+    // A repost row points at the same R2 object (no file copy) and carries no
+    // sound of its own, so removing it is just deleting that row.
+    await env.DB.prepare("DELETE FROM videos WHERE user_id = ? AND repost_of = ?")
+      .bind(user.id, originalId).run();
+    return json({ ok: true });
   }
 
   // ----- follows / friend requests -----
@@ -1905,10 +2580,12 @@ async function handle(request, env, ctx) {
         (SELECT COUNT(*) FROM follows f JOIN users fu ON fu.id = f.followee_id
           WHERE f.follower_id = ? AND f.status = 'accepted' AND fu.status != 'banned') AS following,
         (SELECT COUNT(*) FROM likes l JOIN videos v ON v.id = l.video_id
-          WHERE v.user_id = ?)                                                       AS likes,
+          WHERE v.user_id = ?) +
+        (SELECT COUNT(*) FROM post_likes pl JOIN posts p ON p.id = pl.post_id
+          WHERE p.user_id = ?)                                                       AS likes,
         EXISTS(SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?
           AND status = 'accepted')                                                   AS is_following
-    `).bind(u.id, u.id, u.id, user?.id || "", u.id).first();
+    `).bind(u.id, u.id, u.id, u.id, user?.id || "", u.id).first();
 
     // A private account's videos only show to the owner and accepted
     // followers; everyone else sees the profile without the grid.
@@ -1926,6 +2603,24 @@ async function handle(request, env, ctx) {
           .bind(user?.id || "", user?.id || "", u.id).all()
       : { results: [] };
 
+    // Public posts have no privacy gate of their own — the whole point of the
+    // Public tab is that it's public — so these show on the profile
+    // regardless of canSeeVideos/is_private, same as they do in the Public feed.
+    const { results: postResults } = await env.DB.prepare(`
+      SELECT p.id, p.content, p.media_key, p.media_type, p.width, p.height, p.created_at,
+             u.id AS user_id, u.username, u.display_name, u.avatar_key, u.role,
+             (SELECT COUNT(*) FROM post_likes    WHERE post_id = p.id) AS like_count,
+             (SELECT COUNT(*) FROM post_comments WHERE post_id = p.id) AS comment_count,
+             (SELECT COUNT(*) FROM post_shares   WHERE post_id = p.id) AS share_count,
+             EXISTS(SELECT 1 FROM post_likes WHERE post_id = p.id AND user_id = ?) AS liked,
+             EXISTS(SELECT 1 FROM follows f
+                     WHERE f.follower_id = ? AND f.followee_id = u.id
+                       AND f.status = 'accepted')                       AS following
+      FROM posts p JOIN users u ON u.id = p.user_id
+      WHERE p.user_id = ?
+      ORDER BY p.created_at DESC LIMIT 60
+    `).bind(user?.id || "", user?.id || "", u.id).all();
+
     return json({
       user: publicUser(u),
       // Top-level so the profile's Follow button doesn't have to dig for it.
@@ -1937,6 +2632,7 @@ async function handle(request, env, ctx) {
         isFollowing: !!stats.is_following,
       },
       videos: results.map(shapeVideo),
+      posts: postResults.map(shapePost),
       // True when the account is private and the viewer isn't allowed in, so
       // the UI can show a "this account is private" note instead of an empty grid.
       locked: !!u.is_private && !canSeeVideos,
@@ -1946,21 +2642,38 @@ async function handle(request, env, ctx) {
   // ----- search -----
   if (path === "/api/search" && method === "GET") {
     const q = (url.searchParams.get("q") || "").trim();
-    if (!q) return json({ accounts: [], videos: [] });
+    if (!q) return json({ accounts: [], videos: [], posts: [] });
     const like = `%${q}%`;
 
-    const [accounts, videos] = await Promise.all([
+    const [accounts, videos, posts] = await Promise.all([
       env.DB.prepare(`
         SELECT id, username, display_name, avatar_key FROM users
         WHERE status != 'banned' AND (username LIKE ? OR display_name LIKE ?) LIMIT 20
       `).bind(like, like).all(),
       env.DB.prepare(FEED_SQL + ` WHERE ${NOT_BANNED} AND v.caption LIKE ? ORDER BY v.created_at DESC LIMIT 20`)
         .bind(user?.id || "", user?.id || "", like).all(),
+      // Public posts are searched by caption too, same as videos — the Public
+      // tab's content wasn't reachable from search at all before this.
+      env.DB.prepare(`
+        SELECT p.id, p.content, p.media_key, p.media_type, p.width, p.height, p.created_at,
+               u.id AS user_id, u.username, u.display_name, u.avatar_key, u.role,
+               (SELECT COUNT(*) FROM post_likes    WHERE post_id = p.id) AS like_count,
+               (SELECT COUNT(*) FROM post_comments WHERE post_id = p.id) AS comment_count,
+               (SELECT COUNT(*) FROM post_shares   WHERE post_id = p.id) AS share_count,
+               EXISTS(SELECT 1 FROM post_likes WHERE post_id = p.id AND user_id = ?) AS liked,
+               EXISTS(SELECT 1 FROM follows f
+                       WHERE f.follower_id = ? AND f.followee_id = u.id
+                         AND f.status = 'accepted')                       AS following
+        FROM posts p JOIN users u ON u.id = p.user_id
+        WHERE u.status != 'banned' AND p.content LIKE ?
+        ORDER BY p.created_at DESC LIMIT 20
+      `).bind(user?.id || "", user?.id || "", like).all(),
     ]);
 
     return json({
       accounts: accounts.results.map(publicUser),
       videos: videos.results.map(shapeVideo),
+      posts: posts.results.map(shapePost),
     });
   }
 
@@ -1971,16 +2684,19 @@ async function handle(request, env, ctx) {
     // one row per message — a chat with 20 messages back and forth is one
     // person in the inbox, not twenty.
     const { results } = await env.DB.prepare(`
-      WITH convo AS (
+      WITH visible AS (
+        SELECT * FROM messages
+        WHERE (sender_id = ? OR recipient_id = ?)
+          AND NOT ((sender_id = ? AND deleted_for_sender = 1) OR (recipient_id = ? AND deleted_for_recipient = 1))
+      ), convo AS (
         SELECT
           CASE WHEN sender_id < recipient_id THEN sender_id ELSE recipient_id END AS a,
           CASE WHEN sender_id < recipient_id THEN recipient_id ELSE sender_id END AS b,
           MAX(created_at) AS last_at
-        FROM messages
-        WHERE sender_id = ? OR recipient_id = ?
+        FROM visible
         GROUP BY a, b
       )
-      SELECT m.id, m.sender_id, m.recipient_id, m.body, m.image_key, m.audio_key, m.created_at,
+      SELECT m.id, m.sender_id, m.recipient_id, m.body, m.image_key, m.audio_key, m.created_at, m.deleted_everyone,
              u.username, u.display_name, u.avatar_key, u.last_active_at,
              cs.status AS req_status, cs.requested_by AS req_by,
              (SELECT COUNT(*) FROM messages um
@@ -1988,17 +2704,18 @@ async function handle(request, env, ctx) {
                  AND um.sender_id = CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END
              ) AS unread_count
       FROM convo c
-      JOIN messages m ON ((m.sender_id = c.a AND m.recipient_id = c.b) OR (m.sender_id = c.b AND m.recipient_id = c.a))
+      JOIN visible m ON ((m.sender_id = c.a AND m.recipient_id = c.b) OR (m.sender_id = c.b AND m.recipient_id = c.a))
                       AND m.created_at = c.last_at
       JOIN users u ON u.id = CASE WHEN m.sender_id = ? THEN m.recipient_id ELSE m.sender_id END
       LEFT JOIN conversation_status cs ON cs.user_a = c.a AND cs.user_b = c.b
       ORDER BY m.created_at DESC LIMIT 50
-    `).bind(user.id, user.id, user.id, user.id, user.id).all();
+    `).bind(user.id, user.id, user.id, user.id, user.id, user.id, user.id).all();
 
     return json({
       threads: results.map(m => ({
         id: m.id,
-        body: m.body,
+        body: m.deleted_everyone ? null : m.body,
+        deleted: !!m.deleted_everyone,
         hasImage: !!m.image_key,
         hasAudio: !!m.audio_key,
         createdAt: m.created_at,
@@ -2044,23 +2761,69 @@ async function handle(request, env, ctx) {
     if (!them) return err("User not found", 404);
 
     // Opening the thread is what marks their messages read, same as tapping
-    // into any chat app's conversation — done before the select so the
-    // response the opener gets back is already consistent with it.
+    // into any chat app's conversation. Which ones WERE unread has to be
+    // captured before that UPDATE runs — otherwise every message already
+    // looks read by the time the client sees it, and there's no way left to
+    // tell "unread until this exact fetch" apart from "read a while ago",
+    // which is what the client needs to place the "Unread messages" divider.
+    const firstUnread = await env.DB.prepare(
+      "SELECT id FROM messages WHERE sender_id = ? AND recipient_id = ? AND read = 0 ORDER BY created_at ASC LIMIT 1"
+    ).bind(them.id, user.id).first();
+
     await env.DB.prepare(
       "UPDATE messages SET read = 1 WHERE sender_id = ? AND recipient_id = ? AND read = 0"
     ).bind(them.id, user.id).run();
 
     const { results } = await env.DB.prepare(`
-      SELECT id, sender_id, body, video_id, image_key, audio_key, audio_duration, created_at, read FROM messages
-      WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
+      SELECT id, sender_id, body, video_id, image_key, audio_key, audio_duration, created_at, read, deleted_everyone, reply_to_id FROM messages
+      WHERE ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))
+        AND NOT ((sender_id = ? AND deleted_for_sender = 1) OR (recipient_id = ? AND deleted_for_recipient = 1))
       ORDER BY created_at ASC LIMIT 200
-    `).bind(user.id, them.id, them.id, user.id).all();
+    `).bind(user.id, them.id, them.id, user.id, user.id, user.id).all();
 
-    const [convo, iBlockedThem, theyBlockedMe] = await Promise.all([
+    const replyToIds = [...new Set(results.map(m => m.reply_to_id).filter(Boolean))];
+
+    const [convo, iBlockedThem, theyBlockedMe, typing, reactions, repliedTo] = await Promise.all([
       getConversationStatus(env, user.id, them.id),
       env.DB.prepare("SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = ?").bind(user.id, them.id).first(),
       env.DB.prepare("SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = ?").bind(them.id, user.id).first(),
+      // No "stopped typing" signal exists — the frontend only ever pings
+      // while actively composing, so a ping older than a couple of poll
+      // cycles just means it hasn't refreshed, i.e. they've stopped.
+      env.DB.prepare(
+        "SELECT 1 FROM typing_status WHERE sender_id = ? AND recipient_id = ? AND updated_at > ?"
+      ).bind(them.id, user.id, now() - 6000).first(),
+      results.length
+        ? env.DB.prepare(
+            `SELECT message_id, user_id, emoji FROM message_reactions WHERE message_id IN (${results.map(() => "?").join(",")})`
+          ).bind(...results.map(m => m.id)).all()
+        : { results: [] },
+      // A quoted message may be one the recipient already deleted-for-me,
+      // may belong to either side of the conversation, or may not exist at
+      // all anymore — this is a best-effort snippet lookup, not a strict
+      // join, so a reply to something since removed just shows nothing
+      // instead of breaking the message that quoted it.
+      replyToIds.length
+        ? env.DB.prepare(
+            `SELECT id, sender_id, body, image_key, audio_key, deleted_everyone FROM messages WHERE id IN (${replyToIds.map(() => "?").join(",")})`
+          ).bind(...replyToIds).all()
+        : { results: [] },
     ]);
+
+    const reactionsByMsg = new Map();
+    for (const r of reactions.results) {
+      if (!reactionsByMsg.has(r.message_id)) reactionsByMsg.set(r.message_id, []);
+      reactionsByMsg.get(r.message_id).push({ emoji: r.emoji, mine: r.user_id === user.id });
+    }
+
+    const repliedToById = new Map(repliedTo.results.map(m => [m.id, m]));
+    const replySnippet = (m) => {
+      if (m.deleted_everyone) return "This message was deleted";
+      if (m.body) return m.body;
+      if (m.image_key) return "📷 Photo";
+      if (m.audio_key) return "🎤 Voice message";
+      return "";
+    };
 
     return json({
       with: {
@@ -2074,23 +2837,104 @@ async function handle(request, env, ctx) {
       requestedByMe: convo ? convo.requested_by === user.id : false,
       blocked: !!iBlockedThem,
       blockedByThem: !!theyBlockedMe,
+      isTyping: !!typing,
+      firstUnreadId: firstUnread?.id || null,
       messages: results.map(m => ({
         id: m.id,
-        body: m.body,
+        body: m.deleted_everyone ? null : m.body,
         videoId: m.video_id,
-        imageUrl: m.image_key ? `/api/media/${m.image_key}` : null,
-        audioUrl: m.audio_key ? `/api/media/${m.audio_key}` : null,
+        imageUrl: !m.deleted_everyone && m.image_key ? `/api/media/${m.image_key}` : null,
+        audioUrl: !m.deleted_everyone && m.audio_key ? `/api/media/${m.audio_key}` : null,
         audioDuration: m.audio_duration,
         createdAt: m.created_at,
         outgoing: m.sender_id === user.id,
         read: !!m.read,
+        deleted: !!m.deleted_everyone,
+        reactions: reactionsByMsg.get(m.id) || [],
+        replyTo: (() => {
+          const q = repliedToById.get(m.reply_to_id);
+          if (!q) return null;
+          return { id: q.id, mine: q.sender_id === user.id, snippet: replySnippet(q) };
+        })(),
       })),
     });
   }
 
+  // Delete for me: hides the message from just this user, any time. Delete
+  // for everyone: only the sender, only within 15 minutes of sending (same
+  // window WhatsApp uses) — replaces the content with a tombstone both
+  // sides see, rather than removing the row (so "This message was deleted"
+  // has something to point at).
+  const delMsgMatch = /^\/api\/messages\/([\w-]+)\/delete$/.exec(path);
+  if (delMsgMatch && method === "POST") {
+    requireUser(user);
+    const msg = await env.DB.prepare("SELECT * FROM messages WHERE id = ?").bind(delMsgMatch[1]).first();
+    if (!msg) return err("Message not found", 404);
+    if (msg.sender_id !== user.id && msg.recipient_id !== user.id) return err("Not your message", 403);
+
+    const { scope } = await request.json().catch(() => ({}));
+    if (scope === "everyone") {
+      if (msg.sender_id !== user.id) return err("Only the sender can delete for everyone", 403);
+      if (now() - msg.created_at > 15 * 60 * 1000) return err("Too late to delete for everyone", 400);
+      if (msg.image_key) await env.MEDIA.delete(msg.image_key).catch(() => {});
+      if (msg.audio_key) await env.MEDIA.delete(msg.audio_key).catch(() => {});
+      await env.DB.prepare(
+        "UPDATE messages SET deleted_everyone = 1, body = NULL, image_key = NULL, audio_key = NULL WHERE id = ?"
+      ).bind(msg.id).run();
+    } else {
+      const col = msg.sender_id === user.id ? "deleted_for_sender" : "deleted_for_recipient";
+      await env.DB.prepare(`UPDATE messages SET ${col} = 1 WHERE id = ?`).bind(msg.id).run();
+    }
+    return json({ ok: true });
+  }
+
+  // Tapping the same emoji again removes the reaction (toggle), same as
+  // WhatsApp/most chat apps — one reaction per person per message.
+  const msgReactMatch = /^\/api\/messages\/([\w-]+)\/react$/.exec(path);
+  if (msgReactMatch && method === "POST") {
+    requireUser(user);
+    const msg = await env.DB.prepare("SELECT sender_id, recipient_id FROM messages WHERE id = ?").bind(msgReactMatch[1]).first();
+    if (!msg) return err("Message not found", 404);
+    if (msg.sender_id !== user.id && msg.recipient_id !== user.id) return err("Not your conversation", 403);
+
+    const { emoji } = await request.json();
+    if (!emoji) return err("emoji is required");
+    const existing = await env.DB.prepare(
+      "SELECT emoji FROM message_reactions WHERE message_id = ? AND user_id = ?"
+    ).bind(msgReactMatch[1], user.id).first();
+    if (existing?.emoji === emoji) {
+      await env.DB.prepare("DELETE FROM message_reactions WHERE message_id = ? AND user_id = ?").bind(msgReactMatch[1], user.id).run();
+    } else {
+      await env.DB.prepare(`
+        INSERT INTO message_reactions (message_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(message_id, user_id) DO UPDATE SET emoji = excluded.emoji, created_at = excluded.created_at
+      `).bind(msgReactMatch[1], user.id, emoji, now()).run();
+    }
+    return json({ ok: true });
+  }
+
+  // Fire-and-forget from the compose box while typing — no read-back, no
+  // preference to respect, just a timestamp the recipient's next poll of
+  // GET /api/messages/:id checks against. Upsert rather than insert-or-
+  // ignore since the same pair keeps refreshing the same row while typing
+  // continues.
+  const typingMatch = /^\/api\/messages\/([\w-]+)\/typing$/.exec(path);
+  if (typingMatch && method === "POST") {
+    requireUser(user);
+    const them = await env.DB.prepare(
+      "SELECT id FROM users WHERE id = ? OR username = ?"
+    ).bind(typingMatch[1], typingMatch[1]).first();
+    if (!them) return err("User not found", 404);
+    await env.DB.prepare(`
+      INSERT INTO typing_status (sender_id, recipient_id, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(sender_id, recipient_id) DO UPDATE SET updated_at = excluded.updated_at
+    `).bind(user.id, them.id, now()).run();
+    return json({ ok: true });
+  }
+
   if (path === "/api/messages" && method === "POST") {
     requireUser(user);
-    const { recipientId, body, videoId } = await request.json();
+    const { recipientId, body, videoId, replyToId } = await request.json();
     if (!recipientId) return err("recipientId is required");
     if (!body?.trim() && !videoId) return err("Write a message or attach a video");
 
@@ -2104,9 +2948,21 @@ async function handle(request, env, ctx) {
 
     const id = uid();
     await env.DB.prepare(`
-      INSERT INTO messages (id, sender_id, recipient_id, body, video_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(id, user.id, them.id, body?.trim() || null, videoId || null, now()).run();
+      INSERT INTO messages (id, sender_id, recipient_id, body, video_id, reply_to_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(id, user.id, them.id, body?.trim() || null, videoId || null, replyToId || null, now()).run();
+
+    // Best-effort, like every other push here — messages have no notify_*
+    // toggle to check (there isn't one, same as gifts), so this always
+    // fires. tag is the sender's id, not a per-message id, so several
+    // messages in a row from the same person coalesce into one
+    // notification instead of stacking — same as WhatsApp.
+    ctx.waitUntil(sendPush(env, them.id, {
+      title: user.display_name || user.username,
+      body: (body?.trim() || (videoId ? "Sent a video" : "")).slice(0, 200),
+      url: `/?chat=${encodeURIComponent(user.username)}`,
+      tag: `message-${user.id}`,
+    }));
 
     return json({ ok: true, id }, 201);
   }
@@ -2140,15 +2996,24 @@ async function handle(request, env, ctx) {
     const key = `messages/${user.id}/${id}.${ext}`;
     await env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type } });
     const duration = kind === "audio" ? (parseFloat(form.get("duration")) || null) : null;
+    const caption = (form.get("body") || "").toString().trim().slice(0, 1000) || null;
+    const replyToId = (form.get("replyToId") || "").toString().trim() || null;
 
     await env.DB.prepare(`
-      INSERT INTO messages (id, sender_id, recipient_id, body, image_key, audio_key, audio_duration, created_at)
-      VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+      INSERT INTO messages (id, sender_id, recipient_id, body, image_key, audio_key, audio_duration, reply_to_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      id, user.id, them.id,
-      kind === "image" ? key : null, kind === "audio" ? key : null, duration,
+      id, user.id, them.id, caption,
+      kind === "image" ? key : null, kind === "audio" ? key : null, duration, replyToId,
       now()
     ).run();
+
+    ctx.waitUntil(sendPush(env, them.id, {
+      title: user.display_name || user.username,
+      body: caption || (kind === "image" ? "📷 Photo" : "🎤 Voice message"),
+      url: `/?chat=${encodeURIComponent(user.username)}`,
+      tag: `message-${user.id}`,
+    }));
 
     return json({ ok: true, id }, 201);
   }

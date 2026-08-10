@@ -16,10 +16,13 @@ import '../../features/friends/presentation/friends_screen.dart';
 import '../../features/notifications/presentation/notifications_screen.dart';
 import '../../features/overlays/presentation/component_gallery_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
+import '../../features/profile/presentation/profile_videos_screen.dart';
 import '../../features/promote/presentation/admin_ads_screen.dart';
 import '../../features/promote/presentation/my_ads_screen.dart';
 import '../../features/promote/presentation/promote_screen.dart';
+import '../../features/public_feed/presentation/post_detail_screen.dart';
 import '../../features/public_feed/presentation/public_feed_screen.dart';
+import '../../features/public_feed/data/post_model.dart';
 import '../../features/search/presentation/search_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/sounds/presentation/sound_screen.dart';
@@ -115,6 +118,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               )),
       _route('/sound/:id',
           (context, state) => SoundScreen(soundId: state.pathParameters['id']!)),
+      // A single Public post (opened from a profile grid). Needs the PostModel
+      // in `extra`; a bare deep link falls back to the full public feed.
+      _route('/p/:id', (context, state) => state.extra is PostModel
+          ? PostDetailScreen(post: state.extra as PostModel)
+          : const PublicFeedScreen()),
+      // A swipeable feed of one profile's videos, starting at the tapped one.
+      _route('/profile-videos', (context, state) {
+        final extra = state.extra as Map<String, dynamic>?;
+        final videos = (extra?['videos'] as List?)?.cast<VideoModel>() ?? const [];
+        return ProfileVideosScreen(videos: videos, initialIndex: (extra?['index'] as int?) ?? 0);
+      }),
       _route('/compose', (context, state) {
         final extra = state.extra as Map<String, dynamic>?;
         return ComposerScreen(

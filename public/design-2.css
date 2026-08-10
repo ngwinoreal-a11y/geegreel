@@ -228,12 +228,12 @@
   box-shadow: 0 0 0 2.5px var(--bg);
 }
 
+/* Plain colored text, no dot — the chat header used to also show a dot on
+   the avatar corner AND one inline here, which read as two indicators for
+   one fact. Just the word carries it now. */
 .online-tag {
-  display: inline-flex; align-items: center; gap: 5px;
+  display: inline-flex; align-items: center;
   font-size: 12px; color: var(--online);
-}
-.online-tag i {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--online);
 }
 
 /* When they're offline, say when they were last around in quiet grey rather
@@ -258,6 +258,155 @@
   white-space: nowrap;
 }
 .ticks.read { color: var(--tick-read); }
+
+
+/* ============================================================================
+   E2. MESSAGE SELECT MODE       long-press a bubble in chatPage()
+   ---------------------------------------------------------------------------
+   MARKUP: each row is <div class="msg-row"><span class="msg-check"></span>
+   <div class="msg-col">…</div></div>. Long-press adds `selecting` to
+   `.thread` (reveals every row's checkbox) and `selected` to the pressed
+   row. #selectBar is a same-size overlay on #chatHead, toggled on top of
+   the normal header rather than replacing it.
+   ========================================================================= */
+.msg-check {
+  width: 0; height: 20px; border-radius: 50%;
+  border: 2px solid var(--border);
+  flex-shrink: 0; align-self: center;
+  overflow: hidden; opacity: 0;
+  transition: width .15s ease, opacity .15s ease, margin .15s ease;
+}
+.thread.selecting .msg-check { width: 20px; opacity: 1; margin-right: 8px; }
+.msg-row.selected .msg-check {
+  background: var(--text); border-color: var(--text);
+  display: flex; align-items: center; justify-content: center;
+}
+.msg-row.selected .msg-check::after { content: "✓"; font-size: 12px; color: var(--bg); }
+.thread.selecting .bubble-hit { opacity: .88; }
+.msg-row.selected .bubble-hit { outline: 2px solid var(--online); outline-offset: 2px; }
+
+/* Small pills under a bubble — right now only the double-tap ❤️ shortcut
+   writes to these (see chatPage's dblclick handler), no picker yet. */
+.msg-reacts { display: flex; gap: 4px; margin: -4px 0 4px; }
+.msg-reacts .rx {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; font-size: 12px; padding: 1px 6px; line-height: 1.5;
+}
+.msg-reacts .rx.mine { border-color: var(--online); }
+
+
+/* ============================================================================
+   E3. CHAT PHOTO VIEWER       openChatImageViewer() in index.html
+   ---------------------------------------------------------------------------
+   Appended to <body> (not the chat page) so it always sits above the
+   fixed-position chat header regardless of the page's own stacking context —
+   see the earlier comment-sheet stacking-context bug for why that matters.
+   ========================================================================= */
+.img-viewer-backdrop { position: fixed; inset: 0; background: #000; z-index: 10000; }
+.img-viewer-img {
+  position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+  object-fit: contain; z-index: 10001; will-change: transform, opacity;
+}
+
+
+/* ============================================================================
+   E5. VOICE NOTES       recording (#voiceBar) and playback (.voice-msg)
+   ---------------------------------------------------------------------------
+   Both waveforms are real, not decorative: the recording one samples a live
+   AnalyserNode off the mic stream, the playback one decodes the actual
+   audio buffer once (cached per URL) into peak bars.
+   ========================================================================= */
+.live-wave { flex: 1; height: 28px; display: flex; align-items: center; gap: 2px; overflow: hidden; min-width: 0; }
+.live-wave i { display: block; flex-shrink: 0; width: 3px; border-radius: 2px; background: #FF3B30; }
+
+.voice-av {
+  width: 28px; height: 28px; border-radius: 50%; overflow: hidden; flex-shrink: 0;
+  background: var(--surface); display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: var(--muted);
+}
+.voice-av img { width: 100%; height: 100%; object-fit: cover; }
+
+.voice-wave-static { position: relative; flex: 1; height: 26px; display: flex; align-items: center; gap: 2px; cursor: pointer; min-width: 60px; }
+.voice-wave-static i {
+  display: block; flex-shrink: 0; width: 3px; border-radius: 2px;
+  background: rgba(255,255,255,.35); transition: height .15s ease;
+}
+.voice-wave-static i.played { background: #fff; }
+/* Outgoing bubbles are on a light background — invert the bar colors. */
+.voice-msg[data-outgoing="1"] .voice-wave-static i { background: rgba(0,0,0,.2); }
+.voice-msg[data-outgoing="1"] .voice-wave-static i.played { background: #000; }
+
+/* A visible marker at the exact playback position — the color-split on the
+   bars alone was reported as too subtle to notice at a glance. */
+.voice-thumb {
+  position: absolute; top: 50%; width: 9px; height: 9px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.25);
+  transform: translate(-50%, -50%); pointer-events: none; left: 0%;
+}
+.voice-msg[data-outgoing="1"] .voice-thumb { background: #000; box-shadow: 0 0 0 2px rgba(255,255,255,.4); }
+
+
+/* ============================================================================
+   E6. QUICK EMOJI ROW       #emojiRow in chatPage(), toggled by #emojiBtn
+   ---------------------------------------------------------------------------
+   A horizontal strip above the composer, not a full picker — the device's
+   own keyboard already has one; this is the same one-tap shortcut row the
+   reference shows above the keyboard.
+   ========================================================================= */
+.emoji-row {
+  gap: 4px; overflow-x: auto; padding: 8px 12px;
+  background: var(--bg); border-top: 1px solid var(--border);
+}
+.emoji-row button {
+  font-size: 22px; line-height: 1; flex-shrink: 0; padding: 4px;
+  border-radius: 8px;
+}
+.emoji-row button:active { background: var(--surface); }
+
+
+/* ============================================================================
+   E7. REPLY-TO-MESSAGE       #replyBar (composing) and .msg-quote (sent)
+   ---------------------------------------------------------------------------
+   #replyBar sits above #composer while a reply is staged; .msg-quote is the
+   same look shrunk to fit inside the bubble it ends up in once sent.
+   ========================================================================= */
+.reply-bar {
+  align-items: center; gap: 10px;
+  padding: 8px 12px; background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.reply-bar-line { width: 3px; align-self: stretch; background: var(--online); border-radius: 2px; flex-shrink: 0; }
+.reply-bar-body { flex: 1; min-width: 0; }
+.reply-bar-name { margin: 0; font-size: 12px; font-weight: 700; color: var(--online); }
+.reply-bar-snippet {
+  margin: 2px 0 0; font-size: 12px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.msg-quote {
+  border-left: 3px solid var(--online); border-radius: 6px;
+  background: rgba(255,255,255,.06); padding: 4px 8px; margin-bottom: 6px;
+}
+.msg-quote.on-light { background: rgba(0,0,0,.06); }
+.msg-quote-name { margin: 0; font-size: 11px; font-weight: 700; color: var(--online); }
+.msg-quote-snippet {
+  margin: 1px 0 0; font-size: 12px; opacity: .8;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+
+/* Comfortable, consistent touch target for every icon-only button in the
+   chat header/select bar — small unpadded icons were reported as easy to
+   miss-tap. */
+.chat-icon-btn {
+  min-width: 40px; min-height: 40px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  border-radius: 10px; flex-shrink: 0;
+}
+.chat-icon-btn:active { background: rgba(255,255,255,.08); }
+.reply-btn {
+  width: auto; padding: 0 14px; font-size: 14px; font-weight: 700; color: var(--online);
+}
+.reply-btn svg { width: 22px; height: 22px; }
 
 
 /* ============================================================================

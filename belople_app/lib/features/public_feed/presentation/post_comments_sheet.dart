@@ -34,8 +34,13 @@ class _PostCommentsSheet extends ConsumerStatefulWidget {
 
 class _PostCommentsSheetState extends ConsumerState<_PostCommentsSheet> {
   final _controller = TextEditingController();
-  List<PostComment>? _comments;
+  final _focus = FocusNode();
+  List<PostComment>? _comments; // flat; nested into roots+replies at build time
   bool _posting = false;
+  // Reply state + which threads are expanded (collapsed by default).
+  PostComment? _replyTo;
+  String? _replyToName;
+  final Set<String> _expanded = {};
 
   @override
   void initState() {
@@ -60,10 +65,19 @@ class _PostCommentsSheetState extends ConsumerState<_PostCommentsSheet> {
       return;
     }
     setState(() => _posting = true);
+    final replyRoot = _replyTo; // reply attaches to the root thread, one level deep
     try {
-      final (comment, _) = await ref.read(postCommentRepositoryProvider).post(widget.postId, text);
+      final (comment, _) =
+          await ref.read(postCommentRepositoryProvider).post(widget.postId, text, parentId: replyRoot?.id);
       _controller.clear();
-      if (mounted) setState(() => _comments = [...?_comments, comment]);
+      if (mounted) {
+        setState(() {
+          _comments = [...?_comments, comment];
+          if (replyRoot != null) _expanded.add(replyRoot.id);
+          _replyTo = null;
+          _replyToName = null;
+        });
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -71,6 +85,53 @@ class _PostCommentsSheetState extends ConsumerState<_PostCommentsSheet> {
       }
     } finally {
       if (mounted) setState(() => _posting = false);
+    }
+  }
+
+  void _startReply(PostComment root, String name) {
+    setState(() { _replyTo = root; _replyToName = name; });
+    _focus.requestFocus();
+  }
+
+  void _cancelReply() => setState(() { _replyTo = null; _replyToName = null; });
+
+  void _toggleReplies(String rootId) => setState(() {
+        _expanded.contains(rootId) ? _expanded.remove(rootId) : _expanded.add(rootId);
+      });
+
+  /// Groups the flat comment list into root comments (preserving order) and a
+  /// map of root-id -> its replies. Any reply whose parent is itself a reply is
+  /// flattened up to its top-level root, keeping threads one level deep.
+  (List<PostComment>, Map<String, List<PostComment>>) _thread() {
+    final all = _comments ?? const <PostComment>[];
+    final byId = {for (final c in all) c.id: c};
+    String rootIdOf(PostComment c) {
+      var cur = c;
+      final seen = <String>{};
+      while (cur.parentId != null && byId.containsKey(cur.parentId) && seen.add(cur.id)) {
+        cur = byId[cur.parentId!]!;
+      }
+      return cur.id;
+    }
+
+    final roots = <PostComment>[];
+    final repliesByRoot = <String, List<PostComment>>{};
+    for (final c in all) {
+      final rid = rootIdOf(c);
+      if (rid == c.id) {
+        roots.add(c); // top-level (or an orphan whose parent is gone)
+      } else {
+        (repliesByRoot[rid] ??= []).add(c);
+      }
+    }
+    return (roots, repliesByRoot);
+  }
+
+  // Like/unlike by id — used for both root comments and replies (all live in
+  // the flat _comments list).
+  void _likeById(String id) {
+    for (final c in _comments ?? const <PostComment>[]) {
+      if (c.id == id) { _toggleLike(c); return; }
     }
   }
 
@@ -107,12 +168,14 @@ class _PostCommentsSheetState extends ConsumerState<_PostCommentsSheet> {
   @override
   void dispose() {
     _controller.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final comments = _comments;
+    final (roots, repliesByRoot) = _thread();
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: DraggableScrollableSheet(
@@ -144,36 +207,67 @@ class _PostCommentsSheetState extends ConsumerState<_PostCommentsSheet> {
                       : ListView.builder(
                           controller: scrollController,
                           padding: const EdgeInsets.symmetric(horizontal: 14),
-                          itemCount: comments.length,
-                          itemBuilder: (context, i) => _CommentRow(
-                            comment: comments[i],
-                            onLike: () => _toggleLike(comments[i]),
-                          ),
+                          itemCount: roots.length,
+                          itemBuilder: (context, i) {
+                            final root = roots[i];
+                            return _CommentRow(
+                              comment: root,
+                              replies: repliesByRoot[root.id] ?? const [],
+                              expanded: _expanded.contains(root.id),
+                              onToggleReplies: () => _toggleReplies(root.id),
+                              onLike: _likeById,
+                              onReply: (name) => _startReply(root, name),
+                            );
+                          },
                         ),
             ),
             SafeArea(
               top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 8, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _controller,
-                        style: AppTypography.sans(fontSize: 14),
-                        minLines: 1,
-                        maxLines: 4,
-                        decoration: const InputDecoration(hintText: 'Add a comment...'),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_replyToName != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 6, 10, 0),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text('Replying to $_replyToName',
+                                style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
+                          ),
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _cancelReply,
+                            child: const Icon(Icons.close, size: 16, color: AppColors.muted),
+                          ),
+                        ],
                       ),
                     ),
-                    IconButton(
-                      icon: _posting
-                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.send_rounded, color: AppColors.send),
-                      onPressed: _posting ? null : _post,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 8, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _controller,
+                            focusNode: _focus,
+                            style: AppTypography.sans(fontSize: 14),
+                            minLines: 1,
+                            maxLines: 4,
+                            decoration: InputDecoration(
+                                hintText: _replyToName != null ? 'Add a reply...' : 'Add a comment...'),
+                          ),
+                        ),
+                        IconButton(
+                          icon: _posting
+                              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.send_rounded, color: AppColors.send),
+                          onPressed: _posting ? null : _post,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -184,9 +278,79 @@ class _PostCommentsSheetState extends ConsumerState<_PostCommentsSheet> {
 }
 
 class _CommentRow extends StatelessWidget {
-  const _CommentRow({required this.comment, required this.onLike});
+  const _CommentRow({
+    required this.comment,
+    required this.replies,
+    required this.expanded,
+    required this.onToggleReplies,
+    required this.onLike,
+    required this.onReply,
+  });
   final PostComment comment;
+  final List<PostComment> replies;
+  final bool expanded;
+  final VoidCallback onToggleReplies;
+  final void Function(String commentId) onLike;
+  final void Function(String name) onReply;
+
+  @override
+  Widget build(BuildContext context) {
+    final n = replies.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _CommentContent(
+          comment: comment,
+          avatarSize: 34,
+          onLike: () => onLike(comment.id),
+          onReply: () => onReply(comment.user.displayName),
+        ),
+        if (n > 0)
+          Padding(
+            padding: const EdgeInsets.only(left: 44, bottom: 4),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onToggleReplies,
+              child: Row(
+                children: [
+                  Container(width: 22, height: 1, color: AppColors.border),
+                  const SizedBox(width: 8),
+                  Text(
+                    expanded ? 'Hide replies' : 'View $n ${n == 1 ? 'reply' : 'replies'}',
+                    style: AppTypography.sans(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.muted),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (expanded)
+          for (final r in replies)
+            Padding(
+              padding: const EdgeInsets.only(left: 34),
+              child: _CommentContent(
+                comment: r,
+                avatarSize: 28,
+                onLike: () => onLike(r.id),
+                onReply: () => onReply(r.user.displayName),
+              ),
+            ),
+      ],
+    );
+  }
+}
+
+/// One public comment's content, reused for a root comment and its replies.
+class _CommentContent extends StatelessWidget {
+  const _CommentContent({
+    required this.comment,
+    required this.avatarSize,
+    required this.onLike,
+    required this.onReply,
+  });
+  final PostComment comment;
+  final double avatarSize;
   final VoidCallback onLike;
+  final VoidCallback onReply;
 
   @override
   Widget build(BuildContext context) {
@@ -196,7 +360,7 @@ class _CommentRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           AppAvatar(
-            size: 34,
+            size: avatarSize,
             imageUrl: comment.user.avatarUrl != null ? mediaUrl(comment.user.avatarUrl!) : null,
             displayName: comment.user.displayName,
           ),
@@ -205,10 +369,28 @@ class _CommentRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(comment.user.displayName,
-                    style: AppTypography.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.muted)),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(comment.user.displayName,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.muted)),
+                    ),
+                    if (comment.user.verified) ...[
+                      const SizedBox(width: 4),
+                      const Icon(Icons.verified, color: AppColors.verified, size: 13),
+                    ],
+                  ],
+                ),
                 const SizedBox(height: 2),
                 Text(comment.body, style: AppTypography.sans(fontSize: 14)),
+                const SizedBox(height: 4),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onReply,
+                  child: Text('Reply',
+                      style: AppTypography.sans(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.muted)),
+                ),
               ],
             ),
           ),
