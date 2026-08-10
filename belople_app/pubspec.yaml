@@ -87,6 +87,20 @@ dependencies:
   record: ^7.1.1
   just_audio: ^0.9.42
 
+  # --- Grabs the first frame of a recorded/picked video as a JPEG, so an
+  # upload carries a poster (the web app does the same in makeThumb()). Without
+  # it the profile grid cell and the feed's pre-playback frame stay black.
+  # Using the *_plus fork: the original video_thumbnail's android/build.gradle
+  # still calls jcenter() and has no namespace, which fails the modern
+  # AGP/Gradle build outright. ---
+  video_thumbnail_plus: ^0.0.2
+  # Burns the moving Belople watermark + outro into a DOWNLOADED video only
+  # (see more_options_sheet _saveVideo). The _min_gpl variant is the smallest
+  # build that still ships x264 (H.264 encoding) — we only need core filters
+  # (overlay/concat/scale) plus x264, not the full codec set. Requires
+  # minSdk 24 (bumped in android/app/build.gradle.kts).
+  ffmpeg_kit_flutter_new_min_gpl: ^2.6.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -126,6 +140,15 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # The logo is loaded at runtime to paint the download outro/watermark
+  # (VideoWatermarkService) — not just used by flutter_launcher_icons.
+  # belople_mark.jpg is the logo on black used for the moving watermark.
+  assets:
+    - assets/icon/belople_logo.jpg
+    - assets/icon/belople_mark.jpg
+    # The branded 2s outro clip appended to every downloaded video.
+    - assets/video/outro.mp4
 
   # To add assets to your application, add an assets section, like this:
   # assets:

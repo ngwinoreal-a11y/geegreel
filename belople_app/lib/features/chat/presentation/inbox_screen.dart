@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,7 +8,6 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/bottom_nav_pill.dart';
-import '../../../core/widgets/brand_wordmark.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../data/chat_repository.dart';
 import '../data/message_model.dart';
@@ -17,6 +18,11 @@ import '../data/message_model.dart';
 class InboxController extends AutoDisposeAsyncNotifier<List<ThreadPreview>> {
   @override
   Future<List<ThreadPreview>> build() async {
+    // Poll every 5s while the inbox is on screen so new messages and unread
+    // counts appear live — no pull-to-refresh needed.
+    final timer = Timer.periodic(const Duration(seconds: 5), (_) => _silentRefresh());
+    ref.onDispose(timer.cancel);
+
     final cached = ref.read(chatRepositoryProvider).readCachedInbox();
     if (cached != null) {
       Future.delayed(Duration.zero, _silentRefresh);
@@ -39,10 +45,9 @@ final inboxProvider =
     AsyncNotifierProvider.autoDispose<InboxController, List<ThreadPreview>>(InboxController.new);
 
 /// Ports index.html's messagesPage(): thread list, unread badges,
-/// online-dot presence. White-on-app theme deliberately not carried over —
-/// design.css's note that the reference breaks from the dark theme here is
-/// treated as legacy; kept dark for consistency until product says
-/// otherwise.
+/// online-dot presence. Like the web (`.page.msgs-page { background:#fff }`)
+/// the inbox is a deliberate white break from the app's dark theme, headed by
+/// a big "Inbox" title (h2: 28px/800) instead of the brand wordmark.
 class InboxScreen extends ConsumerWidget {
   const InboxScreen({super.key});
 
@@ -53,9 +58,15 @@ class InboxScreen extends ConsumerWidget {
     final pendingCount = inboxAsync.valueOrNull?.where((t) => t.isPendingRequestToMe).length ?? 0;
 
     return Scaffold(
-      backgroundColor: AppColors.bg,
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const BrandWordmark(fontSize: 22),
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        foregroundColor: AppColors.onChrome,
+        elevation: 0,
+        titleSpacing: 16,
+        title: Text('Inbox',
+            style: AppTypography.display(fontSize: 28, fontWeight: FontWeight.w800, color: AppColors.onChrome)),
         actions: [
           IconButton(
             icon: Badge(
@@ -84,12 +95,12 @@ class InboxScreen extends ConsumerWidget {
                 ),
               ),
               error: (e, _) => Center(
-                child: Text("Couldn't load messages", style: AppTypography.sans(color: AppColors.muted)),
+                child: Text("Couldn't load messages", style: AppTypography.sans(color: AppColors.onChromeMuted)),
               ),
               data: (allThreads) {
                 final threads = allThreads.where((t) => !t.isPendingRequestToMe).toList();
                 if (threads.isEmpty) {
-                  return Center(child: Text('No messages yet', style: AppTypography.sans(color: AppColors.muted)));
+                  return Center(child: Text('No messages yet', style: AppTypography.sans(color: AppColors.onChromeMuted)));
                 }
                 return ListView.builder(
                   padding: const EdgeInsets.only(bottom: 96),
@@ -160,18 +171,19 @@ class _ThreadRow extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: AppColors.online,
                   shape: BoxShape.circle,
-                  border: Border.all(color: AppColors.bg, width: 2.5),
+                  border: Border.all(color: Colors.white, width: 2.5),
                 ),
               ),
             ),
         ],
       ),
-      title: Text(thread.user.displayName, style: AppTypography.sans(fontWeight: FontWeight.w600)),
+      title: Text(thread.user.displayName,
+          style: AppTypography.sans(fontWeight: FontWeight.w600, color: AppColors.onChrome)),
       subtitle: Text(
         thread.lastMessage ?? '',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: AppTypography.sans(fontSize: 13, color: AppColors.muted),
+        style: AppTypography.sans(fontSize: 13, color: AppColors.onChromeMuted),
       ),
       trailing: thread.unreadCount > 0
           ? Container(

@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../feed/data/feed_repository.dart';
 import '../data/post_model.dart';
 import '../data/public_feed_repository.dart';
 
@@ -75,6 +76,43 @@ class PublicFeedController extends AsyncNotifier<PublicFeedState> {
       if (i == -1) return;
       state = AsyncData(latest.copyWith(posts: _replace(latest.posts, i, post)));
     }
+  }
+
+  /// Follow/unfollow a post's author, flipping every post by that author in
+  /// the feed optimistically and reverting on failure. Storing it on the model
+  /// (not a widget's local state) means the button keeps the right label even
+  /// as the list rebuilds/recycles while scrolling.
+  Future<void> toggleFollow(String userId, bool currentlyFollowing) async {
+    final next = !currentlyFollowing;
+    _setFollowing(userId, next);
+    try {
+      await ref.read(feedRepositoryProvider).setFollowing(userId, next);
+    } catch (_) {
+      _setFollowing(userId, currentlyFollowing); // revert
+    }
+  }
+
+  void _setFollowing(String userId, bool following) {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final posts = current.posts
+        .map((p) => p.user.id == userId ? p.copyWith(following: following) : p)
+        .toList();
+    state = AsyncData(current.copyWith(posts: posts));
+  }
+
+  /// Bumps a post's share count after a share (best-effort, cosmetic).
+  Future<void> registerShare(String postId) async {
+    try {
+      final count = await ref.read(publicFeedRepositoryProvider).sharePost(postId);
+      final current = state.valueOrNull;
+      if (current == null) return;
+      final i = current.posts.indexWhere((p) => p.id == postId);
+      if (i == -1) return;
+      state = AsyncData(current.copyWith(
+        posts: _replace(current.posts, i, current.posts[i].copyWith(shares: count)),
+      ));
+    } catch (_) {/* count is cosmetic */}
   }
 
   List<PostModel> _replace(List<PostModel> list, int index, PostModel value) {

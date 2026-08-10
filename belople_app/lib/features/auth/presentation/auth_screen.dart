@@ -208,11 +208,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 const SizedBox(height: 22),
                 ElevatedButton(
                   onPressed: isLoading ? null : _next,
+                  // The dots size themselves (min width): pinning them into an
+                  // 18px-wide box overflowed by 7px. Just cap the height and
+                  // let the row be as wide as it needs, centred in the button.
                   child: isLoading
                       ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: LoadingDots(color: AppColors.bg, size: 5),
+                          height: 20,
+                          child: Center(child: LoadingDots(color: AppColors.onChrome, size: 6)),
                         )
                       : Text(_buttonLabel()),
                 ),

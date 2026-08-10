@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/feed_repository.dart';
 import '../data/video_model.dart';
@@ -7,8 +8,8 @@ enum FeedTab { following, forYou, public }
 extension on FeedTab {
   String get apiValue => switch (this) {
         FeedTab.following => 'following',
-        FeedTab.forYou => 'foryou',
-        FeedTab.public => 'foryou', // Public tab has its own repository later; unused here.
+        FeedTab.forYou => 'belo', // the main recommendation feed is "Belo" (Belo Flow)
+        FeedTab.public => 'belo', // Public tab has its own repository later; unused here.
       };
 }
 
@@ -89,6 +90,91 @@ class FeedController extends FamilyAsyncNotifier<FeedState, FeedTab> {
       ));
     } catch (_) {
       state = AsyncData(current.copyWith(isLoadingMore: false, hasError: true));
+    }
+  }
+
+  /// Repost / un-repost toggle. Flips the video's reposted state and count
+  /// optimistically, then calls the matching endpoint; a 409 on repost means
+  /// "already reposted" (treated as success), any real failure reverts.
+  /// Returns a short status for the UI: 'reposted', 'unreposted', or 'error'.
+  Future<String> toggleRepost(String videoId) async {
+    final current = state.valueOrNull;
+    if (current == null) return 'error';
+    final index = current.videos.indexWhere((v) => v.id == videoId);
+    if (index == -1) return 'error';
+    final video = current.videos[index];
+    final willRepost = !video.isReposted;
+
+    final optimistic = video.copyWith(
+      isReposted: willRepost,
+      counts: video.counts.copyWith(
+        reposts: (video.counts.reposts + (willRepost ? 1 : -1)).clamp(0, 1 << 30),
+      ),
+    );
+    state = AsyncData(current.copyWith(videos: _replaceAt(current.videos, index, optimistic)));
+
+    try {
+      if (willRepost) {
+        await ref.read(feedRepositoryProvider).repost(videoId);
+      } else {
+        await ref.read(feedRepositoryProvider).unrepost(videoId);
+      }
+      return willRepost ? 'reposted' : 'unreposted';
+    } catch (e) {
+      // A 409 on repost just means it was already reposted — keep the "on"
+      // state rather than reverting.
+      if (willRepost && e is DioException && e.response?.statusCode == 409) {
+        return 'reposted';
+      }
+      final latest = state.valueOrNull;
+      if (latest != null) {
+        final i = latest.videos.indexWhere((v) => v.id == videoId);
+        if (i != -1) {
+          state = AsyncData(latest.copyWith(videos: _replaceAt(latest.videos, i, video)));
+        }
+      }
+      return 'error';
+    }
+  }
+
+  /// Optimistic like/unlike for an ad (hits the ad endpoint, not the video
+  /// one), reconciled against the server's count.
+  Future<void> adToggleLike(String adId) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final index = current.videos.indexWhere((v) => v.id == adId);
+    if (index == -1) return;
+    final ad = current.videos[index];
+    final bumped = ad.copyWith(
+      liked: !ad.liked,
+      counts: ad.counts.copyWith(likes: (ad.counts.likes + (ad.liked ? -1 : 1)).clamp(0, 1 << 30)),
+    );
+    state = AsyncData(current.copyWith(videos: _replaceAt(current.videos, index, bumped)));
+    try {
+      final count = await ref.read(feedRepositoryProvider).setAdLiked(adId, !ad.liked);
+      final latest = state.valueOrNull;
+      if (latest == null) return;
+      final i = latest.videos.indexWhere((v) => v.id == adId);
+      if (i == -1) return;
+      state = AsyncData(latest.copyWith(
+        videos: _replaceAt(latest.videos, i, latest.videos[i].copyWith(counts: latest.videos[i].counts.copyWith(likes: count))),
+      ));
+    } catch (_) {
+      final latest = state.valueOrNull;
+      if (latest == null) return;
+      final i = latest.videos.indexWhere((v) => v.id == adId);
+      if (i != -1) state = AsyncData(latest.copyWith(videos: _replaceAt(latest.videos, i, ad)));
+    }
+  }
+
+  /// Drops a video from the loaded feed in place (after the owner deletes it),
+  /// so it disappears immediately without a full reload.
+  void removeVideo(String videoId) {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final filtered = current.videos.where((v) => v.id != videoId).toList();
+    if (filtered.length != current.videos.length) {
+      state = AsyncData(current.copyWith(videos: filtered));
     }
   }
 

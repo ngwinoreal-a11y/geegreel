@@ -53,3 +53,14 @@ String mediaUrl(String path) {
   if (path.startsWith('http://') || path.startsWith('https://')) return path;
   return '$kApiBaseUrl$path';
 }
+
+/// The backend returns `{ "error": "human message" }` on a 4xx. Pull that out
+/// so the UI can tell the user *why* something was refused instead of a blank
+/// generic failure; falls back to [fallback] for network/parse errors.
+String apiErrorMessage(Object error, String fallback) {
+  if (error is DioException) {
+    final data = error.response?.data;
+    if (data is Map && data['error'] is String) return data['error'] as String;
+  }
+  return fallback;
+}

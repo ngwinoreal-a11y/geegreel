@@ -8,6 +8,7 @@ import '../../features/camera/presentation/composer_screen.dart';
 import '../../features/chat/presentation/inbox_screen.dart';
 import '../../features/chat/presentation/message_requests_screen.dart';
 import '../../features/chat/presentation/thread_screen.dart';
+import '../../features/feed/data/video_model.dart';
 import '../../features/feed/presentation/feed_screen.dart';
 import '../../features/feed/presentation/single_video_screen.dart';
 import '../../features/friends/presentation/follow_list_screen.dart';
@@ -15,6 +16,9 @@ import '../../features/friends/presentation/friends_screen.dart';
 import '../../features/notifications/presentation/notifications_screen.dart';
 import '../../features/overlays/presentation/component_gallery_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
+import '../../features/promote/presentation/admin_ads_screen.dart';
+import '../../features/promote/presentation/my_ads_screen.dart';
+import '../../features/promote/presentation/promote_screen.dart';
 import '../../features/public_feed/presentation/public_feed_screen.dart';
 import '../../features/search/presentation/search_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
@@ -102,7 +106,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       _route('/chat/:username',
           (context, state) => ThreadScreen(username: state.pathParameters['username']!)),
       _route('/v/:id',
-          (context, state) => SingleVideoScreen(videoId: state.pathParameters['id']!)),
+          (context, state) => SingleVideoScreen(
+                videoId: state.pathParameters['id']!,
+                // When opened from a grid we already hold the full VideoModel;
+                // passing it renders the player instantly instead of showing a
+                // spinner while a redundant fetch runs.
+                initialVideo: state.extra is VideoModel ? state.extra as VideoModel : null,
+              )),
       _route('/sound/:id',
           (context, state) => SoundScreen(soundId: state.pathParameters['id']!)),
       _route('/compose', (context, state) {
@@ -115,6 +125,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         );
       }),
       _route('/camera', (context, state) => const CameraCaptureScreen()),
+      _route('/promote', (context, state) => const PromoteScreen()),
+      _route('/my-ads', (context, state) => const MyAdsScreen()),
+      _route('/admin/ads', (context, state) => const AdminAdsScreen()),
     ],
   );
 });

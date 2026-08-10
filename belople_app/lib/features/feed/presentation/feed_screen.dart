@@ -1,4 +1,3 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,9 +8,12 @@ import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/bottom_nav_pill.dart';
+import '../../../core/widgets/top_toast.dart';
 import '../../../core/widgets/seg_control.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../../auth/application/auth_controller.dart';
+import '../../profile/data/profile_repository.dart';
+import '../../overlays/presentation/ad_comments_sheet.dart';
 import '../../overlays/presentation/comments_sheet.dart';
 import '../../overlays/presentation/more_options_sheet.dart';
 import '../../wallet/presentation/gift_sheet.dart';
@@ -98,35 +100,29 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
     try {
       final url = await ref.read(feedRepositoryProvider).share(videoId);
       await Clipboard.setData(ClipboardData(text: url));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied')));
-      }
+      if (mounted) showTopToast(context, 'Link copied');
     } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text("Couldn't share — check your connection")));
-      }
+      if (mounted) showTopToast(context, "Couldn't share — check your connection");
     }
   }
 
-  /// Reposts a video to the caller's profile, surfacing the "already
-  /// reposted" case the backend reports as a 409 (design-4.css copy rule).
+  /// Repost / un-repost toggle (the controller flips state + count optimistically
+  /// and reverts on a real failure); we just surface the outcome.
   Future<void> _repost(String videoId) async {
-    try {
-      await ref.read(feedRepositoryProvider).repost(videoId);
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Reposted to your profile')));
-      }
-    } on DioException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.response?.statusCode == 409
-              ? 'You already reposted this'
-              : "Couldn't repost — check your connection"),
-        ));
-      }
+    final result = await ref.read(feedControllerProvider(_tab).notifier).toggleRepost(videoId);
+    if (!mounted) return;
+    // Refresh my profile so the repost shows (or disappears) in my Reposts tab
+    // right away — no manual reload.
+    if (result == 'reposted' || result == 'unreposted') {
+      final me = ref.read(authControllerProvider).valueOrNull;
+      if (me != null) ref.invalidate(profileProvider(me.username));
     }
+    final message = switch (result) {
+      'reposted' => 'Reposted to your profile',
+      'unreposted' => 'Removed from your profile',
+      _ => "Couldn't repost — check your connection",
+    };
+    showTopToast(context, message);
   }
 
   /// The "+" flow: open the camera first (the user asked for + to go
@@ -183,6 +179,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
               return PageView.builder(
                 controller: _pageController,
                 scrollDirection: Axis.vertical,
+                // Snappy TikTok-style paging: a stiff spring so a swipe flicks
+                // to the next video almost instantly instead of drifting.
+                physics: const _SnappyPageScrollPhysics(),
+                // Keeps the neighbouring pages built so the next video's
+                // controller starts buffering before you swipe to it — the
+                // swipe lands on a ready frame instead of a black loading one.
+                allowImplicitScrolling: true,
                 onPageChanged: _onPageChanged,
                 itemCount: state.videos.length,
                 itemBuilder: (context, index) {
@@ -198,21 +201,29 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                     child: VideoSlide(
                     video: video,
                     isActive: index == _activeIndex && _routeVisible,
-                    onLikeTap: () => _requireLogin(() =>
-                        ref.read(feedControllerProvider(_tab).notifier).toggleLike(video.id)),
+                    onLikeTap: () => _requireLogin(() => video.isAd
+                        ? ref.read(feedControllerProvider(_tab).notifier).adToggleLike(video.id)
+                        : ref.read(feedControllerProvider(_tab).notifier).toggleLike(video.id)),
+                    // Records the CTA click on a user ad (best-effort).
+                    onAdClick: () => ref.read(feedRepositoryProvider).recordAdClick(video.id),
                     onFollowTap: () => _requireLogin(() => ref
                         .read(feedControllerProvider(_tab).notifier)
                         .toggleFollow(video.user.id)),
                     onAuthorTap: () => context.push('/profile/${video.user.username}'),
-                    onCommentTap: () => showCommentsSheet(context, videoId: video.id),
+                    onCommentTap: () => video.isAd
+                        ? showAdCommentsSheet(context, adId: video.id)
+                        : showCommentsSheet(context, videoId: video.id),
                     onMoreTap: () => _requireLogin(
-                        () => showMoreOptionsSheet(context, ref, video: video)),
-                    // Tapping the sound always goes somewhere: a shareable
-                    // sound opens its page; an original sound opens the
-                    // creator's profile (the "owner" of that sound).
-                    onSoundTap: () => context.push(video.soundId != null
-                        ? '/sound/${video.soundId}'
-                        : '/profile/${video.user.username}'),
+                        () => showMoreOptionsSheet(context, ref, video: video,
+                            onDeleted: () => ref
+                                .read(feedControllerProvider(_tab).notifier)
+                                .removeVideo(video.id))),
+                    // Matches the web: only a shareable sound (has a soundId)
+                    // is tappable, opening its page. An original sound isn't a
+                    // link at all — no profile detour.
+                    onSoundTap: video.soundId != null
+                        ? () => context.push('/sound/${video.soundId}')
+                        : null,
                     onShareTap: () => _share(video.id),
                     onGiftTap: () =>
                         _requireLogin(() => showGiftSheet(context, videoId: video.id)),
@@ -259,7 +270,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: FeedTabs(
-                            labels: const ['Following', 'For you', 'Public'],
+                            labels: const ['Following', 'Belo', 'Public'],
                             selectedIndex: _tab == FeedTab.following ? 0 : 1,
                             onChanged: (i) {
                               if (i == 2) {
@@ -282,7 +293,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                       child: const Icon(
                         Icons.search,
                         color: Colors.white,
-                        size: 26,
+                        size: 32,
                         shadows: [Shadow(color: Colors.black87, blurRadius: 6)],
                       ),
                     ),
@@ -372,4 +383,32 @@ class _FeedError extends StatelessWidget {
       ),
     );
   }
+}
+
+/// TikTok-style paging: keep normal page-snapping, but swap the settle spring
+/// for a much stiffer one so a swipe flicks to the next video almost instantly
+/// instead of drifting up slowly. Higher stiffness + lower mass = a fast snap;
+/// damping ~1 keeps it clean with no bounce/overshoot.
+class _SnappyPageScrollPhysics extends PageScrollPhysics {
+  const _SnappyPageScrollPhysics({super.parent});
+
+  @override
+  _SnappyPageScrollPhysics applyTo(ScrollPhysics? ancestor) =>
+      _SnappyPageScrollPhysics(parent: buildParent(ancestor));
+
+  // withDampingRatio, NOT a raw damping coefficient: ratio 1.0 is critically
+  // damped — the fastest snap that DOESN'T overshoot. (The old raw damping of
+  // 1.0 was far below critical for this mass/stiffness, so the page sprang up
+  // then bounced/vibrated several times before settling.) High stiffness keeps
+  // the flick fast; ratio 1.0 makes it land once and stop dead.
+  @override
+  SpringDescription get spring => SpringDescription.withDampingRatio(
+        // Much stiffer + lighter than before so the page snaps up fast and the
+        // spring's settle tail is over almost instantly — that long, slow
+        // final approach was the "catch"/drag felt at the end. ratio 1.0 keeps
+        // it critically damped (fast, firm, no overshoot or bounce).
+        mass: 0.3,
+        stiffness: 560,
+        ratio: 1.0,
+      );
 }

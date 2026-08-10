@@ -22,24 +22,40 @@ final singleVideoProvider = FutureProvider.family.autoDispose<VideoModel, String
 /// profile grid cell, sound page, share link, or notification — reuses the
 /// same VideoSlide renderer as the home feed.
 class SingleVideoScreen extends ConsumerWidget {
-  const SingleVideoScreen({super.key, required this.videoId});
+  const SingleVideoScreen({super.key, required this.videoId, this.initialVideo});
   final String videoId;
+
+  /// Passed when we already have the video (e.g. from a profile grid) so the
+  /// player shows immediately with no loading spinner. Falls back to fetching.
+  final VideoModel? initialVideo;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final videoAsync = ref.watch(singleVideoProvider(videoId));
+    // Render the passed-in video right away; only fall back to the fetch's
+    // loading/error states when we arrived here without one (share link,
+    // notification, etc.).
+    final video = videoAsync.valueOrNull ?? initialVideo;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
-      body: videoAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator(color: AppColors.text)),
-        error: (e, _) => Center(
-          child: Text(
-            e is DioException && e.response?.statusCode == 404 ? 'Video not found' : "Couldn't load this video",
-            style: const TextStyle(color: AppColors.muted),
-          ),
-        ),
-        data: (video) => Stack(
+      body: video == null
+          ? videoAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator(color: AppColors.text)),
+              error: (e, _) => Center(
+                child: Text(
+                  e is DioException && e.response?.statusCode == 404 ? 'Video not found' : "Couldn't load this video",
+                  style: const TextStyle(color: AppColors.muted),
+                ),
+              ),
+              data: (v) => const SizedBox.shrink(),
+            )
+          : _player(context, ref, video),
+    );
+  }
+
+  Widget _player(BuildContext context, WidgetRef ref, VideoModel video) {
+    return Stack(
           children: [
             VideoSlide(
               video: video,
@@ -50,9 +66,9 @@ class SingleVideoScreen extends ConsumerWidget {
               },
               onCommentTap: () => showCommentsSheet(context, videoId: video.id),
               onAuthorTap: () => context.push('/profile/${video.user.username}'),
-              onSoundTap: () => context.push(video.soundId != null
-                  ? '/sound/${video.soundId}'
-                  : '/profile/${video.user.username}'),
+              onSoundTap: video.soundId != null
+                  ? () => context.push('/sound/${video.soundId}')
+                  : null,
               onGiftTap: () {
                 if (!ref.read(isLoggedInProvider)) {
                   context.push('/login');
@@ -95,7 +111,8 @@ class SingleVideoScreen extends ConsumerWidget {
                 if (!ref.read(isLoggedInProvider)) {
                   context.push('/login');
                 } else {
-                  showMoreOptionsSheet(context, ref, video: video);
+                  showMoreOptionsSheet(context, ref, video: video,
+                      onDeleted: () => Navigator.of(context).maybePop());
                 }
               },
             ),
@@ -106,8 +123,6 @@ class SingleVideoScreen extends ConsumerWidget {
               ),
             ),
           ],
-        ),
-      ),
     );
   }
 }

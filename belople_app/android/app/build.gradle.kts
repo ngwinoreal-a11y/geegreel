@@ -19,7 +19,9 @@ android {
         applicationId = "app.belople.belople_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // ffmpeg-kit (min_gpl) requires API 24+; take the higher of that and
+        // whatever Flutter's default would be.
+        minSdk = maxOf(24, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

@@ -89,8 +89,49 @@ class FeedRepository {
   /// design-4.css's copy rules: "You already reposted this").
   Future<void> repost(String videoId) => _dio.post('/videos/$videoId/repost');
 
+  /// `DELETE /api/videos/:id/repost` — undoes the caller's repost (toggle off).
+  Future<void> unrepost(String videoId) => _dio.delete('/videos/$videoId/repost');
+
+  /// `POST/DELETE /api/ads/:id/like` — likes/unlikes an ad, returns the count.
+  Future<int> setAdLiked(String adId, bool liked) async {
+    final res = liked ? await _dio.post('/ads/$adId/like') : await _dio.delete('/ads/$adId/like');
+    return ((res.data as Map<String, dynamic>)['count'] as num?)?.toInt() ?? 0;
+  }
+
+  /// `POST /api/ads/:id/click` — records a CTA tap (best-effort).
+  Future<void> recordAdClick(String adId) => _dio.post('/ads/$adId/click');
+
+
   /// `DELETE /api/videos/:id` — removes the caller's own video.
   Future<void> deleteVideo(String videoId) => _dio.delete('/videos/$videoId');
+
+  /// `POST /api/videos/:id/view` — records a watch for Belo Flow. Sends how
+  /// long/how much of the clip was watched so the recommender learns from real
+  /// behaviour, not just likes. Best-effort: never throws into the UI.
+  Future<void> recordWatch(
+    String videoId, {
+    required int watchMs,
+    required int durationMs,
+    bool replayed = false,
+    bool skipped = false,
+  }) async {
+    try {
+      await _dio.post('/videos/$videoId/view', data: {
+        'watchMs': watchMs,
+        'durationMs': durationMs,
+        if (replayed) 'replayed': true,
+        if (skipped) 'skipped': true,
+      });
+    } catch (_) {/* signal capture must never break playback */}
+  }
+
+  /// `POST /api/videos/:id/not-interested` — a strong negative signal that
+  /// suppresses this video and similar content for the viewer.
+  Future<void> notInterested(String videoId) async {
+    try {
+      await _dio.post('/videos/$videoId/not-interested');
+    } catch (_) {}
+  }
 
   /// `POST /api/videos/:id/share` — returns a share URL. NOTE: design-5.css
   /// flagged this exact button as missing a handler in the reference web

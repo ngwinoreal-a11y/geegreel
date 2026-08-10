@@ -10,29 +10,37 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../../core/widgets/top_toast.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../chat/data/chat_repository.dart';
 import '../../chat/data/message_model.dart';
 import '../../feed/application/playback_speed.dart';
 import '../../feed/data/feed_repository.dart';
 import '../../feed/data/video_model.dart';
+import '../../profile/data/profile_repository.dart';
+import '../data/video_watermark_service.dart';
 
 /// Ports the video "•••" sheet from the reference: quick actions (Save video /
 /// Gift / Delete-or-Report), a Share-with row (Copy link / WhatsApp), Repost,
 /// and a list of people you can send the video to as a DM.
-Future<void> showMoreOptionsSheet(BuildContext context, WidgetRef ref, {required VideoModel video}) {
+Future<void> showMoreOptionsSheet(BuildContext context, WidgetRef ref,
+    {required VideoModel video, VoidCallback? onDeleted}) {
   return showModalBottomSheet(
     context: context,
     backgroundColor: AppColors.sheetBg,
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(borderRadius: AppRadii.sheetTop),
-    builder: (_) => _MoreSheet(video: video),
+    builder: (_) => _MoreSheet(video: video, onDeleted: onDeleted),
   );
 }
 
 class _MoreSheet extends ConsumerStatefulWidget {
-  const _MoreSheet({required this.video});
+  const _MoreSheet({required this.video, this.onDeleted});
   final VideoModel video;
+  /// Called after a successful delete so the caller can drop the video from
+  /// its list (feed) or leave the screen (single-video) — without it the video
+  /// would vanish server-side but stay on screen, looking like nothing happened.
+  final VoidCallback? onDeleted;
 
   @override
   ConsumerState<_MoreSheet> createState() => _MoreSheetState();
@@ -41,7 +49,9 @@ class _MoreSheet extends ConsumerStatefulWidget {
 class _MoreSheetState extends ConsumerState<_MoreSheet> {
   List<ThreadPreview>? _people;
   bool _downloading = false;
+  bool _processing = false;
   double _downloadProgress = 0;
+  double _processProgress = 0;
 
   @override
   void initState() {
@@ -80,16 +90,29 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
           if (total > 0 && mounted) setState(() => _downloadProgress = received / total);
         },
       );
-      await Gal.putVideo(path, album: 'Belople');
+      // Burn in the moving Belople watermark + branded outro — only on the
+      // saved file; in-app playback stays clean. On any failure this returns
+      // the original path, so the save still happens (just unbranded).
+      if (mounted) setState(() { _processing = true; _processProgress = 0; });
+      final branded = await VideoWatermarkService.brandForDownload(
+        sourcePath: path,
+        username: video.user.username,
+        width: video.width,
+        height: video.height,
+        onProgress: (p) {
+          if (mounted) setState(() => _processProgress = p);
+        },
+      );
+      await Gal.putVideo(branded, album: 'Belople');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved to your gallery')));
+        showTopToast(context, 'Saved to your gallery');
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't save the video")));
+        showTopToast(context, "Couldn't save the video");
       }
     } finally {
-      if (mounted) setState(() => _downloading = false);
+      if (mounted) setState(() { _downloading = false; _processing = false; });
     }
   }
 
@@ -118,7 +141,7 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
       return await ref.read(feedRepositoryProvider).share(video.id).then((url) async {
         await Clipboard.setData(ClipboardData(text: url));
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied')));
+          showTopToast(context, 'Link copied');
         }
       });
     } catch (_) {}
@@ -127,11 +150,21 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
   Future<String> _link() async => ref.read(feedRepositoryProvider).share(video.id);
 
   Future<void> _delete() async {
-    Navigator.of(context).pop();
     try {
       await ref.read(feedRepositoryProvider).deleteVideo(video.id);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Video deleted')));
-    } catch (_) {}
+      widget.onDeleted?.call(); // drop it from the feed in place
+      // …and refresh the owner's profile grid so it's gone there too.
+      ref.invalidate(profileProvider(video.user.username));
+      if (mounted) {
+        // Toast into the ROOT overlay first (survives the sheet closing), then pop.
+        showTopToast(context, 'Video deleted');
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      // Surface the backend's actual reason (e.g. "Other people's videos use
+      // this video's sound…") instead of a blank generic failure.
+      if (mounted) showTopToast(context, apiErrorMessage(e, "Couldn't delete — try again"));
+    }
   }
 
   void _report() {
@@ -141,14 +174,16 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
   }
 
   Future<void> _repost() async {
-    Navigator.of(context).pop();
     try {
       await ref.read(feedRepositoryProvider).repost(video.id);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Reposted to your profile')));
+      if (mounted) {
+        showTopToast(context, 'Reposted to your profile');
+        Navigator.of(context).pop();
+      }
     } on DioException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(e.response?.statusCode == 409 ? 'You already reposted this' : "Couldn't repost")));
+        showTopToast(context, e.response?.statusCode == 409 ? 'You already reposted this' : "Couldn't repost");
+        Navigator.of(context).pop();
       }
     }
   }
@@ -156,7 +191,7 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
   Future<void> _sendTo(ThreadPreview t) async {
     try {
       await ref.read(chatRepositoryProvider).sendVideo(recipientId: t.user.id, videoId: video.id);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sent to ${t.user.displayName}')));
+      if (mounted) showTopToast(context, 'Sent to ${t.user.displayName}');
     } catch (_) {}
   }
 
@@ -195,9 +230,17 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
                       children: [
                         _QuickAction(
                           icon: Icons.download_outlined,
-                          label: _downloading ? '${(_downloadProgress * 100).toStringAsFixed(0)}%' : 'Save video',
-                          busy: _downloading,
-                          progress: _downloadProgress,
+                          label: _processing
+                              ? (_processProgress > 0
+                                  ? 'Finishing ${(_processProgress * 100).toStringAsFixed(0)}%'
+                                  : 'Finishing…')
+                              : _downloading
+                                  ? '${(_downloadProgress * 100).toStringAsFixed(0)}%'
+                                  : 'Save video',
+                          busy: _downloading || _processing,
+                          // Show real encode progress when we have it, else an
+                          // indeterminate spinner (0).
+                          progress: _processing ? _processProgress : _downloadProgress,
                           onTap: _saveVideo,
                         ),
                         _QuickAction(
@@ -225,18 +268,20 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
                       ],
                     ),
                   ),
-                  // Repost.
-                  ListTile(
-                    leading: Container(
-                      width: 40, height: 40,
-                      decoration: const BoxDecoration(color: AppColors.repostGold, shape: BoxShape.circle),
-                      child: const Icon(Icons.repeat_rounded, color: AppColors.onChrome, size: 22),
+                  // Repost — hidden on your own video (you can't repost yourself).
+                  if (!isOwn) ...[
+                    ListTile(
+                      leading: Container(
+                        width: 40, height: 40,
+                        decoration: const BoxDecoration(color: AppColors.repostGold, shape: BoxShape.circle),
+                        child: const Icon(Icons.repeat_rounded, color: AppColors.onChrome, size: 22),
+                      ),
+                      title: Text('Repost', style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.sheetInk)),
+                      trailing: const Icon(Icons.chevron_right, color: AppColors.sheetMuted),
+                      onTap: _repost,
                     ),
-                    title: Text('Repost', style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.sheetInk)),
-                    trailing: const Icon(Icons.chevron_right, color: AppColors.sheetMuted),
-                    onTap: _repost,
-                  ),
-                  const Divider(height: 1, color: AppColors.sheetLine),
+                    const Divider(height: 1, color: AppColors.sheetLine),
+                  ],
                   // People to send to.
                   if (_people == null)
                     const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator()))

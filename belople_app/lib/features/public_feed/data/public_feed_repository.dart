@@ -42,6 +42,16 @@ class PublicFeedRepository {
     return PostsPage(posts: posts, nextCursor: data['nextCursor'] as String?);
   }
 
+  /// `DELETE /api/posts/:id` — removes the caller's own public post.
+  Future<void> deletePost(String postId) => _dio.delete('/posts/$postId');
+
+  /// `POST /api/posts/:id/share` — records a share, returns the new count.
+  Future<int> sharePost(String postId) async {
+    final res = await _dio.post('/posts/$postId/share');
+    final data = res.data as Map<String, dynamic>;
+    return (data['count'] as num?)?.toInt() ?? 0;
+  }
+
   Future<(bool liked, int count)> setLiked(String postId, bool liked) async {
     final res = liked
         ? await _dio.post('/posts/$postId/like')

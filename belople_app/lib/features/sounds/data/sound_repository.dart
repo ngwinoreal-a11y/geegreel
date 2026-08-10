@@ -4,17 +4,28 @@ import '../../../core/network/api_client.dart';
 import '../../feed/data/video_model.dart';
 
 class SoundModel {
-  const SoundModel({required this.id, required this.title, this.author, this.uses = 0});
+  const SoundModel({required this.id, required this.title, this.author, this.uses = 0, this.audioUrl});
   final String id;
   final String title;
   final String? author;
   final int uses;
 
+  /// `/api/media/:key` path to the sound's audio — needed to mix the sound
+  /// into a recorded video at upload time. Present on the single-sound detail.
+  final String? audioUrl;
+
   factory SoundModel.fromJson(Map<String, dynamic> json) => SoundModel(
         id: json['id'].toString(),
         title: json['title'] as String? ?? 'Original sound',
-        author: json['author'] as String?,
+        // `/api/sounds/:id` returns author as an OBJECT ({id, username,
+        // displayName, …}); older/other shapes may send a plain name string.
+        // Casting the object straight to String? threw and surfaced as
+        // "Couldn't load this sound" for every valid sound.
+        author: json['author'] is Map
+            ? (json['author'] as Map<String, dynamic>)['displayName'] as String?
+            : json['author'] as String?,
         uses: (json['uses'] as num?)?.toInt() ?? 0,
+        audioUrl: json['audioUrl'] as String?,
       );
 }
 

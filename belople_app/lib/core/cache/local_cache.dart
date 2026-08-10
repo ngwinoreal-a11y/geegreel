@@ -32,6 +32,8 @@ class LocalCache {
     return _box.put(key, jsonEncode(value));
   }
 
+  static Future<void> remove(String key) => _box.delete(key);
+
   /// Reads a JSON array back as a list of strings (e.g. recent searches).
   static List<String> getStringList(String key) {
     final raw = _box.get(key);

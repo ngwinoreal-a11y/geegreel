@@ -41,7 +41,7 @@ class PostModel {
     return 4 / 5;
   }
 
-  PostModel copyWith({bool? liked, int? likes}) {
+  PostModel copyWith({bool? liked, int? likes, int? shares, bool? following}) {
     return PostModel(
       id: id,
       content: content,
@@ -51,9 +51,9 @@ class PostModel {
       user: user,
       likes: likes ?? this.likes,
       comments: comments,
-      shares: shares,
+      shares: shares ?? this.shares,
       liked: liked ?? this.liked,
-      following: following,
+      following: following ?? this.following,
       createdAt: createdAt,
     );
   }

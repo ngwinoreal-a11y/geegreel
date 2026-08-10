@@ -69,6 +69,28 @@ class UserModel {
         following: json['following'] as bool? ?? false,
       );
 
+  /// Serialised for the offline auth cache (see AuthController) — keeps the
+  /// same keys fromJson reads so a cached user round-trips cleanly.
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'username': username,
+        'displayName': displayName,
+        'bio': bio,
+        'avatarUrl': avatarUrl,
+        'email': email,
+        'role': role,
+        'monetized': monetized,
+        'coins': coins,
+        'giftBalanceCents': giftBalanceCents,
+        'isPrivate': isPrivate,
+        'allowMessages': allowMessages,
+        'allowComments': allowComments,
+        'notifyLikes': notifyLikes,
+        'notifyComments': notifyComments,
+        'notifyFollows': notifyFollows,
+        'following': following,
+      };
+
   /// `GET /api/users/:handle` returns stats separately from the user object
   /// — merge them in with this rather than fromJson so the two response
   /// shapes (privateUser vs. profile) don't have to be reconciled in one

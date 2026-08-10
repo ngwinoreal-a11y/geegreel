@@ -4,11 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../../../core/network/api_client.dart';
+import '../../auth/application/auth_controller.dart';
 import '../application/playback_speed.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../data/video_model.dart';
+import '../data/feed_repository.dart';
 
 /// Ports design-feed.css: full-bleed video (object-fit: cover), no black
 /// band at top, a short black strip at the bottom behind the nav pill/scrub
@@ -28,6 +30,7 @@ class VideoSlide extends ConsumerStatefulWidget {
     this.onShareTap,
     this.onGiftTap,
     this.onRepostTap,
+    this.onAdClick,
   });
 
   final VideoModel video;
@@ -41,6 +44,8 @@ class VideoSlide extends ConsumerStatefulWidget {
   final VoidCallback? onShareTap;
   final VoidCallback? onGiftTap;
   final VoidCallback? onRepostTap;
+  /// Fired when the ad's CTA is tapped, to record a click (user ads).
+  final VoidCallback? onAdClick;
 
   @override
   ConsumerState<VideoSlide> createState() => _VideoSlideState();
@@ -52,12 +57,20 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
   bool _showHeartBurst = false;
   bool _showPauseGlyph = false;
   bool _pausedByLifecycle = false;
+  bool _captionExpanded = false;
+
+  // Belo Flow watch tracking: wall-clock time this slide was the active,
+  // foreground video — a robust proxy for watch time that feeds the
+  // recommender. Reported once when the user swipes away (or on dispose).
+  final Stopwatch _watch = Stopwatch();
+  bool _watchReported = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _setup();
+    if (widget.isActive) _watch.start();
   }
 
   // Backgrounding the app (home button, phone lock, app switch) has no
@@ -71,6 +84,7 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
     if (state == AppLifecycleState.resumed) {
       if (_pausedByLifecycle && widget.isActive) {
         _controller!.play();
+        if (widget.isActive) _watch.start(); // resume counting watch time
       }
       _pausedByLifecycle = false;
     } else {
@@ -78,7 +92,33 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
         _controller!.pause();
         _pausedByLifecycle = true;
       }
+      _watch.stop(); // don't count time while backgrounded
     }
+  }
+
+  // Reports the watch to Belo Flow exactly once per active viewing. watch time
+  // comes from the stopwatch; the duration from the player. A very short watch
+  // is flagged as an early swipe (negative signal); looping past the full
+  // duration counts as a replay (positive signal).
+  void _reportWatch() {
+    if (_watchReported) return;
+    final c = _controller;
+    if (c == null || !_initialized) return; // nothing to report for image ads
+    if (widget.video.isAd) return;          // ads track impressions separately
+    _watch.stop();
+    final watchMs = _watch.elapsedMilliseconds;
+    if (watchMs < 300) return;              // ignore incidental flashes
+    final durationMs = c.value.duration.inMilliseconds;
+    final replayed = durationMs > 0 && watchMs > durationMs * 1.5;
+    final skipped = durationMs > 0 && watchMs < 2000 && watchMs < durationMs * 0.2;
+    _watchReported = true;
+    ref.read(feedRepositoryProvider).recordWatch(
+          widget.video.id,
+          watchMs: watchMs,
+          durationMs: durationMs,
+          replayed: replayed,
+          skipped: skipped,
+        );
   }
 
   Future<void> _setup() async {
@@ -101,11 +141,20 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
     if (widget.isActive != oldWidget.isActive && _controller != null) {
       widget.isActive ? _controller!.play() : _controller!.pause();
     }
+    if (widget.isActive && !oldWidget.isActive) {
+      // Became the active video: begin a fresh watch measurement.
+      _watchReported = false;
+      _watch..reset()..start();
+    } else if (!widget.isActive && oldWidget.isActive) {
+      // Swiped away: report what was watched.
+      _reportWatch();
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (widget.isActive) _reportWatch(); // still active at teardown — capture it
     _controller?.dispose();
     super.dispose();
   }
@@ -129,6 +178,13 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
     Future.delayed(const Duration(milliseconds: 700), () {
       if (mounted) setState(() => _showHeartBurst = false);
     });
+  }
+
+  /// The signed-in user is this video's author — used to hide repost/gift on
+  /// your own video (you can't repost or tip yourself), matching the web.
+  bool get _isMine {
+    final me = ref.watch(authControllerProvider).valueOrNull;
+    return me != null && me.id == widget.video.user.id;
   }
 
   @override
@@ -195,7 +251,9 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
             left: 8,
             right: 8,
             bottom: 96,
-            child: _Scrubber(controller: _controller!),
+            // Isolate the scrubber's per-frame repaints from the rest of the
+            // slide so tracking the playhead doesn't repaint the video layer.
+            child: RepaintBoundary(child: _Scrubber(controller: _controller!)),
           ),
 
         // D. author/caption, floating on the picture
@@ -211,16 +269,43 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                // "Reposted by" line with the reposter's small avatar — shown
+                // above the original creator's author row. (For a repost the
+                // backend puts the original creator in repostOf and the
+                // reposter in user.)
+                if (widget.video.isRepost) ...[
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AppAvatar(
+                        size: 18,
+                        imageUrl: widget.video.user.avatarUrl != null
+                            ? mediaUrl(widget.video.user.avatarUrl!)
+                            : null,
+                        displayName: widget.video.user.displayName,
+                      ),
+                      const SizedBox(width: 6),
+                      Text('Reposted',
+                          style: AppTypography.sans(
+                              fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                ],
+                // A real post — and a self-serve USER ad — shows the author
+                // (the sponsor for ads, the original creator for reposts) +
+                // follow. A house/admin ad shows neither.
+                if (!widget.video.isAd || widget.video.isUserAd)
                 Row(
                   children: [
                     GestureDetector(
                       onTap: widget.onAuthorTap,
                       child: AppAvatar(
                         size: 44,
-                        imageUrl: widget.video.user.avatarUrl != null
-                            ? mediaUrl(widget.video.user.avatarUrl!)
+                        imageUrl: (widget.video.repostOf ?? widget.video.user).avatarUrl != null
+                            ? mediaUrl((widget.video.repostOf ?? widget.video.user).avatarUrl!)
                             : null,
-                        displayName: widget.video.user.displayName,
+                        displayName: (widget.video.repostOf ?? widget.video.user).displayName,
                         borderColor: Colors.white,
                         borderWidth: 2,
                       ),
@@ -230,7 +315,7 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                       child: GestureDetector(
                       onTap: widget.onAuthorTap,
                       child: Text(
-                        widget.video.user.displayName,
+                        (widget.video.repostOf ?? widget.video.user).displayName,
                         style: AppTypography.sans(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
@@ -269,46 +354,83 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                   ],
                 ),
                 if (widget.video.isAd) ...[
-                  const SizedBox(height: 5),
+                  const SizedBox(height: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                       color: AppColors.sponsor.withValues(alpha: 0.9),
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: Text('Sponsored',
+                    child: Text('Ad',
                         style: AppTypography.sans(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.onChrome)),
                   ),
+                  // Admin ads name their sponsor here (user ads already show the
+                  // creator in the author row above).
+                  if (!widget.video.isUserAd && widget.video.sponsorName != null) ...[
+                    const SizedBox(height: 6),
+                    Text(widget.video.sponsorName!,
+                        style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
+                  ],
                 ],
                 if (widget.video.caption.isNotEmpty) ...[
                   const SizedBox(height: 5),
-                  Text(
-                    widget.video.caption,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.sans(fontSize: 14, color: Colors.white),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => setState(() => _captionExpanded = !_captionExpanded),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.video.caption,
+                          maxLines: _captionExpanded ? null : 1,
+                          overflow: _captionExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                          style: AppTypography.sans(fontSize: 14, color: Colors.white),
+                        ),
+                        // "more"/"less" toggle — only when the caption is long
+                        // enough to actually be clipped on one line.
+                        if (widget.video.caption.length > 42)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              _captionExpanded ? 'less' : 'more',
+                              style: AppTypography.sans(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white.withValues(alpha: 0.75),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ],
                 if (widget.video.isAd && widget.video.linkUrl != null) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   GestureDetector(
-                    onTap: () => launchUrl(Uri.parse(widget.video.linkUrl!), mode: LaunchMode.externalApplication),
+                    onTap: () {
+                      widget.onAdClick?.call();
+                      launchUrl(Uri.parse(widget.video.linkUrl!), mode: LaunchMode.externalApplication);
+                    },
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
+                      width: 260,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF25D366), // WhatsApp/CTA green, as in the refs
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                       child: Row(
-                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(widget.video.ctaText ?? 'Learn more',
-                              style: AppTypography.sans(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.onChrome)),
-                          const SizedBox(width: 4),
-                          const Icon(Icons.open_in_new, size: 14, color: AppColors.onChrome),
+                          Expanded(
+                            child: Text(widget.video.ctaText ?? 'Learn more',
+                                style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
+                          ),
+                          const Icon(Icons.chevron_right, size: 22, color: Colors.white),
                         ],
                       ),
                     ),
                   ),
                 ],
-                if (widget.video.song != null) ...[
+                if (!widget.video.isAd && widget.video.song != null) ...[
                   const SizedBox(height: 4),
                   GestureDetector(
                   behavior: HitTestBehavior.opaque,
@@ -335,20 +457,34 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
           ),
         ),
 
-        // Right-hand action rail
+        // Right-hand action rail. A house/admin ad shows only a like button;
+        // a self-serve USER ad gets the full rail (like/comment/share/more —
+        // no gift/repost/sound), like the Instagram-style ad references.
         Positioned(
           right: 10,
           bottom: 116,
-          child: _ActionRail(
-            video: widget.video,
-            onLikeTap: widget.onLikeTap,
-            onCommentTap: widget.onCommentTap,
-            onMoreTap: widget.onMoreTap,
-            onShareTap: widget.onShareTap,
-            onGiftTap: widget.onGiftTap,
-            onRepostTap: widget.onRepostTap,
-            onSoundTap: widget.onSoundTap,
-          ),
+          child: (widget.video.isAd && !widget.video.isUserAd)
+              ? GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onLikeTap,
+                  child: _RailButton(
+                    icon: widget.video.liked ? Icons.favorite : Icons.favorite_border,
+                    color: widget.video.liked ? AppColors.badge : Colors.white,
+                    count: widget.video.counts.likes,
+                  ),
+                )
+              : _ActionRail(
+                  video: widget.video,
+                  // Ads never show gift/repost/sound — reuse the "mine" hiding.
+                  isMine: _isMine || widget.video.isUserAd,
+                  onLikeTap: widget.onLikeTap,
+                  onCommentTap: widget.onCommentTap,
+                  onMoreTap: widget.onMoreTap,
+                  onShareTap: widget.onShareTap,
+                  onGiftTap: widget.onGiftTap,
+                  onRepostTap: widget.onRepostTap,
+                  onSoundTap: widget.onSoundTap,
+                ),
         ),
       ],
       ),
@@ -359,6 +495,7 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
 class _ActionRail extends StatelessWidget {
   const _ActionRail({
     required this.video,
+    this.isMine = false,
     this.onLikeTap,
     this.onCommentTap,
     this.onMoreTap,
@@ -368,6 +505,7 @@ class _ActionRail extends StatelessWidget {
     this.onSoundTap,
   });
   final VideoModel video;
+  final bool isMine;
   final VoidCallback? onLikeTap;
   final VoidCallback? onCommentTap;
   final VoidCallback? onMoreTap;
@@ -389,44 +527,57 @@ class _ActionRail extends StatelessWidget {
             count: video.counts.likes,
           ),
         ),
-        const SizedBox(height: 22),
+        const SizedBox(height: 14),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onCommentTap,
           child: _RailButton(icon: Icons.mode_comment, color: Colors.white, count: video.counts.comments),
         ),
-        const SizedBox(height: 22),
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onRepostTap,
-          child: _RailButton(icon: Icons.repeat_rounded, color: Colors.white, count: video.counts.reposts),
-        ),
-        const SizedBox(height: 22),
+        const SizedBox(height: 14),
+        // Repost and gift are hidden on your own video — you can't repost or
+        // tip yourself (matches the web's `mine` rule; the backend also 400s).
+        if (!isMine) ...[
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onRepostTap,
+            child: _RailButton(
+              icon: Icons.repeat_rounded,
+              color: video.isReposted ? AppColors.badge : Colors.white,
+              count: video.counts.reposts,
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onShareTap,
           child: _RailButton(icon: Icons.reply, color: Colors.white, count: video.counts.shares, flipX: true),
         ),
-        const SizedBox(height: 22),
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onGiftTap,
-          child: _RailButton(icon: Icons.card_giftcard, color: AppColors.accent, count: video.giftCoins),
-        ),
-        const SizedBox(height: 22),
+        const SizedBox(height: 14),
+        if (!isMine) ...[
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onGiftTap,
+            child: _RailButton(icon: Icons.card_giftcard, color: AppColors.accent, count: video.giftCoins),
+          ),
+          const SizedBox(height: 14),
+        ],
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onMoreTap,
           child: const Icon(Icons.more_vert, color: Colors.white, size: 28),
         ),
-        const SizedBox(height: 22),
-        // Spinning sound disc (design's `.sound-disc`) — the sound's art on
-        // the rail; tapping opens the sound page / its owner.
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onSoundTap,
-          child: _SoundDisc(thumbUrl: video.thumbUrl),
-        ),
+        // Spinning sound disc (design's `.sound-disc`) — shown only for a
+        // shareable sound (has a soundId), matching the web; tapping opens the
+        // sound's page.
+        if (video.soundId != null) ...[
+          const SizedBox(height: 14),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onSoundTap,
+            child: _SoundDisc(thumbUrl: video.thumbUrl),
+          ),
+        ],
       ],
     );
   }

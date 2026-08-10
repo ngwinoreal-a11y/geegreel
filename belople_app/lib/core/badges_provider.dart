@@ -3,8 +3,9 @@ import '../features/auth/application/auth_controller.dart';
 import '../features/chat/data/chat_repository.dart';
 import '../features/notifications/data/notifications_repository.dart';
 
-/// Polls the unread message count (~20s) so the Messages tab can show a badge.
-/// Yields 0 while logged out rather than hammering the API with 401s.
+/// Polls the unread message count (~5s) so the Messages tab badge updates
+/// near-real-time without the user refreshing. Yields 0 while logged out
+/// rather than hammering the API with 401s.
 final unreadMessagesProvider = StreamProvider<int>((ref) async* {
   while (true) {
     if (ref.read(isLoggedInProvider)) {
@@ -16,7 +17,7 @@ final unreadMessagesProvider = StreamProvider<int>((ref) async* {
     } else {
       yield 0;
     }
-    await Future<void>.delayed(const Duration(seconds: 20));
+    await Future<void>.delayed(const Duration(seconds: 5));
   }
 });
 

@@ -1,0 +1,55 @@
+name: Build Belople APK
+
+# Builds the Flutter release APK on GitHub's Linux cloud, where the
+# Windows Application Control block on gen_snapshot doesn't apply. Trigger it
+# manually from the Actions tab (Run workflow), or it runs automatically when
+# the Flutter app changes.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+    paths:
+      - 'belople_app/**'
+      - '.github/workflows/build-apk.yml'
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: belople_app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Pinned to the exact Flutter used locally so the cloud build matches.
+      - name: Set up Flutter 3.44.8
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter --version
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      # Release build — signed with debug keys for now (installs & runs on any
+      # phone). A real Play Store keystore gets wired in when we publish.
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: belople-release-apk
+          path: belople_app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error

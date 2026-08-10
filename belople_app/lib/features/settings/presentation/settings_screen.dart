@@ -329,12 +329,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           Text('EARNING', style: AppTypography.sectionLabel),
           const SizedBox(height: 8),
           _NavRow(label: 'Monetization', trailing: 'Check progress', onTap: () => context.push('/monetization')),
+          _NavRow(label: 'Promote', trailing: 'Create ad', onTap: () => context.push('/promote')),
+          _NavRow(label: 'My ads', trailing: 'Views & clicks', onTap: () => context.push('/my-ads')),
 
           // --- Staff ---
           if (me?.isStaff ?? false) ...[
             const SizedBox(height: 20),
             Text('STAFF', style: AppTypography.sectionLabel),
             const SizedBox(height: 8),
+            _NavRow(label: 'Review ads', trailing: 'Approve / reject', onTap: () => context.push('/admin/ads')),
             _NavRow(
               label: 'Admin dashboard',
               trailing: me?.role ?? 'admin',

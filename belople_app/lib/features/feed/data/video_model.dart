@@ -43,6 +43,13 @@ class VideoCounts {
         shares: (json?['shares'] as num?)?.toInt() ?? 0,
         reposts: (json?['reposts'] as num?)?.toInt() ?? 0,
       );
+
+  VideoCounts copyWith({int? likes, int? comments, int? shares, int? reposts}) => VideoCounts(
+        likes: likes ?? this.likes,
+        comments: comments ?? this.comments,
+        shares: shares ?? this.shares,
+        reposts: reposts ?? this.reposts,
+      );
 }
 
 class VideoModel {
@@ -64,8 +71,11 @@ class VideoModel {
     this.following = false,
     this.giftCoins = 0,
     this.isRepost = false,
+    this.repostOf,
+    this.isReposted = false,
     this.isAd = false,
     // Ad-only fields (see design-2.css section F / src/index.js ad shaping)
+    this.adKind = 'admin',
     this.sponsorName,
     this.ctaText,
     this.linkUrl,
@@ -94,7 +104,22 @@ class VideoModel {
   /// used to split the profile's Videos vs Reposts tabs.
   final bool isRepost;
 
+  /// The original creator, when this row is a repost. `user` is then the
+  /// person who reposted it (shown as a small "Reposted by" line).
+  final VideoAuthor? repostOf;
+
+  /// True when the SIGNED-IN user has reposted this video — drives the rail's
+  /// highlighted repost icon. Populated by the backend's `reposted` flag (once
+  /// deployed) and flipped optimistically on tap.
+  final bool isReposted;
+
   final bool isAd;
+
+  /// 'user' = a self-serve ad (renders with the creator + full engagement);
+  /// 'admin' = a house ad (minimal — one like, no author/comments).
+  final String adKind;
+  bool get isUserAd => isAd && adKind == 'user';
+
   final String? sponsorName;
   final String? ctaText;
   final String? linkUrl;
@@ -103,12 +128,14 @@ class VideoModel {
   /// 'image' or 'video' — an image ad is shown as a still, not played.
   final String? adType;
 
-  bool get isImageAd => isAd && adType == 'image';
+  bool get isImageAd => isAd && (adType == 'image' || adType == 'photo');
+  bool get isLinkAd => isAd && adType == 'link';
 
   VideoModel copyWith({
     VideoCounts? counts,
     bool? liked,
     bool? following,
+    bool? isReposted,
   }) {
     return VideoModel(
       id: id,
@@ -128,11 +155,14 @@ class VideoModel {
       following: following ?? this.following,
       giftCoins: giftCoins,
       isRepost: isRepost,
+      repostOf: repostOf,
+      isReposted: isReposted ?? this.isReposted,
       isAd: isAd,
       sponsorName: sponsorName,
       ctaText: ctaText,
       linkUrl: linkUrl,
       adId: adId,
+      adType: adType,
     );
   }
 
@@ -148,18 +178,29 @@ class VideoModel {
 
   factory VideoModel.fromJson(Map<String, dynamic> json) {
     if (json['isAd'] == true) {
+      final owner = json['user'] as Map<String, dynamic>?;
       return VideoModel(
         id: json['id'].toString(),
         caption: json['caption'] as String? ?? '',
         videoUrl: (json['mediaUrl'] ?? json['videoUrl'] ?? '') as String,
         createdAt: DateTime.now(),
-        user: const VideoAuthor(id: '', username: '', displayName: ''),
+        // User ads carry their creator; admin ads have no author.
+        user: owner != null
+            ? VideoAuthor.fromJson(owner)
+            : const VideoAuthor(id: '', username: '', displayName: ''),
         isAd: true,
+        adKind: json['adKind'] as String? ?? 'admin',
         adType: json['adType'] as String?,
         sponsorName: json['sponsorName'] as String?,
         ctaText: json['ctaText'] as String?,
         linkUrl: json['linkUrl'] as String?,
         adId: json['id']?.toString(),
+        liked: json['liked'] as bool? ?? false,
+        following: json['following'] as bool? ?? false,
+        counts: VideoCounts(
+          likes: (json['likes'] as num?)?.toInt() ?? 0,
+          comments: (json['comments'] as num?)?.toInt() ?? 0,
+        ),
       );
     }
     return VideoModel(
@@ -174,6 +215,10 @@ class VideoModel {
       duration: (json['duration'] as num?)?.toDouble(),
       views: (json['views'] as num?)?.toInt() ?? 0,
       isRepost: json['repostOf'] != null,
+      repostOf: json['repostOf'] != null
+          ? VideoAuthor.fromJson(json['repostOf'] as Map<String, dynamic>)
+          : null,
+      isReposted: json['reposted'] as bool? ?? false,
       createdAt: parseTimestamp(json['createdAt']),
       user: VideoAuthor.fromJson(json['user'] as Map<String, dynamic>? ?? const {}),
       counts: VideoCounts.fromJson(json['counts'] as Map<String, dynamic>?),

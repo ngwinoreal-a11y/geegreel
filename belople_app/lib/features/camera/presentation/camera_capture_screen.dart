@@ -203,7 +203,11 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
             ? _CameraError(message: _error!, onClose: () => context.pop())
             : _mode == _CamMode.text
                 ? _TextComposePrompt(onContinue: () => context.pop('text'), onClose: () => context.pop(), tabs: _modeTabs())
-                : Stack(
+                : _mode == _CamMode.public
+                    // Public posts are photos — no camera, just the phone's
+                    // gallery (opens straight away, matching the reference).
+                    ? _GalleryPrompt(onPick: _pickFromGallery, onClose: () => context.pop(), tabs: _modeTabs())
+                    : Stack(
                     fit: StackFit.expand,
                     children: [
                       if (ready)
@@ -437,6 +441,98 @@ class _TextComposePrompt extends StatelessWidget {
           ),
         ),
         Positioned(left: 0, right: 0, bottom: 20, child: tabs),
+      ],
+    );
+  }
+}
+
+/// The Public mode surface: no camera — a clean gallery prompt that opens the
+/// phone's photos straight away (and can be reopened), matching the reference
+/// where a Public post is a picture chosen from the gallery.
+class _GalleryPrompt extends StatefulWidget {
+  const _GalleryPrompt({required this.onPick, required this.onClose, required this.tabs});
+  final Future<void> Function() onPick;
+  final VoidCallback onClose;
+  final Widget tabs;
+
+  @override
+  State<_GalleryPrompt> createState() => _GalleryPromptState();
+}
+
+class _GalleryPromptState extends State<_GalleryPrompt> {
+  bool _opening = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Open the gallery immediately when Public mode is entered.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _open());
+  }
+
+  Future<void> _open() async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    try {
+      await widget.onPick();
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned(top: 8, left: 8, child: _RoundIcon(icon: Icons.close, onTap: widget.onClose)),
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // A little gallery-grid glyph so the surface reads as "photos".
+                Container(
+                  width: 96,
+                  height: 96,
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: GridView.count(
+                    padding: const EdgeInsets.all(14),
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 8,
+                    crossAxisSpacing: 8,
+                    physics: const NeverScrollableScrollPhysics(),
+                    children: List.generate(4, (_) => Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    )),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text('Choose a photo', style: AppTypography.display(fontSize: 20, color: Colors.white)),
+                const SizedBox(height: 8),
+                Text('Pick a picture from your phone to post to Public.',
+                    textAlign: TextAlign.center,
+                    style: AppTypography.sans(fontSize: 14, color: Colors.white54)),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _opening ? null : _open,
+                    icon: const Icon(Icons.photo_library_outlined, size: 20),
+                    label: Text(_opening ? 'Opening gallery…' : 'Open gallery'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Positioned(left: 0, right: 0, bottom: 20, child: widget.tabs),
       ],
     );
   }

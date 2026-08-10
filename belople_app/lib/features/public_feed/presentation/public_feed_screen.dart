@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import '../../../core/network/api_client.dart';
@@ -16,7 +17,6 @@ import '../../auth/application/auth_controller.dart';
 import '../../feed/data/feed_repository.dart';
 import '../../feed/data/video_model.dart';
 import '../application/public_feed_controller.dart';
-import '../data/post_comment_repository.dart';
 import '../data/post_model.dart';
 import 'post_comments_sheet.dart';
 
@@ -110,8 +110,14 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
     final feedAsync = ref.watch(publicFeedControllerProvider);
 
     return Scaffold(
-      backgroundColor: AppColors.bg,
+      // Public is a light surface (a deliberate break from the app's dark
+      // theme, like the white Messages inbox) — white page, dark ink.
+      backgroundColor: Colors.white,
       appBar: AppBar(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        foregroundColor: AppColors.onChrome,
+        elevation: 0,
         centerTitle: true,
         title: const BrandWordmark(),
       ),
@@ -121,11 +127,11 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
           itemBuilder: (context, i) => const _PostSkeleton(),
         ),
         error: (e, _) => Center(
-          child: Text("Couldn't load posts", style: AppTypography.sans(color: AppColors.muted)),
+          child: Text("Couldn't load posts", style: AppTypography.sans(color: AppColors.onChromeMuted)),
         ),
         data: (state) {
           if (state.posts.isEmpty) {
-            return Center(child: Text('No posts yet', style: AppTypography.sans(color: AppColors.muted)));
+            return Center(child: Text('No posts yet', style: AppTypography.sans(color: AppColors.onChromeMuted)));
           }
           final items = _interleave(state.posts);
           return ListView.builder(
@@ -157,6 +163,8 @@ class _PostCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final me = ref.watch(authControllerProvider).valueOrNull;
+    final isMine = me != null && me.id == post.user.id;
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.md),
       child: Column(
@@ -180,28 +188,29 @@ class _PostCard extends ConsumerWidget {
                   child: GestureDetector(
                     onTap: () => context.push('/profile/${post.user.username}'),
                     child: Text(post.user.displayName,
-                        style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14)),
+                        style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.onChrome)),
                   ),
                 ),
-                if (!post.following)
+                if (!isMine)
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () async {
+                    onTap: () {
                       if (!ref.read(isLoggedInProvider)) {
                         context.push('/login');
                         return;
                       }
-                      try {
-                        await ref.read(feedRepositoryProvider).setFollowing(post.user.id, true);
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Following @${post.user.username}')));
-                        }
-                      } catch (_) {}
+                      ref
+                          .read(publicFeedControllerProvider.notifier)
+                          .toggleFollow(post.user.id, post.following);
                     },
-                    child: Text('Follow',
-                        style: AppTypography.sans(
-                            fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.verified)),
+                    child: Text(
+                      post.following ? 'Following' : 'Follow',
+                      style: AppTypography.sans(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: post.following ? AppColors.onChromeMuted : AppColors.verified,
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -217,8 +226,8 @@ class _PostCard extends ConsumerWidget {
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14)),
-                child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700)),
+                decoration: BoxDecoration(color: const Color(0xFFF5F5F6), borderRadius: BorderRadius.circular(14)),
+                child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.onChrome)),
               ),
             ),
           Padding(
@@ -226,6 +235,10 @@ class _PostCard extends ConsumerWidget {
             child: Row(
               children: [
                 GestureDetector(
+                  // Opaque like the comment/share buttons beside it — without
+                  // this the gaps in the row swallow taps and the like feels
+                  // dead unless you hit the glyph exactly.
+                  behavior: HitTestBehavior.opaque,
                   onTap: () {
                     if (!ref.read(isLoggedInProvider)) {
                       context.push('/login');
@@ -235,9 +248,9 @@ class _PostCard extends ConsumerWidget {
                   },
                   child: Row(children: [
                     Icon(post.liked ? Icons.favorite : Icons.favorite_border,
-                        color: post.liked ? AppColors.badge : AppColors.text, size: 26),
+                        color: post.liked ? AppColors.badge : AppColors.onChrome, size: 26),
                     const SizedBox(width: 7),
-                    Text('${post.likes}', style: AppTypography.mono(fontSize: 15)),
+                    Text('${post.likes}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
                   ]),
                 ),
                 const SizedBox(width: 20),
@@ -245,31 +258,24 @@ class _PostCard extends ConsumerWidget {
                   behavior: HitTestBehavior.opaque,
                   onTap: () => showPostCommentsSheet(context, postId: post.id),
                   child: Row(children: [
-                    const Icon(Icons.mode_comment, color: AppColors.text, size: 24),
+                    const Icon(Icons.mode_comment, color: AppColors.onChrome, size: 24),
                     const SizedBox(width: 7),
-                    Text('${post.comments}', style: AppTypography.mono(fontSize: 15)),
+                    Text('${post.comments}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
                   ]),
                 ),
                 const SizedBox(width: 20),
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () async {
-                    if (!ref.read(isLoggedInProvider)) {
-                      context.push('/login');
-                      return;
-                    }
-                    try {
-                      await ref.read(postCommentRepositoryProvider).share(post.id);
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context)
-                            .showSnackBar(const SnackBar(content: Text('Shared')));
-                      }
-                    } catch (_) {}
+                    // Open the real system share sheet with a link to the post
+                    // (matches public.js's share()), then bump the count.
+                    await Share.share('$kApiBaseUrl/p/${post.id}', subject: 'Belople post');
+                    ref.read(publicFeedControllerProvider.notifier).registerShare(post.id);
                   },
                   child: Row(children: [
-                    Transform.flip(flipX: true, child: const Icon(Icons.reply, color: AppColors.text, size: 24)),
+                    Transform.flip(flipX: true, child: const Icon(Icons.reply, color: AppColors.onChrome, size: 24)),
                     const SizedBox(width: 7),
-                    Text('${post.shares}', style: AppTypography.mono(fontSize: 15)),
+                    Text('${post.shares}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
                   ]),
                 ),
               ],
@@ -278,7 +284,7 @@ class _PostCard extends ConsumerWidget {
           if (post.imageUrl != null && post.content.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(AppSpacing.publicPostPadding, 10, AppSpacing.publicPostPadding, 0),
-              child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15)),
+              child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15, color: AppColors.onChrome)),
             ),
         ],
       ),
@@ -388,7 +394,7 @@ class _VideoCardState extends State<_VideoCard> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(video.user.displayName,
-                      style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14)),
+                      style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.onChrome)),
                 ),
               ],
             ),
@@ -442,7 +448,7 @@ class _VideoCardState extends State<_VideoCard> {
           if (video.caption.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(AppSpacing.publicPostPadding, 10, AppSpacing.publicPostPadding, 0),
-              child: Text(video.caption, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppTypography.sans(fontSize: 15)),
+              child: Text(video.caption, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppTypography.sans(fontSize: 15, color: AppColors.onChrome)),
             ),
         ],
       ),

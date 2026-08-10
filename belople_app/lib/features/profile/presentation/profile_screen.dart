@@ -1,7 +1,10 @@
+import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:video_thumbnail_plus/video_thumbnail_plus.dart';
 import '../../../core/badges_provider.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
@@ -9,10 +12,12 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/skeleton.dart';
+import '../../../core/widgets/top_toast.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../feed/data/feed_repository.dart';
 import '../../feed/data/video_model.dart';
 import '../../public_feed/data/post_model.dart';
+import '../../public_feed/data/public_feed_repository.dart';
 import '../data/profile_repository.dart';
 
 /// Ports index.html's profilePage(): avatar/bio/stats, Edit profile (self) or
@@ -58,7 +63,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         loading: () => const _ProfileSkeleton(),
         error: (err, _) => Center(child: Text("Couldn't load this profile", style: AppTypography.sans(color: AppColors.muted))),
         data: (profile) {
-          final grid = _gridSlivers(context, profile);
+          final grid = _gridSlivers(context, profile, isSelf);
           return CustomScrollView(
             slivers: [
               SliverToBoxAdapter(child: _header(context, profile, me, isSelf)),
@@ -138,7 +143,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  Widget _gridSlivers(BuildContext context, ProfileData profile) {
+  Widget _gridSlivers(BuildContext context, ProfileData profile, bool isSelf) {
     if (_tab == 2) {
       final posts = profile.posts;
       if (posts.isEmpty) return const _EmptyTab(label: 'No public posts yet');
@@ -147,7 +152,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         sliver: SliverGrid(
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 3, crossAxisSpacing: 3, childAspectRatio: 9 / 14),
           delegate: SliverChildBuilderDelegate(
-            (context, i) => _PostCell(post: posts[i]),
+            (context, i) => _PostCell(
+              post: posts[i],
+              onLongPress: isSelf ? () => _confirmDelete(kind: 'post', id: posts[i].id) : null,
+            ),
             childCount: posts.length,
           ),
         ),
@@ -160,22 +168,80 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       sliver: SliverGrid(
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 3, crossAxisSpacing: 3, childAspectRatio: 9 / 14),
         delegate: SliverChildBuilderDelegate(
-          (context, i) => _VideoCell(video: videos[i]),
+          (context, i) => _VideoCell(
+            video: videos[i],
+            onLongPress: isSelf ? () => _confirmDelete(kind: 'video', id: videos[i].id) : null,
+          ),
           childCount: videos.length,
         ),
       ),
     );
   }
+
+  /// Long-press a cell on your own profile to delete that video or post
+  /// (owner-only — the backend enforces it too). Refreshes the grid on success.
+  Future<void> _confirmDelete({required String kind, required String id}) async {
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+              child: Text(
+                kind == 'video' ? 'Delete this video?' : 'Delete this post?',
+                style: AppTypography.sans(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+              child: Text("This can't be undone.",
+                  style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: AppColors.danger),
+              title: Text('Delete', style: AppTypography.sans(color: AppColors.danger, fontWeight: FontWeight.w600)),
+              onTap: () => Navigator.of(ctx).pop(true),
+            ),
+            ListTile(
+              title: Center(child: Text('Cancel', style: AppTypography.sans(color: AppColors.muted))),
+              onTap: () => Navigator.of(ctx).pop(false),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      if (kind == 'video') {
+        await ref.read(feedRepositoryProvider).deleteVideo(id);
+      } else {
+        await ref.read(publicFeedRepositoryProvider).deletePost(id);
+      }
+      ref.invalidate(profileProvider(widget.handle));
+      if (mounted) showTopToast(context, kind == 'video' ? 'Video deleted' : 'Post deleted');
+    } catch (e) {
+      // Show the backend's reason (e.g. a sound still in use) instead of a blank failure.
+      if (mounted) showTopToast(context, apiErrorMessage(e, "Couldn't delete — try again"));
+    }
+  }
 }
 
 class _VideoCell extends StatelessWidget {
-  const _VideoCell({required this.video});
+  const _VideoCell({required this.video, this.onLongPress});
   final VideoModel video;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => context.push('/v/${video.id}'),
+      // Pass the video we already have so the player opens instantly (no
+      // loading spinner) instead of re-fetching it by id.
+      onTap: () => context.push('/v/${video.id}', extra: video),
+      onLongPress: onLongPress,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -183,7 +249,10 @@ class _VideoCell extends StatelessWidget {
             decoration: const BoxDecoration(color: AppColors.raised),
             child: video.thumbUrl != null
                 ? CachedNetworkImage(imageUrl: mediaUrl(video.thumbUrl!), fit: BoxFit.cover)
-                : null,
+                // Older videos posted before the app generated thumbnails have
+                // no thumbUrl — grab their first frame so the cell isn't black
+                // (mirrors the web grid's `<video #t=0.1>` fallback).
+                : _FirstFrameThumb(videoUrl: mediaUrl(video.videoUrl)),
           ),
           Positioned(
             left: 6,
@@ -210,20 +279,76 @@ class _VideoCell extends StatelessWidget {
   }
 }
 
-class _PostCell extends StatelessWidget {
-  const _PostCell({required this.post});
-  final PostModel post;
+/// Generates and shows a video's first frame for grid cells whose video was
+/// posted before the app attached a thumbnail. The result is cached per URL
+/// (in memory for this session) so scrolling the grid doesn't regenerate it.
+class _FirstFrameThumb extends StatefulWidget {
+  const _FirstFrameThumb({required this.videoUrl});
+  final String videoUrl;
+
+  static final Map<String, String> _cache = {};
+
+  @override
+  State<_FirstFrameThumb> createState() => _FirstFrameThumbState();
+}
+
+class _FirstFrameThumbState extends State<_FirstFrameThumb> {
+  String? _path;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final cached = _FirstFrameThumb._cache[widget.videoUrl];
+    if (cached != null) {
+      setState(() => _path = cached);
+      return;
+    }
+    try {
+      final dir = await getTemporaryDirectory();
+      final path = await VideoThumbnailPlus.thumbnailFile(
+        video: widget.videoUrl,
+        thumbnailPath: dir.path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 360,
+        quality: 60,
+      );
+      if (path != null) _FirstFrameThumb._cache[widget.videoUrl] = path;
+      if (mounted) setState(() => _path = path);
+    } catch (_) {/* leave the black cell as-is */}
+  }
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(color: AppColors.raised),
-      child: post.imageUrl != null
-          ? CachedNetworkImage(imageUrl: mediaUrl(post.imageUrl!), fit: BoxFit.cover)
-          : Padding(
-              padding: const EdgeInsets.all(8),
-              child: Text(post.content, maxLines: 6, overflow: TextOverflow.ellipsis, style: AppTypography.sans(fontSize: 12)),
-            ),
+    if (_path == null) return const SizedBox.shrink();
+    return Image.file(File(_path!), fit: BoxFit.cover);
+  }
+}
+
+class _PostCell extends StatelessWidget {
+  const _PostCell({required this.post, this.onLongPress});
+  final PostModel post;
+  final VoidCallback? onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      // Tapping a public post opens the Public feed (not a dead-end cell),
+      // matching the web grid's behaviour.
+      onTap: () => context.push('/public'),
+      onLongPress: onLongPress,
+      child: DecoratedBox(
+        decoration: const BoxDecoration(color: AppColors.raised),
+        child: post.imageUrl != null
+            ? CachedNetworkImage(imageUrl: mediaUrl(post.imageUrl!), fit: BoxFit.cover)
+            : Padding(
+                padding: const EdgeInsets.all(8),
+                child: Text(post.content, maxLines: 6, overflow: TextOverflow.ellipsis, style: AppTypography.sans(fontSize: 12)),
+              ),
+      ),
     );
   }
 }

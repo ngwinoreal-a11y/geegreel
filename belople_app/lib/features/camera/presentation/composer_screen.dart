@@ -3,13 +3,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail_plus/video_thumbnail_plus.dart';
+import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
+import '../../auth/application/auth_controller.dart';
+import '../../feed/application/feed_controller.dart';
+import '../../profile/data/profile_repository.dart';
+import '../../public_feed/application/public_feed_controller.dart';
 import '../../sounds/data/sound_repository.dart';
 import '../../sounds/presentation/sound_picker_sheet.dart';
+import '../data/audio_mix_service.dart';
+import '../data/video_edit_service.dart';
 import '../data/upload_repository.dart';
 import 'posted_sheet.dart';
 
@@ -54,8 +63,24 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
   VideoPlayerController? _previewController;
   final _captionController = TextEditingController();
   bool _uploading = false;
-  bool _soundShareable = false;
+  // Default ON so an uploaded video's sound becomes a reusable, tappable sound
+  // (gets a soundId) — otherwise the feed's sound row leads nowhere and "Use
+  // this sound" has nothing to open. The toggle still lets the poster opt out.
+  bool _soundShareable = true;
   SoundModel? _pickedSound;
+  // Mix levels for "use sound": the chosen sound vs the video's own (mic)
+  // audio. Set mic to 0 for a pure lip-sync/soundtrack.
+  double _soundVolume = 1.0;
+  double _micVolume = 1.0;
+  // Video is a 3-step wizard: 1 pick/record → 2 edit (sound/volume/caption) →
+  // 3 audience + Publish. Photo/Text stay single-step.
+  int _videoStep = 1;
+  // 'public' = everyone · 'followers' = people who follow you · 'private'.
+  String _visibility = 'public';
+  // Step-2 edits: centre-crop aspect + burnt-in text overlay.
+  String _cropAspect = 'original';
+  final _overlayTextController = TextEditingController();
+  String _textPos = 'bottom';
   double _progress = 0;
   String? _error;
 
@@ -88,6 +113,7 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
   void dispose() {
     _previewController?.dispose();
     _captionController.dispose();
+    _overlayTextController.dispose();
     super.dispose();
   }
 
@@ -119,7 +145,55 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
     setState(() {
       _videoFile = file;
       _previewController = controller;
+      _videoStep = 2; // a clip is in hand — move to the edit step
     });
+  }
+
+  /// First-frame JPEG poster for the upload — the native equivalent of the
+  /// web app's makeThumb(). Returns null on failure so posting still succeeds
+  /// (the video just falls back to a black cell, as before).
+  Future<File?> _makeThumbnail(File video) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final path = await VideoThumbnailPlus.thumbnailFile(
+        video: video.path,
+        thumbnailPath: dir.path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 720,
+        quality: 75,
+      );
+      return path != null ? File(path) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// If a sound is attached, download it and mix it into [video] at the chosen
+  /// levels; otherwise return the video untouched. Any failure falls back to
+  /// the raw video so publishing still succeeds.
+  Future<File> _applySound(File video) async {
+    final soundId = _effectiveSoundId;
+    if (soundId == null) return video;
+    try {
+      var audioUrl = _pickedSound?.audioUrl;
+      if (audioUrl == null) {
+        final detail = await ref.read(soundRepositoryProvider).fetch(soundId);
+        audioUrl = detail.sound.audioUrl;
+      }
+      if (audioUrl == null) return video;
+      final dir = await getTemporaryDirectory();
+      final soundPath = '${dir.path}/bl_sound_$soundId.m4a';
+      await ref.read(dioProvider).download(mediaUrl(audioUrl), soundPath);
+      final mixed = await AudioMixService.mixSound(
+        videoPath: video.path,
+        soundPath: soundPath,
+        micVolume: _micVolume,
+        soundVolume: _soundVolume,
+      );
+      return File(mixed);
+    } catch (_) {
+      return video;
+    }
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -136,11 +210,29 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
       String? uploadedVideoId;
       if (_mode == _ComposerMode.video) {
         if (_videoFile == null) throw Exception('Pick or record a video first');
+        // Mix the chosen sound INTO the video (at the two volumes), then apply
+        // the step-2 edits (crop / burnt-in text), before uploading.
+        final mixed = await _applySound(_videoFile!);
+        final editedPath = await VideoEditService.applyEdits(
+          videoPath: mixed.path,
+          cropAspect: _cropAspect,
+          text: _overlayTextController.text,
+          textPos: _textPos,
+        );
+        final fileToUpload = File(editedPath);
+        final thumb = await _makeThumbnail(fileToUpload);
+        final size = _previewController?.value.size;
+        final dur = _previewController?.value.duration;
         uploadedVideoId = await repo.uploadVideo(
-          file: _videoFile!,
+          file: fileToUpload,
           caption: _captionController.text.trim(),
+          visibility: _visibility,
           soundId: _effectiveSoundId,
           soundShareable: _soundShareable,
+          thumbnail: thumb,
+          width: size != null && size.width > 0 ? size.width.round() : null,
+          height: size != null && size.height > 0 ? size.height.round() : null,
+          duration: dur != null && dur > Duration.zero ? dur.inMilliseconds / 1000.0 : null,
           onProgress: (sent, total) {
             if (total > 0 && mounted) setState(() => _progress = sent / total);
           },
@@ -155,6 +247,17 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
         );
       }
       if (!mounted) return;
+      // Show the new post immediately everywhere it belongs — no manual
+      // refresh: rebuild the feeds and the poster's own profile grid.
+      final me = ref.read(authControllerProvider).valueOrNull;
+      ref.invalidate(feedControllerProvider(FeedTab.forYou));
+      ref.invalidate(feedControllerProvider(FeedTab.following));
+      if (_mode == _ComposerMode.video) {
+        if (me != null) ref.invalidate(profileProvider(me.username));
+      } else {
+        ref.invalidate(publicFeedControllerProvider);
+        if (me != null) ref.invalidate(profileProvider(me.username));
+      }
       if (uploadedVideoId != null && uploadedVideoId.isNotEmpty) {
         await showPostedSheet(context, ref, videoId: uploadedVideoId, previewController: _previewController);
       } else {
@@ -174,19 +277,58 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
     return _captionController.text.trim().isNotEmpty;
   }
 
+  // ---- video 3-step wizard helpers ----
+  bool get _isVideo => _mode == _ComposerMode.video;
+
+  String _stepTitle() {
+    if (!_isVideo) return _mode == _ComposerMode.photo ? 'New photo' : 'New post';
+    return switch (_videoStep) { 1 => 'New video', 2 => 'Edit', _ => 'Who can see it' };
+  }
+
+  /// The primary (top-right) action label, or null when there's nothing to do
+  /// yet (video step 1 before a clip is picked).
+  String? _primaryLabel() {
+    if (_isVideo) return _videoStep == 1 ? null : (_videoStep == 2 ? 'Next' : 'Publish');
+    return 'Publish';
+  }
+
+  bool _primaryEnabled() => _isVideo ? true : _canPublish;
+
+  void _onPrimary() {
+    if (_isVideo && _videoStep == 2) {
+      setState(() => _videoStep = 3);
+    } else {
+      _publish();
+    }
+  }
+
+  Widget _captionField() => TextField(
+        controller: _captionController,
+        maxLines: 3,
+        onChanged: (_) => setState(() {}),
+        decoration: InputDecoration(
+          hintText: _mode == _ComposerMode.text ? "What's on your mind?" : 'Write a caption...',
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
+    final label = _primaryLabel();
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
-        title: const Text('New post'),
+        leading: (_isVideo && _videoStep > 1 && !_uploading)
+            ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => setState(() => _videoStep -= 1))
+            : null,
+        title: Text(_stepTitle()),
         actions: [
-          TextButton(
-            onPressed: (_canPublish && !_uploading) ? _publish : null,
-            child: _uploading
-                ? Text('${(_progress * 100).toStringAsFixed(0)}%')
-                : const Text('Post'),
-          ),
+          if (label != null)
+            TextButton(
+              onPressed: (_primaryEnabled() && !_uploading) ? _onPrimary : null,
+              child: _uploading
+                  ? Text('${(_progress * 100).toStringAsFixed(0)}%')
+                  : Text(label),
+            ),
         ],
       ),
       body: SingleChildScrollView(
@@ -213,7 +355,7 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
                   ],
                 ),
               )
-            else ...[
+            else if (!_isVideo || _videoStep == 1) ...[
               Row(
                 children: [
                   _ModeChip(
@@ -239,14 +381,19 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
             ],
 
             if (_mode == _ComposerMode.video) ...[
-              if (_previewController != null && _previewController!.value.isInitialized)
-                AspectRatio(
-                  aspectRatio: _previewController!.value.aspectRatio,
-                  child: VideoPlayer(_previewController!),
-                )
-              else
-                _PickerBox(icon: Icons.videocam_outlined, label: 'No video selected'),
-              const SizedBox(height: 12),
+              // The clip preview shows on the pick step and the edit step.
+              if (_videoStep != 3) ...[
+                if (_previewController != null && _previewController!.value.isInitialized)
+                  AspectRatio(
+                    aspectRatio: _previewController!.value.aspectRatio,
+                    child: VideoPlayer(_previewController!),
+                  )
+                else
+                  _PickerBox(icon: Icons.videocam_outlined, label: 'No video selected'),
+                const SizedBox(height: 12),
+              ],
+              // Step 1: record / gallery.
+              if (_videoStep == 1)
               Row(
                 children: [
                   Expanded(
@@ -266,6 +413,8 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
                   ),
                 ],
               ),
+              // Step 2: sound + mix levels + caption.
+              if (_videoStep == 2) ...[
               if (!_usingSound) ...[
                 const SizedBox(height: 6),
                 if (_pickedSound == null)
@@ -305,6 +454,92 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
                   subtitle: Text('Your audio becomes a sound people can add to their videos',
                       style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
                 ),
+              // Mix levels — shown whenever a sound is attached (picked here or
+              // from a sound page). Slide "Your audio" to 0 for a pure sound.
+              if (_effectiveSoundId != null) ...[
+                const SizedBox(height: 8),
+                Text('VOLUME', style: AppTypography.sectionLabel),
+                _VolumeSlider(
+                  icon: Icons.music_note,
+                  label: 'Sound',
+                  value: _soundVolume,
+                  onChanged: (v) => setState(() => _soundVolume = v),
+                ),
+                _VolumeSlider(
+                  icon: Icons.mic,
+                  label: 'Your audio',
+                  value: _micVolume,
+                  onChanged: (v) => setState(() => _micVolume = v),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Text('CROP', style: AppTypography.sectionLabel),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final a in const [('Original', 'original'), ('9:16', '9:16'), ('1:1', '1:1'), ('4:5', '4:5')])
+                    ChoiceChip(
+                      label: Text(a.$1),
+                      selected: _cropAspect == a.$2,
+                      onSelected: (_) => setState(() => _cropAspect = a.$2),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text('TEXT ON VIDEO', style: AppTypography.sectionLabel),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _overlayTextController,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(hintText: 'Add text… (optional)'),
+              ),
+              if (_overlayTextController.text.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final p in const [('Top', 'top'), ('Center', 'center'), ('Bottom', 'bottom')])
+                      ChoiceChip(
+                        label: Text(p.$1),
+                        selected: _textPos == p.$2,
+                        onSelected: (_) => setState(() => _textPos = p.$2),
+                      ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 12),
+              _captionField(),
+              ], // end step 2
+              // Step 3: who can see this video.
+              if (_videoStep == 3) ...[
+                Text('WHO CAN SEE THIS', style: AppTypography.sectionLabel),
+                const SizedBox(height: 8),
+                _AudienceOption(
+                  icon: Icons.public,
+                  label: 'Everyone',
+                  subtitle: 'Anyone on Belople can watch',
+                  value: 'public',
+                  group: _visibility,
+                  onTap: () => setState(() => _visibility = 'public'),
+                ),
+                _AudienceOption(
+                  icon: Icons.group,
+                  label: 'Followers',
+                  subtitle: 'Only people who follow you',
+                  value: 'followers',
+                  group: _visibility,
+                  onTap: () => setState(() => _visibility = 'followers'),
+                ),
+                _AudienceOption(
+                  icon: Icons.lock_outline,
+                  label: 'Private',
+                  subtitle: 'Only you',
+                  value: 'private',
+                  group: _visibility,
+                  onTap: () => setState(() => _visibility = 'private'),
+                ),
+              ],
             ] else if (_mode == _ComposerMode.photo) ...[
               if (_imageFile != null)
                 ClipRRect(
@@ -335,19 +570,68 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> {
               ),
             ],
 
-            const SizedBox(height: 16),
-            TextField(
-              controller: _captionController,
-              maxLines: 3,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                hintText: _mode == _ComposerMode.text ? "What's on your mind?" : 'Write a caption...',
-              ),
-            ),
+            // Video puts its caption inside step 2; photo/text show it here.
+            if (_mode != _ComposerMode.video) ...[
+              const SizedBox(height: 16),
+              _captionField(),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 10),
               Text(_error!, style: const TextStyle(color: AppColors.error, fontSize: 13)),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One audience choice on the video wizard's last step (radio-style).
+class _AudienceOption extends StatelessWidget {
+  const _AudienceOption({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.value,
+    required this.group,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final String value;
+  final String group;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = value == group;
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: selected ? AppColors.accent : AppColors.border, width: selected ? 2 : 1),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: selected ? AppColors.accent : AppColors.muted),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w600)),
+                  Text(subtitle, style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
+                ],
+              ),
+            ),
+            Icon(selected ? Icons.radio_button_checked : Icons.radio_button_off,
+                color: selected ? AppColors.accent : AppColors.muted, size: 22),
           ],
         ),
       ),
@@ -406,6 +690,42 @@ class _PickerBox extends StatelessWidget {
           Text(label, style: AppTypography.sans(color: AppColors.muted, fontSize: 13)),
         ],
       ),
+    );
+  }
+}
+
+/// One 0–100% mix level (the sound, or the video's own audio).
+class _VolumeSlider extends StatelessWidget {
+  const _VolumeSlider({required this.icon, required this.label, required this.value, required this.onChanged});
+  final IconData icon;
+  final String label;
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: AppColors.muted),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 78,
+          child: Text(label, style: AppTypography.sans(fontSize: 13)),
+        ),
+        Expanded(
+          child: Slider(
+            value: value,
+            onChanged: onChanged,
+            activeColor: AppColors.accent,
+          ),
+        ),
+        SizedBox(
+          width: 40,
+          child: Text('${(value * 100).round()}%',
+              textAlign: TextAlign.right,
+              style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
+        ),
+      ],
     );
   }
 }

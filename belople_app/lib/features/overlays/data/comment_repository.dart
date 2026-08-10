@@ -34,6 +34,21 @@ class CommentRepository {
     );
   }
 
+  /// `GET /api/ads/:id/comments` — simple text comments on a user ad (no
+  /// reactions/replies, so they map onto a plain CommentModel).
+  Future<List<CommentModel>> fetchAdComments(String adId) async {
+    final res = await _dio.get('/ads/$adId/comments');
+    return ((res.data as Map<String, dynamic>)['comments'] as List<dynamic>? ?? [])
+        .map((c) => CommentModel.fromJson(c as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// `POST /api/ads/:id/comments` — returns the new comment count.
+  Future<int> postAdComment(String adId, String body) async {
+    final res = await _dio.post('/ads/$adId/comments', data: {'body': body});
+    return ((res.data as Map<String, dynamic>)['count'] as num?)?.toInt() ?? 0;
+  }
+
   /// `kind` must be "like" or "dislike" — the server toggles it off if you
   /// send the same kind that's already set (see src/index.js), there's no
   /// separate "remove" value.

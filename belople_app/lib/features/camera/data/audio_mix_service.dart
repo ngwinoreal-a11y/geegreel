@@ -1,0 +1,70 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_min_gpl/ffprobe_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
+import 'package:path_provider/path_provider.dart';
+
+/// Mixes a chosen sound INTO a recorded video — the real fix for "use sound
+/// doesn't come into the video". The picture is stream-copied (no re-encode,
+/// so it's fast — only the audio is rebuilt): the original mic track at
+/// [micVolume] is mixed with the sound at [soundVolume], clamped to the
+/// video's length. Returns the mixed file's path, or [videoPath] unchanged on
+/// any failure so publishing still works.
+class AudioMixService {
+  static Future<String> mixSound({
+    required String videoPath,
+    required String soundPath,
+    required double micVolume,
+    required double soundVolume,
+  }) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final out = '${dir.path}/belople_mixed_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final hasMic = await _hasAudio(videoPath);
+
+      final String filter;
+      if (hasMic) {
+        filter =
+            '[0:a]volume=$micVolume[a0];[1:a]volume=$soundVolume,apad,asetpts=PTS-STARTPTS[a1];'
+            '[a0][a1]amix=inputs=2:duration=first:dropout_transition=0,aresample=44100[aout]';
+      } else {
+        // No mic track — the chosen sound simply becomes the audio.
+        filter = '[1:a]volume=$soundVolume,aresample=44100[aout]';
+      }
+
+      final args = [
+        '-y', '-i', videoPath, '-i', soundPath,
+        '-filter_complex', filter,
+        '-map', '0:v', '-map', '[aout]',
+        '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k',
+        '-shortest', '-movflags', '+faststart', out,
+      ];
+
+      final completer = Completer<bool>();
+      await FFmpegKit.executeWithArgumentsAsync(args, (session) async {
+        final rc = await session.getReturnCode();
+        if (!completer.isCompleted) completer.complete(ReturnCode.isSuccess(rc));
+      });
+      final ok = await completer.future.timeout(const Duration(seconds: 120), onTimeout: () {
+        FFmpegKit.cancel();
+        return false;
+      });
+      return (ok && File(out).existsSync()) ? out : videoPath;
+    } catch (_) {
+      return videoPath;
+    }
+  }
+
+  static Future<bool> _hasAudio(String path) async {
+    try {
+      final session = await FFprobeKit.getMediaInformation(path);
+      final info = session.getMediaInformation();
+      if (info == null) return true;
+      return info.getStreams().any((s) => s.getType() == 'audio');
+    } catch (_) {
+      return true;
+    }
+  }
+}

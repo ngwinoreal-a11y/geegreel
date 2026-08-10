@@ -12,12 +12,21 @@ class UploadRepository {
   final Dio _dio;
 
   /// Returns the created video's id (for the "posted" popup's share/copy link).
+  ///
+  /// [thumbnail] is a JPEG of the first frame (see the composer's
+  /// _makeThumbnail) — the backend stores it as thumb_key so the profile grid
+  /// cell and the feed's pre-playback frame show a poster instead of black.
+  /// [width]/[height]/[duration] come from the preview controller.
   Future<String> uploadVideo({
     required File file,
     required String caption,
     String visibility = 'public',
     String? soundId,
     bool soundShareable = false,
+    File? thumbnail,
+    int? width,
+    int? height,
+    double? duration,
     void Function(int sent, int total)? onProgress,
   }) async {
     final formData = FormData.fromMap({
@@ -27,6 +36,11 @@ class UploadRepository {
       // shareable sound — never both (mirrors the /api/videos handler).
       if (soundId != null) 'soundId': soundId,
       if (soundId == null && soundShareable) 'soundShareable': '1',
+      if (width != null) 'width': '$width',
+      if (height != null) 'height': '$height',
+      if (duration != null) 'duration': '$duration',
+      if (thumbnail != null)
+        'thumbnail': await MultipartFile.fromFile(thumbnail.path, filename: 'thumb.jpg'),
       'video': await MultipartFile.fromFile(file.path, filename: 'upload.mp4'),
     });
     final res = await _dio.post('/videos', data: formData, onSendProgress: onProgress);
