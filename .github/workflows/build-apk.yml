@@ -15,6 +15,9 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    # Needed so the job can publish the APK to a public Release (below).
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: belople_app
@@ -53,3 +56,17 @@ jobs:
           name: belople-release-apk
           path: belople_app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
+      # Publish the APK to a public "latest-apk" Release so it has a permanent
+      # download link that opens directly on a phone — no GitHub login required.
+      # Overwrites the previous one each build so the link always points at the
+      # newest APK.
+      - name: Publish APK to a public Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest-apk --yes --cleanup-tag || true
+          gh release create latest-apk build/app/outputs/flutter-apk/app-release.apk \
+            --title "Belople — latest APK" \
+            --notes "Auto-built release APK from commit ${{ github.sha }}. Open this on your Android phone and tap the app-release.apk to install." \
+            --prerelease
