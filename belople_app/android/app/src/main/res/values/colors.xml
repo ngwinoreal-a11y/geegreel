@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#000000</color>
+    <!-- Tint Android applies to the notification icon and the app name in the
+         shade. Belople's accent token from design.css, so a notification reads
+         as ours at a glance. -->
+    <color name="notification_accent">#F5A623</color>
 </resources>

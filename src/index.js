@@ -399,6 +399,139 @@ async function sendPush(env, userId, payloadObj) {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// FCM (native app push).
+//
+// Web Push above reaches BROWSERS. An installed Android app can only be woken
+// through Firebase Cloud Messaging, so the native app registers an FCM token
+// (POST /api/push/device) and we deliver to it here via the HTTP v1 API.
+// Authentication is a service-account JWT exchanged for an OAuth2 access
+// token — FCM_SERVICE_ACCOUNT holds the key JSON from the Firebase console.
+// ---------------------------------------------------------------------------
+
+// Access tokens last an hour; a Worker isolate outlives many requests, so
+// caching one here avoids a token round-trip on every single notification.
+let fcmTokenCache = { token: null, expiresAt: 0 };
+
+function serviceAccount(env) {
+  if (!env.FCM_SERVICE_ACCOUNT) return null;
+  try {
+    // Same BOM guard as VAPID_PRIVATE_JWK: a secret pasted from a file can
+    // carry a leading U+FEFF, and JSON.parse rejects it outright.
+    return JSON.parse(env.FCM_SERVICE_ACCOUNT.replace(/^﻿/, ""));
+  } catch (e) {
+    console.error("FCM_SERVICE_ACCOUNT is not valid JSON:", e?.message || e);
+    return null;
+  }
+}
+
+// PEM (PKCS#8) -> CryptoKey for RS256 signing.
+async function importServiceAccountKey(pem) {
+  const body = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/, "")
+    .replace(/-----END PRIVATE KEY-----/, "")
+    .replace(/\s+/g, "");
+  const der = Uint8Array.from(atob(body), (c) => c.charCodeAt(0));
+  return crypto.subtle.importKey(
+    "pkcs8", der,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false, ["sign"]
+  );
+}
+
+async function fcmAccessToken(env) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  // 60s of slack so a token can't expire mid-flight.
+  if (fcmTokenCache.token && fcmTokenCache.expiresAt > nowSec + 60) return fcmTokenCache.token;
+
+  const sa = serviceAccount(env);
+  if (!sa?.private_key || !sa?.client_email) return null;
+
+  const key = await importServiceAccountKey(sa.private_key);
+  const header = bytesToB64url(te.encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
+  const claims = bytesToB64url(te.encode(JSON.stringify({
+    iss: sa.client_email,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: sa.token_uri || "https://oauth2.googleapis.com/token",
+    iat: nowSec,
+    exp: nowSec + 3600,
+  })));
+  const sig = new Uint8Array(await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5", key, te.encode(`${header}.${claims}`)
+  ));
+  const assertion = `${header}.${claims}.${bytesToB64url(sig)}`;
+
+  const res = await fetch(sa.token_uri || "https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion,
+    }),
+  });
+  if (!res.ok) {
+    console.error("FCM token exchange failed", res.status, await res.text().catch(() => ""));
+    return null;
+  }
+  const data = await res.json();
+  fcmTokenCache = { token: data.access_token, expiresAt: nowSec + (data.expires_in || 3600) };
+  return fcmTokenCache.token;
+}
+
+// Delivers one notification to every native device registered to a user.
+async function sendFcm(env, userId, { title, body, url, tag, route }) {
+  const sa = serviceAccount(env);
+  if (!sa?.project_id) return; // not configured — web push still runs
+
+  let devices = [];
+  try {
+    ({ results: devices } = await env.DB.prepare(
+      "SELECT token FROM fcm_devices WHERE user_id = ?"
+    ).bind(userId).all());
+  } catch (_) { return; } // table not migrated yet
+  if (!devices.length) return;
+
+  const accessToken = await fcmAccessToken(env);
+  if (!accessToken) return;
+
+  const endpoint = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
+  await Promise.all(devices.map(async (d) => {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: {
+            token: d.token,
+            // `notification` is what makes Android draw a tray entry while the
+            // app is closed — a data-only message would need the app running.
+            notification: { title, body: body || "" },
+            // Read by PushService._routeFor when the user taps it.
+            data: { route: route || "/", url: url || "/", tag: tag || "" },
+            android: {
+              priority: "high", // wake the device rather than batch under Doze
+              notification: { sound: "default", tag: tag || undefined },
+            },
+          },
+        }),
+      });
+      if (res.ok) return;
+      const text = await res.text().catch(() => "");
+      // The app was uninstalled or the token rotated — stop sending to it.
+      if (res.status === 404 || /UNREGISTERED|INVALID_ARGUMENT/.test(text)) {
+        await env.DB.prepare("DELETE FROM fcm_devices WHERE token = ?").bind(d.token).run();
+      } else {
+        console.error("fcm failed", res.status, text.slice(0, 200));
+      }
+    } catch (e) {
+      console.error("fcm threw", e?.message || e);
+    }
+  }));
+}
+
 const NOTIF_TEXT = {
   like: (name) => [`${name} liked your video`, ""],
   comment: (name, text) => [`${name} commented`, text || ""],
@@ -443,11 +576,18 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
     const build = NOTIF_TEXT[type];
     if (!build) return;
     const [title, body] = build(name, extra.text);
-    await sendPush(env, userId, {
-      title, body,
-      url: extra.videoId ? `/?video=${extra.videoId}` : extra.username ? `/?user=${extra.username}` : "/",
-      tag: type,
-    });
+    const url = extra.videoId ? `/?video=${extra.videoId}`
+              : extra.username ? `/?user=${extra.username}` : "/";
+    // The native app navigates by app route, the browser by web URL — send
+    // both so one payload serves either client.
+    const route = extra.videoId ? `/v/${extra.videoId}`
+                : extra.username ? `/profile/${extra.username}` : "/notifications";
+    // Browsers and installed apps are different delivery channels, and a user
+    // can have both. Neither failing may stop the other.
+    await Promise.all([
+      sendPush(env, userId, { title, body, url, tag: type }),
+      sendFcm(env, userId, { title, body, url, tag: type, route }),
+    ]);
   })().catch(() => {}));
 }
 
@@ -1771,6 +1911,33 @@ async function handle(request, env, ctx) {
   if (path === "/api/notifications/read" && method === "POST") {
     requireUser(user);
     await env.DB.prepare("UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0").bind(user.id).run();
+    return json({ ok: true });
+  }
+
+  // ----- native app push: FCM device registration -----
+  if (path === "/api/push/device" && method === "POST") {
+    requireUser(user);
+    const { token, platform } = await request.json().catch(() => ({}));
+    if (!token) return err("Missing token");
+    // Keyed on the token, not the user: reinstalling or signing in as someone
+    // else on the same phone must MOVE the token, never leave the previous
+    // owner still receiving that device's notifications.
+    await env.DB.prepare(`
+      INSERT INTO fcm_devices (token, user_id, platform, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(token) DO UPDATE SET
+        user_id = excluded.user_id, platform = excluded.platform, updated_at = excluded.updated_at
+    `).bind(token, user.id, platform === "ios" ? "ios" : "android", now(), now()).run();
+    return json({ ok: true });
+  }
+
+  if (path === "/api/push/device" && method === "DELETE") {
+    requireUser(user);
+    const { token } = await request.json().catch(() => ({}));
+    if (token) {
+      await env.DB.prepare("DELETE FROM fcm_devices WHERE token = ? AND user_id = ?")
+        .bind(token, user.id).run();
+    }
     return json({ ok: true });
   }
 

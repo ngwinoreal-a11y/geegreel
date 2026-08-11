@@ -5,11 +5,27 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+    <!-- Android 13+ requires the user to grant notifications explicitly; without
+         this the FCM message still arrives but the system silently drops the
+         tray notification. Requested at runtime from PushService. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <application
         android:label="Belople"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- Status-bar icon for every FCM notification. Must be a white-on-
+             transparent silhouette: Android masks the icon, so a full-colour
+             logo would arrive as a featureless white square. Generated from
+             assets/icon/belople_mark.jpg into res/drawable-*/ic_stat_belople.
+             Without this meta-data Firebase falls back to the launcher icon,
+             which gets masked into exactly that grey blob. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_belople" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_accent" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

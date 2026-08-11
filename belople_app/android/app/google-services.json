@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1044572054282",
+    "project_id": "belople",
+    "storage_bucket": "belople.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1044572054282:android:7530532af45f3db9f010f3",
+        "android_client_info": {
+          "package_name": "app.belople.belople_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB_Pbl1g08C9kCjXBMBzOqdcr2njGYD8U0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

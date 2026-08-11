@@ -69,6 +69,13 @@ dependencies:
   # --- Tappable links inside chat messages ---
   url_launcher: ^6.3.1
 
+  # --- Push notifications that arrive while the app is closed. FCM is the only
+  # delivery channel Android actually honours in the background; the Worker
+  # signs a service-account JWT and posts to the FCM HTTP v1 API (see
+  # sendFcm in src/index.js). Requires android/app/google-services.json. ---
+  firebase_core: ^3.8.1
+  firebase_messaging: ^15.1.6
+
   # --- Native share sheet (shows installed apps: WhatsApp, Facebook, …) and
   # saving a downloaded video into the phone's gallery ---
   share_plus: ^10.1.4
