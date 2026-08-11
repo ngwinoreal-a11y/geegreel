@@ -132,8 +132,12 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen> {
                   const SizedBox(width: 8),
                   _TabChip(label: 'Followers', selected: _tab == _FriendsTab.followers, onTap: () => _selectTab(_FriendsTab.followers)),
                   const SizedBox(width: 8),
-                  _TabChip(label: 'Friends', selected: _tab == _FriendsTab.friends, onTap: () => _selectTab(_FriendsTab.friends)),
-                  const SizedBox(width: 8),
+                  // "Friends" (mutuals) removed — Following and Followers
+                  // already answer the question it was asking, and with three
+                  // chips the row no longer needs to scroll. The tab value and
+                  // its mutuals fetch are left in place so putting it back is
+                  // a one-line change.
+                  const SizedBox.shrink(),
                   _TabChip(label: 'Suggested', selected: _tab == _FriendsTab.suggested, onTap: () => _selectTab(_FriendsTab.suggested)),
                 ],
               ),
@@ -195,16 +199,16 @@ class _TabChip extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
         decoration: BoxDecoration(
           color: selected ? AppColors.text : AppColors.surface,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(24),
         ),
         child: Text(
           label,
           style: AppTypography.sans(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
             color: selected ? AppColors.bg : AppColors.text,
           ),
         ),

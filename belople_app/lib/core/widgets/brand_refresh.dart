@@ -78,8 +78,14 @@ class BrandRefresh extends StatefulWidget {
 class _BrandRefreshState extends State<BrandRefresh> {
   bool _busy = false;
 
+  /// How far the list has been dragged past its top. Tracked so the dots appear
+  /// DURING the pull, not only once the refresh has started — hiding Material's
+  /// ring without putting anything in its place meant a pull produced no
+  /// feedback at all, which reads as "refresh doesn't work".
+  double _pull = 0;
+
   Future<void> _run() async {
-    setState(() => _busy = true);
+    setState(() { _busy = true; _pull = 0; });
     try {
       await widget.onRefresh();
     } finally {
@@ -87,35 +93,49 @@ class _BrandRefreshState extends State<BrandRefresh> {
     }
   }
 
+  bool get _showDots => _busy || _pull > 12;
+
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        RefreshIndicator(
-          onRefresh: _run,
-          // Material's ring is hidden rather than removed: RefreshIndicator
-          // owns the gesture, the overscroll physics and the release
-          // threshold, and reimplementing those to change one glyph would be
-          // a lot of surface area for no gain.
-          color: Colors.transparent,
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          strokeWidth: 0,
-          child: widget.child,
+        NotificationListener<ScrollNotification>(
+          onNotification: (n) {
+            if (n is OverscrollNotification && n.overscroll < 0) {
+              setState(() => _pull -= n.overscroll);
+            } else if (n is ScrollEndNotification && _pull != 0) {
+              setState(() => _pull = 0);
+            }
+            return false;
+          },
+          child: RefreshIndicator(
+            onRefresh: _run,
+            // Material's ring is hidden rather than removed: RefreshIndicator
+            // owns the gesture, the overscroll physics and the release
+            // threshold, and reimplementing those to change one glyph would be
+            // a lot of surface area for no gain. The dots above are what the
+            // user actually sees.
+            color: Colors.transparent,
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            child: widget.child,
+          ),
         ),
-        if (_busy)
+        if (_showDots)
           Positioned(
             top: 14,
             left: 0,
             right: 0,
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.55),
-                  borderRadius: BorderRadius.circular(999),
+            child: IgnorePointer(
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.62),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const BrandRefreshDots(),
                 ),
-                child: const BrandRefreshDots(),
               ),
             ),
           ),

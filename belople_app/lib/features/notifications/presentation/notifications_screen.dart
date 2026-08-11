@@ -85,13 +85,23 @@ class _NotificationRow extends StatelessWidget {
   void _openProfile(BuildContext context) => context.push('/profile/${item.actorUsername}');
 
   void _openRow(BuildContext context) {
-    // The avatar means "that person"; the row means "the thing they did" —
-    // a follow has no video so it opens the profile, everything else opens
-    // the video it's about.
-    if (item.type == 'follow' || item.videoId == null) {
-      _openProfile(context);
-    } else {
-      context.push('/v/${item.videoId}');
+    // The avatar means "that person"; the row means "the thing they did".
+    switch (item.type) {
+      case 'follow':
+        _openProfile(context);
+      case 'message':
+        context.push('/chat/${item.actorUsername}');
+      // A comment or reply opens the video WITH the comments up — landing on
+      // the video and leaving the reader to find the comment they were told
+      // about is most of the way to the thing, but not the thing.
+      case 'comment' || 'reply' when item.videoId != null:
+        context.push('/v/${item.videoId}?comments=1');
+      default:
+        if (item.videoId != null) {
+          context.push('/v/${item.videoId}');
+        } else {
+          _openProfile(context);
+        }
     }
   }
 

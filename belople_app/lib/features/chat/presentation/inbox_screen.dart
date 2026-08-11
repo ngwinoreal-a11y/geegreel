@@ -191,13 +191,22 @@ class _ThreadRow extends StatelessWidget {
             ),
         ],
       ),
+      // Sized to be read at arm's length on a phone — the previous 13px
+      // preview was noticeably smaller than every other inbox people use.
       title: Text(thread.user.displayName,
-          style: AppTypography.sans(fontWeight: FontWeight.w600, color: AppColors.onChrome)),
+          style: AppTypography.sans(
+              fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.onChrome)),
       subtitle: Text(
         thread.lastMessage ?? '',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: AppTypography.sans(fontSize: 13, color: AppColors.onChromeMuted),
+        style: AppTypography.sans(
+          fontSize: 15,
+          // An unread conversation reads darker and heavier, so the list says
+          // what needs attention without a badge being the only signal.
+          color: thread.unreadCount > 0 ? AppColors.onChrome : AppColors.onChromeMuted,
+          fontWeight: thread.unreadCount > 0 ? FontWeight.w600 : FontWeight.w400,
+        ),
       ),
       trailing: thread.unreadCount > 0
           ? Container(

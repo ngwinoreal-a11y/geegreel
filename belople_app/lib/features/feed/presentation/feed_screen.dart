@@ -248,12 +248,18 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                 // the top of the feed is measured directly. Only from the
                 // first video — dragging down anywhere else is just paging.
                 onNotification: (n) {
-                  if (_activeIndex != 0) { _pullDistance = 0; return false; }
+                  if (_activeIndex != 0) {
+                    if (_pullDistance != 0) setState(() => _pullDistance = 0);
+                    return false;
+                  }
                   if (n is OverscrollNotification && n.overscroll < 0) {
-                    _pullDistance -= n.overscroll;
+                    // setState so the dots appear while dragging, not only once
+                    // the refresh fires — a pull with no feedback reads as
+                    // nothing happening.
+                    setState(() => _pullDistance -= n.overscroll);
                     if (_pullDistance > 110 && !_refreshing) _refreshFeed();
-                  } else if (n is ScrollEndNotification) {
-                    _pullDistance = 0;
+                  } else if (n is ScrollEndNotification && _pullDistance != 0) {
+                    setState(() => _pullDistance = 0);
                   }
                   return false;
                 },
@@ -332,8 +338,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
             },
           ),
 
-          // Refresh indicator for the pull gesture above.
-          if (_refreshing)
+          // Refresh indicator for the pull gesture above — shown while dragging
+          // as well as while refreshing.
+          if (_refreshing || _pullDistance > 12)
             Positioned(
               top: 0, left: 0, right: 0,
               child: SafeArea(

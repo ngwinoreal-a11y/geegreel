@@ -48,9 +48,16 @@ class ActivityRow extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // The inbox is a WHITE surface, so this needs the dark ink —
+                  // it was inheriting the dark theme's white and was invisible
+                  // against the background.
                   Text(
                     'Activity & new followers',
-                    style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w700),
+                    style: AppTypography.sans(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.onChrome,
+                    ),
                   ),
                   const SizedBox(height: 3),
                   Text(
@@ -58,8 +65,8 @@ class ActivityRow extends ConsumerWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: AppTypography.sans(
-                      fontSize: 13,
-                      color: unread > 0 ? AppColors.text : AppColors.muted,
+                      fontSize: 15,
+                      color: unread > 0 ? AppColors.onChrome : AppColors.onChromeMuted,
                       fontWeight: unread > 0 ? FontWeight.w600 : FontWeight.w400,
                     ),
                   ),
