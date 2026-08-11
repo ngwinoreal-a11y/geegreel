@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/router/app_router.dart';
 import '../../auth/application/auth_controller.dart';
 import '../application/playback_speed.dart';
 import '../../../core/theme/app_colors.dart';
@@ -51,13 +52,45 @@ class VideoSlide extends ConsumerStatefulWidget {
   ConsumerState<VideoSlide> createState() => _VideoSlideState();
 }
 
-class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObserver {
+class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObserver, RouteAware {
   VideoPlayerController? _controller;
   bool _initialized = false;
   bool _showHeartBurst = false;
   bool _showPauseGlyph = false;
-  bool _pausedByLifecycle = false;
   bool _captionExpanded = false;
+
+  // --- The four things that decide whether this slide may make sound. They
+  // live HERE, not in each host screen: SingleVideoScreen was a plain
+  // ConsumerWidget passing isActive:true with no RouteAware, so opening a
+  // profile on top of it left the video playing underneath. Owning the rule in
+  // the player means every host (feed, profile videos, single video, anything
+  // added later) gets it right without having to remember to. ---
+
+  /// Another route has been pushed over the screen showing this slide.
+  bool _routeCovered = false;
+
+  /// The app itself is backgrounded (home button, lock, app switch).
+  bool _appBackgrounded = false;
+
+  /// The user tapped to pause — never auto-resume over their choice.
+  bool _pausedByUser = false;
+
+  bool get _shouldPlay =>
+      widget.isActive && !_routeCovered && !_appBackgrounded && !_pausedByUser;
+
+  /// Single place that drives the player. Everything that can change playback
+  /// (activation, route, lifecycle, tap) just updates a flag and calls this.
+  void _applyPlayback() {
+    final controller = _controller;
+    if (controller == null || !_initialized) return;
+    if (_shouldPlay) {
+      if (!controller.value.isPlaying) controller.play();
+      if (!_watch.isRunning) _watch.start();
+    } else {
+      if (controller.value.isPlaying) controller.pause();
+      _watch.stop();
+    }
+  }
 
   // Belo Flow watch tracking: wall-clock time this slide was the active,
   // foreground video — a robust proxy for watch time that feeds the
@@ -75,25 +108,33 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
 
   // Backgrounding the app (home button, phone lock, app switch) has no
   // effect on a plain VideoPlayerController by itself — without this it
-  // kept playing (and making sound) with the screen off. FeedScreen's
-  // RouteAware handles the in-app "navigated to another screen" case;
-  // this handles leaving the app entirely.
+  // kept playing (and making sound) with the screen off.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (_controller == null) return;
-    if (state == AppLifecycleState.resumed) {
-      if (_pausedByLifecycle && widget.isActive) {
-        _controller!.play();
-        if (widget.isActive) _watch.start(); // resume counting watch time
-      }
-      _pausedByLifecycle = false;
-    } else {
-      if (_controller!.value.isPlaying) {
-        _controller!.pause();
-        _pausedByLifecycle = true;
-      }
-      _watch.stop(); // don't count time while backgrounded
-    }
+    _appBackgrounded = state != AppLifecycleState.resumed;
+    _applyPlayback();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) routeObserver.subscribe(this, route);
+    _applyPlayback(); // idempotent — re-asserts the rule after any tree change
+  }
+
+  // A screen was pushed over ours (profile, sound, comments-as-a-route…).
+  @override
+  void didPushNext() {
+    _routeCovered = true;
+    _applyPlayback();
+  }
+
+  // That screen was popped — ours is on top again.
+  @override
+  void didPopNext() {
+    _routeCovered = false;
+    _applyPlayback();
   }
 
   // Reports the watch to Belo Flow exactly once per active viewing. watch time
@@ -127,49 +168,84 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
     final url = mediaUrl(widget.video.videoUrl);
     final controller = VideoPlayerController.networkUrl(Uri.parse(url));
     _controller = controller;
-    await controller.initialize();
+    try {
+      await controller.initialize();
+    } catch (_) {
+      return; // network/codec failure — leave the thumbnail showing
+    }
+    // The user can swipe or navigate away while a network video is still
+    // initializing. Once init finishes, bail (and dispose) if we're no longer
+    // mounted so a just-finished controller can't start playing off-screen.
+    if (!mounted) {
+      await controller.dispose();
+      return;
+    }
     await controller.setLooping(true);
     await controller.setPlaybackSpeed(ref.read(playbackSpeedProvider));
-    if (!mounted) return;
+    if (!mounted) {
+      await controller.dispose();
+      return;
+    }
     setState(() => _initialized = true);
-    if (widget.isActive) controller.play();
+    // Not `if (widget.isActive) play()` — by the time a network video finishes
+    // initializing the route may already be covered or the app backgrounded.
+    _applyPlayback();
   }
 
   @override
   void didUpdateWidget(covariant VideoSlide oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.isActive != oldWidget.isActive && _controller != null) {
-      widget.isActive ? _controller!.play() : _controller!.pause();
-    }
     if (widget.isActive && !oldWidget.isActive) {
-      // Became the active video: begin a fresh watch measurement.
+      // Became the active video: a fresh slide starts unpaused, and begins a
+      // fresh watch measurement.
+      _pausedByUser = false;
       _watchReported = false;
-      _watch..reset()..start();
+      _watch.reset();
     } else if (!widget.isActive && oldWidget.isActive) {
       // Swiped away: report what was watched.
       _reportWatch();
     }
+    if (widget.isActive != oldWidget.isActive) _applyPlayback();
+  }
+
+  // Removed from the tree — route popped/replaced, or the page recycled. Stop
+  // the sound NOW: dispose() runs later and, if anything in it throws, a
+  // still-playing controller would be orphaned and audible with nothing on
+  // screen to stop it.
+  @override
+  void deactivate() {
+    _controller?.pause();
+    super.deactivate();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    if (widget.isActive) _reportWatch(); // still active at teardown — capture it
+    routeObserver.unsubscribe(this);
+    // Report the watch, but NEVER let it stop us from disposing the player:
+    // _reportWatch() reads providers through `ref`, which can throw during
+    // teardown ("Cannot use ref after the widget was disposed"). If that threw
+    // here it unwound dispose() before _controller.dispose() ran, orphaning a
+    // *playing* controller — so leaving a video mid-playback kept its audio
+    // going off-screen (a paused one skipped this path, hence "only when I
+    // didn't pause"). Guard it, and always dispose the controller after.
+    if (widget.isActive) {
+      try {
+        _reportWatch(); // still active at teardown — capture it
+      } catch (_) {}
+    }
     _controller?.dispose();
     super.dispose();
   }
 
   void _togglePlayPause() {
-    if (_controller == null) return;
+    if (_controller == null || !_initialized) return;
     setState(() {
-      if (_controller!.value.isPlaying) {
-        _controller!.pause();
-        _showPauseGlyph = true;
-      } else {
-        _controller!.play();
-        _showPauseGlyph = false;
-      }
+      // Playing now → this tap pauses it, and that's the user's choice to keep.
+      _pausedByUser = _controller!.value.isPlaying;
+      _showPauseGlyph = _pausedByUser;
     });
+    _applyPlayback();
   }
 
   void _onDoubleTap() {
@@ -468,9 +544,10 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                   behavior: HitTestBehavior.opaque,
                   onTap: widget.onLikeTap,
                   child: _RailButton(
-                    icon: widget.video.liked ? Icons.favorite : Icons.favorite_border,
+                    icon: Icons.favorite_rounded,
                     color: widget.video.liked ? AppColors.badge : Colors.white,
                     count: widget.video.counts.likes,
+                    size: 33,
                   ),
                 )
               : _ActionRail(
@@ -518,23 +595,32 @@ class _ActionRail extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        // Every glyph is SOLID. The rail used to mix fills — an outline heart
+        // and bubble beside a solid paper plane and gift — which is what read as
+        // "badly made"; solid also survives a bright frame far better than a
+        // 2px outline does.
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onLikeTap,
           child: _RailButton(
-            icon: video.liked ? Icons.favorite : Icons.favorite_border,
+            icon: Icons.favorite_rounded,
             color: video.liked ? AppColors.badge : Colors.white,
             count: video.counts.likes,
+            size: 33,
           ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onCommentTap,
-          // Web uses a clean outline speech bubble, not a filled one.
-          child: _RailButton(icon: Icons.chat_bubble_outline, color: Colors.white, count: video.counts.comments),
+          child: _RailButton(
+            icon: Icons.mode_comment_rounded,
+            color: Colors.white,
+            count: video.counts.comments,
+            size: 29,
+          ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         // Repost and gift are hidden on your own video — you can't repost or
         // tip yourself (matches the web's `mine` rule; the backend also 400s).
         if (!isMine) ...[
@@ -542,33 +628,45 @@ class _ActionRail extends StatelessWidget {
             behavior: HitTestBehavior.opaque,
             onTap: onRepostTap,
             child: _RailButton(
-              icon: Icons.repeat,
+              // Arrows are strokes by nature — sized up a touch so its weight
+              // matches the solid glyphs around it.
+              icon: Icons.repeat_rounded,
               color: video.isReposted ? AppColors.badge : Colors.white,
               count: video.counts.reposts,
+              size: 33,
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
         ],
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onShareTap,
           // Web's share is a paper-plane (send), not a curved reply arrow.
-          child: _RailButton(icon: Icons.send, color: Colors.white, count: video.counts.shares),
+          child: _RailButton(
+            icon: Icons.send_rounded,
+            color: Colors.white,
+            count: video.counts.shares,
+            size: 29,
+          ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         if (!isMine) ...[
           GestureDetector(
             behavior: HitTestBehavior.opaque,
-            // Web's gift is a white outline box, not an orange filled one.
             onTap: onGiftTap,
-            child: _RailButton(icon: Icons.card_giftcard, color: Colors.white, count: video.giftCoins),
+            child: _RailButton(
+              icon: Icons.redeem_rounded,
+              color: Colors.white,
+              count: video.giftCoins,
+              size: 30,
+            ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
         ],
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onMoreTap,
-          child: const Icon(Icons.more_vert, color: Colors.white, size: 28),
+          child: const Icon(Icons.more_vert_rounded, color: Colors.white, size: 27, shadows: _railShadows),
         ),
         // Spinning sound disc (design's `.sound-disc`) — shown only for a
         // shareable sound (has a soundId), matching the web; tapping opens the
@@ -705,23 +803,42 @@ class _SoundDiscState extends State<_SoundDisc> with SingleTickerProviderStateMi
   }
 }
 
+/// Two-layer shadow that makes a white glyph readable on ANY frame. The tight,
+/// nearly-opaque layer draws an edge so the shape stays defined against bright
+/// video (a single soft shadow let the old thin outlines wash out on pale
+/// backgrounds); the wide, soft layer lifts it off the picture.
+const _railShadows = <Shadow>[
+  Shadow(color: Color(0x8C000000), blurRadius: 3),
+  Shadow(color: Color(0x59000000), blurRadius: 12, offset: Offset(0, 2)),
+];
+
 class _RailButton extends StatelessWidget {
-  const _RailButton({required this.icon, required this.color, required this.count});
+  const _RailButton({
+    required this.icon,
+    required this.color,
+    required this.count,
+    this.size = 31,
+  });
   final IconData icon;
   final Color color;
   final int count;
 
+  /// Per-glyph optical size. Material icons don't fill their box equally — a
+  /// solid heart reads bigger than a paper plane at the same nominal size — so
+  /// each one is nudged to look the same weight in the rail.
+  final double size;
+
   @override
   Widget build(BuildContext context) {
-    final glyph = Icon(icon, color: color, size: 30, shadows: const [Shadow(color: Colors.black54, blurRadius: 6)]);
     return Column(
       children: [
-        glyph,
-        const SizedBox(height: 4),
+        Icon(icon, color: color, size: size, shadows: _railShadows),
+        const SizedBox(height: 5),
         Text(
           _formatCount(count),
           style: AppTypography.mono(fontSize: 12, color: Colors.white).copyWith(
-            shadows: const [Shadow(color: Colors.black87, blurRadius: 6)],
+            fontWeight: FontWeight.w600,
+            shadows: _railShadows,
           ),
         ),
       ],

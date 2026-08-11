@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -56,6 +58,13 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
   String? _videoCursor;
   bool _videoDone = false;
   bool _videoLoading = false;
+
+  /// Sound is a decision about the FEED, not about one card: unmuting a video
+  /// means "I want to hear this feed", so every later video keeps playing with
+  /// sound, and muting again silences them all. Held in the screen's own State
+  /// so it lasts exactly as long as Public is open — leaving the page drops it
+  /// and the feed starts muted again, the way the user expects.
+  bool _soundOn = false;
 
   @override
   void initState() {
@@ -153,7 +162,11 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
             itemBuilder: (context, i) {
               final item = items[i];
               if (item is _VideoItem) {
-                return _VideoCard(video: item.video);
+                return _VideoCard(
+                  video: item.video,
+                  soundOn: _soundOn,
+                  onSoundToggle: () => setState(() => _soundOn = !_soundOn),
+                );
               }
               final post = (item as _PostItem).post;
               return _PostCard(
@@ -276,7 +289,7 @@ class _PostCard extends ConsumerWidget {
                     }
                   },
                   child: Row(children: [
-                    Icon(post.liked ? Icons.favorite : Icons.favorite_border,
+                    Icon(post.liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                         color: post.liked ? AppColors.badge : AppColors.onChrome, size: 26),
                     const SizedBox(width: 7),
                     Text('${post.likes}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
@@ -287,7 +300,7 @@ class _PostCard extends ConsumerWidget {
                   behavior: HitTestBehavior.opaque,
                   onTap: () => showPostCommentsSheet(context, postId: post.id),
                   child: Row(children: [
-                    const Icon(Icons.chat_bubble_outline, color: AppColors.onChrome, size: 24),
+                    const Icon(Icons.mode_comment_outlined, color: AppColors.onChrome, size: 24),
                     const SizedBox(width: 7),
                     Text('${post.comments}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
                   ]),
@@ -302,7 +315,7 @@ class _PostCard extends ConsumerWidget {
                     ref.read(publicFeedControllerProvider.notifier).registerShare(post.id);
                   },
                   child: Row(children: [
-                    const Icon(Icons.send, color: AppColors.onChrome, size: 23),
+                    const Icon(Icons.send_rounded, color: AppColors.onChrome, size: 23),
                     const SizedBox(width: 7),
                     Text('${post.shares}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
                   ]),
@@ -344,18 +357,34 @@ class _VideoItem extends _FeedItem {
 /// VisibilityDetector so only the visible one is ever decoding. A speaker
 /// button toggles sound; tapping the video opens the full vertical player.
 class _VideoCard extends StatefulWidget {
-  const _VideoCard({required this.video});
+  const _VideoCard({
+    required this.video,
+    required this.soundOn,
+    required this.onSoundToggle,
+  });
   final VideoModel video;
+
+  /// Feed-wide sound setting (see _PublicFeedScreenState._soundOn).
+  final bool soundOn;
+  final VoidCallback onSoundToggle;
 
   @override
   State<_VideoCard> createState() => _VideoCardState();
 }
 
+/// How long a video has to hold the screen before we offer the way into the
+/// full Shorts feed.
+const _watchMoreAfter = Duration(seconds: 8);
+
 class _VideoCardState extends State<_VideoCard> {
   VideoPlayerController? _controller;
-  bool _muted = true;
   bool _visible = false;
   bool _initializing = false;
+
+  /// "Watch more videos" nudge, shown once the viewer has stayed on this video
+  /// for _watchMoreAfter without tapping it.
+  Timer? _watchMoreTimer;
+  bool _showWatchMore = false;
 
   Future<void> _ensureInit() async {
     if (_controller != null || _initializing) return;
@@ -364,7 +393,6 @@ class _VideoCardState extends State<_VideoCard> {
     try {
       await c.initialize();
       await c.setLooping(true);
-      await c.setVolume(_muted ? 0 : 1);
     } catch (_) {
       c.dispose();
       _initializing = false;
@@ -372,28 +400,60 @@ class _VideoCardState extends State<_VideoCard> {
     }
     if (!mounted) { c.dispose(); return; }
     setState(() { _controller = c; _initializing = false; });
+    _applyVolume();
     if (_visible) c.play();
   }
 
+  /// Only the card actually on screen may be heard — so scrolling past an
+  /// unmuted video hands the sound to the next one instead of stacking two.
+  void _applyVolume() {
+    _controller?.setVolume(widget.soundOn && _visible ? 1 : 0);
+  }
+
+  @override
+  void didUpdateWidget(covariant _VideoCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The feed-wide sound setting changed (this card's speaker, or another
+    // card's, was tapped) — follow it.
+    if (widget.soundOn != oldWidget.soundOn) _applyVolume();
+  }
+
   void _onVisibility(VisibilityInfo info) {
+    // Start fetching/decoding the moment ANY sliver of the card enters the
+    // viewport, not at the 60% play threshold. By the time it's centred the
+    // first frame is ready, so it starts instantly instead of showing a dead
+    // panel while the network catches up.
+    if (info.visibleFraction > 0.01) _ensureInit();
+
     final visible = info.visibleFraction > 0.6;
     if (visible == _visible) return;
     _visible = visible;
     if (visible) {
-      _ensureInit();
       _controller?.play();
+      _startWatchMoreTimer();
     } else {
       _controller?.pause();
+      _cancelWatchMore();
     }
+    _applyVolume();
   }
 
-  void _toggleMute() {
-    setState(() => _muted = !_muted);
-    _controller?.setVolume(_muted ? 0 : 1);
+  void _startWatchMoreTimer() {
+    _watchMoreTimer?.cancel();
+    _watchMoreTimer = Timer(_watchMoreAfter, () {
+      if (mounted) setState(() => _showWatchMore = true);
+    });
+  }
+
+  void _cancelWatchMore() {
+    _watchMoreTimer?.cancel();
+    _watchMoreTimer = null;
+    if (_showWatchMore && mounted) setState(() => _showWatchMore = false);
   }
 
   @override
   void dispose() {
+    _watchMoreTimer?.cancel();
     _controller?.dispose();
     super.dispose();
   }
@@ -440,6 +500,16 @@ class _VideoCardState extends State<_VideoCard> {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
+                    // The poster stays UNDERNEATH the player for the card's whole
+                    // life — not swapped out for it. Any gap (still buffering, a
+                    // frame dropped on a seek/loop) then shows the picture rather
+                    // than a black panel.
+                    DecoratedBox(
+                      decoration: const BoxDecoration(color: AppColors.raised),
+                      child: video.thumbUrl != null
+                          ? CachedNetworkImage(imageUrl: mediaUrl(video.thumbUrl!), fit: BoxFit.cover)
+                          : null,
+                    ),
                     if (c != null && c.value.isInitialized)
                       FittedBox(
                         fit: BoxFit.cover,
@@ -448,24 +518,55 @@ class _VideoCardState extends State<_VideoCard> {
                           height: c.value.size.height,
                           child: VideoPlayer(c),
                         ),
-                      )
-                    else
-                      DecoratedBox(
-                        decoration: const BoxDecoration(color: AppColors.raised),
-                        child: video.thumbUrl != null
-                            ? CachedNetworkImage(imageUrl: mediaUrl(video.thumbUrl!), fit: BoxFit.cover)
-                            : null,
                       ),
-                    // Mute / unmute — tap doesn't bubble to the open-player tap.
+
+                    // "Watch more videos" — appears after the viewer has stayed
+                    // with this video for a while, as the way into the full
+                    // Shorts feed. Fades in so it never snaps into view.
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 16,
+                      child: IgnorePointer(
+                        child: AnimatedOpacity(
+                          opacity: _showWatchMore ? 1 : 0,
+                          duration: const Duration(milliseconds: 260),
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.62),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.play_circle_outline, color: Colors.white, size: 18),
+                                  const SizedBox(width: 7),
+                                  Text('Watch more videos',
+                                      style: AppTypography.sans(
+                                          fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    // Sound on / off for the WHOLE feed — tap doesn't bubble to
+                    // the open-player tap.
                     Positioned(
                       right: 12,
                       bottom: 12,
                       child: GestureDetector(
-                        onTap: _toggleMute,
+                        behavior: HitTestBehavior.opaque,
+                        onTap: widget.onSoundToggle,
                         child: Container(
                           padding: const EdgeInsets.all(8),
                           decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                          child: Icon(_muted ? Icons.volume_off : Icons.volume_up, color: Colors.white, size: 18),
+                          child: Icon(widget.soundOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                              color: Colors.white, size: 18),
                         ),
                       ),
                     ),

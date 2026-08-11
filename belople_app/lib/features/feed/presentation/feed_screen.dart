@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
@@ -36,8 +37,20 @@ class FeedScreen extends ConsumerStatefulWidget {
 class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
   FeedTab _tab = FeedTab.forYou;
   int _activeIndex = 0;
-  late final PageController _pageController;
   int _navIndex = 1; // Feed tab active in the bottom pill by default.
+
+  // ONE PageController PER TAB — never a single shared one. Both tabs' PageViews
+  // occupy the same slot in the tree, so with a shared controller PageStorage
+  // restored the OTHER tab's page index into the freshly built PageView while
+  // _activeIndex had just been reset to 0. Every visible page then fell outside
+  // the preload window and rendered as a black box, while slide 0 — still
+  // "active" off-screen — kept playing its audio. onPageChanged never fires in
+  // that state, so the feed stayed black even after switching back.
+  // keepPage: false stops the page index being restored from PageStorage at all.
+  final Map<FeedTab, PageController> _pageControllers = {};
+
+  PageController _controllerFor(FeedTab tab) =>
+      _pageControllers.putIfAbsent(tab, () => PageController(keepPage: false));
 
   // Whether the feed is the visible top-of-stack route. Another screen
   // pushed on top (single video, profile, sound, notifications...) sets
@@ -48,7 +61,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
   @override
   void initState() {
     super.initState();
-    _pageController = PageController();
     // Warm the caches for the other main screens in the background so Public /
     // Messages / Notifications / Profile open instantly on first tap.
     WidgetsBinding.instance.addPostFrameCallback((_) => prewarmCaches(ref));
@@ -82,7 +94,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
-    _pageController.dispose();
+    for (final controller in _pageControllers.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -185,7 +199,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                 );
               }
               return PageView.builder(
-                controller: _pageController,
+                // Keyed by tab so switching tabs builds a brand-new Scrollable
+                // instead of handing the other tab's scroll position to it.
+                key: ValueKey(_tab),
+                controller: _controllerFor(_tab),
                 scrollDirection: Axis.vertical,
                 // Snappy TikTok-style paging: a stiff spring so a swipe flicks
                 // to the next video almost instantly instead of drifting.
@@ -201,10 +218,15 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                   // slide +/-1 — matches warmNeighbours()'s windowed
                   // preload rather than keeping every loaded slide alive.
                   final withinWindow = (index - _activeIndex).abs() <= 1;
-                  if (!withinWindow) {
-                    return const ColoredBox(color: Colors.black);
-                  }
                   final video = state.videos[index];
+                  if (!withinWindow) {
+                    // Outside the preload ring: show the poster frame rather
+                    // than a bare black box, so if the window and the viewport
+                    // ever disagree the user sees the video, not a dead screen.
+                    return video.thumbUrl != null
+                        ? CachedNetworkImage(imageUrl: mediaUrl(video.thumbUrl!), fit: BoxFit.cover)
+                        : const ColoredBox(color: Colors.black);
+                  }
                   return RepaintBoundary(
                     child: VideoSlide(
                     video: video,
@@ -285,11 +307,18 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                                 context.push('/public');
                                 return;
                               }
+                              final next = i == 0 ? FeedTab.following : FeedTab.forYou;
+                              if (next == _tab) return;
                               setState(() {
-                                _tab = i == 0 ? FeedTab.following : FeedTab.forYou;
+                                _tab = next;
                                 _activeIndex = 0;
                               });
-                              _pageController.jumpToPage(0);
+                              // The new tab's controller may not be attached yet
+                              // (its PageView builds on the next frame, and the
+                              // tab can open on a skeleton/empty state) — jumping
+                              // an unattached controller throws.
+                              final controller = _controllerFor(next);
+                              if (controller.hasClients) controller.jumpToPage(0);
                             },
                           ),
                         ),
@@ -319,7 +348,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
             child: BottomNavPill(
               items: const [
                 (icon: Icons.mail_outline, label: 'Messages'),
-                (icon: Icons.videocam, label: 'Feed'),
+                (icon: Icons.videocam, label: 'Shorts'),
               ],
               badges: [ref.watch(unreadMessagesProvider).valueOrNull ?? 0, 0],
               activeIndex: _navIndex,
@@ -330,8 +359,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                   // Already on Feed — tap Feed/home again to jump to the top
                   // of the feed (matches the web app's re-tap behaviour).
                   setState(() => _navIndex = 1);
-                  if (_pageController.hasClients) {
-                    _pageController.jumpToPage(0);
+                  final controller = _controllerFor(_tab);
+                  if (controller.hasClients) {
+                    controller.jumpToPage(0);
+                    setState(() => _activeIndex = 0);
                   }
                 }
               },

@@ -52,9 +52,19 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final post = widget.post;
+    // The Public tab is a WHITE photo feed — matching design-public.css. The
+    // scaffold used AppColors.bg (black) before, so the header text (drawn in
+    // AppColors.onChrome, near-black) was black-on-black and effectively
+    // invisible: the post "opened but showed nothing". Mirror the public feed's
+    // white chrome so it reads the same as the list it was opened from.
     return Scaffold(
-      backgroundColor: AppColors.bg,
-      appBar: AppBar(title: const Text('Post')),
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        foregroundColor: AppColors.onChrome,
+        elevation: 0,
+        title: const Text('Post'),
+      ),
       body: ListView(
         children: [
           Padding(
@@ -93,7 +103,14 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
             ),
           ),
           if (post.imageUrl != null)
-            CachedNetworkImage(imageUrl: mediaUrl(post.imageUrl!), fit: BoxFit.contain, width: double.infinity)
+            // Reserve the post's real aspect ratio (as the feed does) so the
+            // image has a height before it loads — a bare CachedNetworkImage in
+            // a ListView collapsed to zero height until the bytes arrived,
+            // which also read as "nothing showed".
+            AspectRatio(
+              aspectRatio: post.aspectRatio,
+              child: CachedNetworkImage(imageUrl: mediaUrl(post.imageUrl!), fit: BoxFit.contain, width: double.infinity),
+            )
           else if (post.content.isNotEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -112,7 +129,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   behavior: HitTestBehavior.opaque,
                   onTap: _toggleLike,
                   child: Row(children: [
-                    Icon(_liked ? Icons.favorite : Icons.favorite_border,
+                    Icon(_liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                         color: _liked ? AppColors.badge : AppColors.onChrome, size: 26),
                     const SizedBox(width: 7),
                     Text('$_likes', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
@@ -123,7 +140,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   behavior: HitTestBehavior.opaque,
                   onTap: () => showPostCommentsSheet(context, postId: post.id),
                   child: Row(children: [
-                    const Icon(Icons.chat_bubble_outline, color: AppColors.onChrome, size: 24),
+                    const Icon(Icons.mode_comment_outlined, color: AppColors.onChrome, size: 24),
                     const SizedBox(width: 7),
                     Text('${post.comments}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
                   ]),
@@ -133,7 +150,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   behavior: HitTestBehavior.opaque,
                   onTap: _share,
                   child: Row(children: [
-                    const Icon(Icons.send, color: AppColors.onChrome, size: 23),
+                    const Icon(Icons.send_rounded, color: AppColors.onChrome, size: 23),
                     const SizedBox(width: 7),
                     Text('$_shares', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
                   ]),
@@ -141,6 +158,13 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               ],
             ),
           ),
+          // Caption below an image post — the feed shows this too, so a photo
+          // post keeps its text here instead of dropping it.
+          if (post.imageUrl != null && post.content.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+              child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15, color: AppColors.onChrome)),
+            ),
         ],
       ),
     );
