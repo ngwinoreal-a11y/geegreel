@@ -8,6 +8,7 @@ import '../../../core/widgets/app_avatar.dart';
 import '../../auth/application/auth_controller.dart';
 import '../data/post_comment_model.dart';
 import '../data/post_comment_repository.dart';
+import '../../../core/widgets/top_toast.dart';
 
 /// Comments on a Public post. design-public.css section E: this sheet is dark
 /// (#1A1A1A), unlike the video feed's white comment sheet, because it opens
@@ -80,8 +81,7 @@ class _PostCommentsSheetState extends ConsumerState<_PostCommentsSheet> {
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Couldn't post your comment")));
+        showTopToast(context, "Couldn't post your comment");
       }
     } finally {
       if (mounted) setState(() => _posting = false);

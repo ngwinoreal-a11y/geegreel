@@ -202,13 +202,27 @@ const CREATOR_SHARE = 0.5;           // creator keeps 50% of a gift's value
 // creator — the viewer pays and the creator gets nothing, which is indefensible.
 const GIFTS = [
   { key: "rose",     name: "Rose",        coins: 2,    emoji: "🌹" },
-  { key: "heart",    name: "Heart",       coins: 6,    emoji: "❤️" },
-  { key: "star",     name: "Star",        coins: 10,   emoji: "⭐" },
-  { key: "fire",     name: "Fire",        coins: 26,   emoji: "🔥" },
-  { key: "crown",    name: "Crown",       coins: 50,   emoji: "👑" },
-  { key: "diamond",  name: "Diamond",     coins: 100,  emoji: "💎" },
-  { key: "rocket",   name: "Rocket",      coins: 500,  emoji: "🚀" },
-  { key: "trophy",   name: "Trophy",      coins: 1000, emoji: "🏆" },
+  { key: "heart",     name: "Heart",       coins: 2,      emoji: "❤️" },
+  { key: "rose",      name: "Rose",        coins: 5,      emoji: "🌹" },
+  { key: "star",      name: "Star",        coins: 10,     emoji: "⭐" },
+  { key: "clap",      name: "Applause",    coins: 20,     emoji: "👏" },
+  { key: "fire",      name: "Fire",        coins: 30,     emoji: "🔥" },
+  { key: "crown",     name: "Crown",       coins: 50,     emoji: "👑" },
+  { key: "diamond",   name: "Diamond",     coins: 100,    emoji: "💎" },
+  { key: "cake",      name: "Cake",        coins: 200,    emoji: "🎂" },
+  { key: "rocket",    name: "Rocket",      coins: 500,    emoji: "🚀" },
+  { key: "trophy",    name: "Trophy",      coins: 1000,   emoji: "🏆" },
+  // The house gift: Belople's own mark, priced where a serious supporter
+  // lands (~$20). It's the one gift that says which app you're on.
+  { key: "belople",   name: "Belople",     coins: 2000,   emoji: "⚡", brand: true },
+  { key: "car",       name: "Car",         coins: 5000,   emoji: "🚗" },
+  { key: "ring",      name: "Ring",        coins: 10000,  emoji: "💍" },
+  { key: "yacht",     name: "Yacht",       coins: 30000,  emoji: "🛥️" },
+  { key: "jet",       name: "Jet",         coins: 40000,  emoji: "✈️" },
+  { key: "castle",    name: "Castle",      coins: 50000,  emoji: "🏰" },
+  { key: "island",    name: "Island",      coins: 100000, emoji: "🏝️" },
+  { key: "galaxy",    name: "Galaxy",      coins: 200000, emoji: "🌌" },
+  { key: "universe",  name: "Universe",    coins: 500000, emoji: "🌠" },
 ];
 
 // 1 coin = 1 cent (COIN_PRICE_CENTS), so cents == coins for every pack. The

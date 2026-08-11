@@ -22,6 +22,7 @@ import '../../sounds/presentation/sound_picker_sheet.dart';
 import '../data/audio_mix_service.dart';
 import '../data/upload_repository.dart';
 import 'posted_sheet.dart';
+import '../../../core/widgets/top_toast.dart';
 
 enum _ComposerMode { video, photo, text }
 
@@ -312,7 +313,7 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
       if (uploadedVideoId != null && uploadedVideoId.isNotEmpty) {
         await showPostedSheet(context, ref, videoId: uploadedVideoId, previewController: _previewController);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Posted!')));
+        showTopToast(context, 'Posted!');
       }
       if (mounted) context.pop();
     } catch (e) {

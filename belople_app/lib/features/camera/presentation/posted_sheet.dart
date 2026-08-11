@@ -8,6 +8,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../feed/data/feed_repository.dart';
+import '../../../core/widgets/top_toast.dart';
 
 /// The "posted!" confirmation shown after a video upload completes: a small
 /// looping preview of the video plus Share-to-people and Copy-link actions.
@@ -61,7 +62,7 @@ class _PostedSheetState extends ConsumerState<_PostedSheet> {
       final url = await _link();
       await Clipboard.setData(ClipboardData(text: url));
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied')));
+        showTopToast(context, 'Link copied');
       }
     } catch (_) {}
   }

@@ -219,27 +219,15 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
                       else
                         const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-                      // Top: close, Add sound (Short only), flip.
+                      // Top: close, flip. There was an "Add sound" pill here
+                      // that did nothing — its onTap was empty, because the
+                      // sound picker lives in the composer. A control that
+                      // looks tappable and isn't is worse than no control.
                       Positioned(
                         top: 8, left: 8, right: 8,
                         child: Row(
                           children: [
                             _RoundIcon(icon: Icons.close, onTap: () => context.pop()),
-                            const Spacer(),
-                            if (_mode == _CamMode.short)
-                              GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: () {}, // sound picker opens in the composer for now
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                  decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(20)),
-                                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                                    const Icon(Icons.music_note, color: Colors.white, size: 16),
-                                    const SizedBox(width: 6),
-                                    Text('Add sound', style: AppTypography.sans(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w600)),
-                                  ]),
-                                ),
-                              ),
                             const Spacer(),
                             _RoundIcon(icon: Icons.cameraswitch, onTap: _flip),
                           ],

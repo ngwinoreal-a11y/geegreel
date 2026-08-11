@@ -157,8 +157,16 @@ class _CommentsSheetState extends ConsumerState<_CommentsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.68,
+    // The keyboard's height. The sheet is laid out against the full screen, so
+    // without lifting it by this the composer ends up UNDERNEATH the keyboard —
+    // you could type but not see what you were typing.
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: keyboard),
+      child: DraggableScrollableSheet(
+      // Open taller while typing so the lifted sheet doesn't squash the
+      // comment list down to a couple of rows.
+      initialChildSize: keyboard > 0 ? 0.9 : 0.68,
       minChildSize: 0.4,
       maxChildSize: 0.92,
       expand: false,
@@ -221,6 +229,7 @@ class _CommentsSheetState extends ConsumerState<_CommentsSheet> {
           ],
         );
       },
+      ),
     );
   }
 }

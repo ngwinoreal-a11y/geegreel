@@ -34,11 +34,18 @@ class PostModel {
   final bool following;
   final DateTime createdAt;
 
+  /// True when the server told us the image's real dimensions. Without them we
+  /// must not guess a shape: a wide photo forced into a tall 4:5 box was
+  /// letterboxed, leaving big empty bands above and below it.
+  bool get hasKnownSize => imageWidth != null && imageHeight != null && imageHeight! > 0;
+
+  /// The post's shape, clamped to what a feed row should occupy. An extremely
+  /// tall photo would otherwise take more than a screen to scroll past, and an
+  /// extremely wide one would be a sliver.
   double get aspectRatio {
-    if (imageWidth != null && imageHeight != null && imageHeight! > 0) {
-      return imageWidth! / imageHeight!;
-    }
-    return 4 / 5;
+    if (!hasKnownSize) return 4 / 5;
+    final raw = imageWidth! / imageHeight!;
+    return raw.clamp(0.7, 1.91); // 0.7 ≈ portrait limit, 1.91 ≈ landscape limit
   }
 
   PostModel copyWith({bool? liked, int? likes, int? shares, bool? following}) {

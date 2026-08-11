@@ -402,7 +402,7 @@ void _showReportSheet(BuildContext context, WidgetRef ref, VideoModel video) {
                 try {
                   await ref.read(feedRepositoryProvider).reportVideo(video.id, reason);
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report submitted — thank you')));
+                    showTopToast(context, 'Report submitted — thank you');
                   }
                 } catch (_) {}
               },

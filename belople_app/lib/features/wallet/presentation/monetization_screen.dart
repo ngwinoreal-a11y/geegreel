@@ -5,6 +5,7 @@ import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../data/monetization_repository.dart';
+import '../../../core/widgets/top_toast.dart';
 
 /// Ports index.html's monetizationPage(): eligibility progress vs.
 /// requirements (10k followers/likes, 5 videos), application status, apply
@@ -62,13 +63,11 @@ class MonetizationScreen extends ConsumerWidget {
                       );
                       ref.invalidate(monetizationStatusProvider);
                       if (context.mounted) {
-                        ScaffoldMessenger.of(context)
-                            .showSnackBar(const SnackBar(content: Text('Application submitted')));
+                        showTopToast(context, 'Application submitted');
                       }
                     } catch (_) {
                       if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("Couldn't submit — check your connection")));
+                        showTopToast(context, "Couldn't submit — check your connection");
                       }
                     }
                   },

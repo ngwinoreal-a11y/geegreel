@@ -11,6 +11,7 @@ import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/seg_control.dart';
 import '../../auth/application/auth_controller.dart';
 import '../data/settings_repository.dart';
+import '../../../core/widgets/top_toast.dart';
 
 /// Ports index.html's settingsPage(): avatar, profile fields, privacy
 /// (private + who-can-message / who-can-comment), notification toggles,
@@ -154,8 +155,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.invalidate(authControllerProvider);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Couldn't update photo — try a smaller image")));
+        showTopToast(context, "Couldn't update photo — try a smaller image");
       }
     } finally {
       if (mounted) setState(() => _uploadingAvatar = false);
@@ -185,13 +185,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.invalidate(authControllerProvider);
       if (mounted) {
         setState(() { _saving = false; _dirty = false; });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
+        showTopToast(context, 'Saved');
       }
     } catch (_) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Couldn't save — that username or email may be taken")));
+        showTopToast(context, "Couldn't save — that username or email may be taken");
       }
     }
   }
@@ -210,7 +209,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _currentPwController.clear();
       _newPwController.clear();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Password changed')));
+        showTopToast(context, 'Password changed');
       }
     } catch (_) {
       if (mounted) setState(() => _pwError = 'Your current password is incorrect');
@@ -251,8 +250,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (context.mounted) context.go('/');
     } catch (_) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text("Couldn't delete account — check your password")));
+        showTopToast(context, "Couldn't delete account — check your password");
       }
     }
   }
@@ -449,7 +447,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onPressed: () async {
               await ref.read(settingsRepositoryProvider).signOutOtherDevices();
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Signed out of other devices')));
+                showTopToast(context, 'Signed out of other devices');
               }
             },
             child: const Text('Sign out of other devices'),

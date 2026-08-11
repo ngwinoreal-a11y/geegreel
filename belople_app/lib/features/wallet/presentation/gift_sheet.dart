@@ -7,6 +7,7 @@ import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_typography.dart';
 import '../data/gift_repository.dart';
 import '../data/wallet_repository.dart';
+import '../../../core/widgets/top_toast.dart';
 
 /// Opens the gift picker for a video. Ports the gift grid the web app shows on
 /// a video: pick a gift, spend coins, the creator keeps a share.
@@ -39,9 +40,7 @@ class _GiftSheetState extends ConsumerState<_GiftSheet> {
       ref.invalidate(walletProvider);
       if (!mounted) return;
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Sent ${gift.emoji} ${gift.name}!')),
-      );
+      showTopToast(context, 'Sent ${gift.emoji} ${gift.name}!');
     } on DioException catch (e) {
       if (!mounted) return;
       setState(() => _sending = null);
@@ -50,20 +49,17 @@ class _GiftSheetState extends ConsumerState<_GiftSheet> {
         Navigator.of(context).pop();
         _promptBuyCoins(context);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Couldn't send gift — try again")),
-        );
+        showTopToast(context, "Couldn't send gift — try again");
       }
     }
   }
 
   void _promptBuyCoins(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Not enough coins'),
-        action: SnackBarAction(label: 'Get coins', onPressed: () => context.push('/coins')),
-      ),
-    );
+    // A bottom SnackBar landed under the nav pill and was often invisible.
+    // Straight to the top-up screen instead — that's what the action button
+    // did anyway, one tap earlier.
+    showTopToast(context, 'Not enough coins — top up to send this gift');
+    context.push('/coins');
   }
 
   @override
@@ -93,25 +89,33 @@ class _GiftSheetState extends ConsumerState<_GiftSheet> {
               ],
             ),
             const SizedBox(height: 4),
-            Text('The creator keeps 50% of every gift',
+            // Was "The creator keeps 50% of every gift" — a line about revenue
+            // split, on the screen where someone is trying to do something
+            // generous. Sending a gift should feel like sending a gift.
+            Text('Show them some love',
                 style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
             const SizedBox(height: 16),
-            GridView.count(
-              crossAxisCount: 4,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              childAspectRatio: 0.82,
-              children: [
-                for (final gift in kGifts)
-                  _GiftTile(
-                    gift: gift,
-                    busy: _sending == gift.key,
-                    disabled: _sending != null && _sending != gift.key,
-                    onTap: () => _send(gift),
-                  ),
-              ],
+            // The grid scrolls inside a fixed-height box: the sheet stays the
+            // same size it always was while holding many more gifts than fit
+            // on one screen.
+            SizedBox(
+              height: 330,
+              child: GridView.count(
+                crossAxisCount: 4,
+                padding: EdgeInsets.zero,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 0.82,
+                children: [
+                  for (final gift in kGifts)
+                    _GiftTile(
+                      gift: gift,
+                      busy: _sending == gift.key,
+                      disabled: _sending != null && _sending != gift.key,
+                      onTap: () => _send(gift),
+                    ),
+                ],
+              ),
             ),
           ],
         ),
@@ -142,6 +146,9 @@ class _GiftTile extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.raised,
             borderRadius: BorderRadius.circular(14),
+            // The house gift is ringed in the brand accent so it reads as ours
+            // rather than as one more emoji in the grid.
+            border: gift.brand ? Border.all(color: AppColors.accent, width: 1.5) : null,
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -152,16 +159,32 @@ class _GiftTile extends StatelessWidget {
                   width: 30,
                   child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.text),
                 )
+              else if (gift.brand)
+                // Belople's mark, drawn from the launcher asset rather than an
+                // emoji — this is the one gift that carries the brand.
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.asset('assets/icon/belople_mark.jpg', height: 32, width: 32, fit: BoxFit.cover),
+                )
               else
                 Text(gift.emoji, style: const TextStyle(fontSize: 30)),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
+              Text(gift.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.sans(
+                    fontSize: 10,
+                    color: gift.brand ? AppColors.accent : AppColors.muted,
+                    fontWeight: gift.brand ? FontWeight.w700 : FontWeight.w500,
+                  )),
+              const SizedBox(height: 2),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text('🪙', style: TextStyle(fontSize: 11)),
+                  const Text('🪙', style: TextStyle(fontSize: 10)),
                   const SizedBox(width: 3),
-                  Text('${gift.coins}',
-                      style: AppTypography.mono(fontSize: 12, color: AppColors.muted)),
+                  Text(_short(gift.coins),
+                      style: AppTypography.mono(fontSize: 11, color: AppColors.muted)),
                 ],
               ),
             ],
@@ -169,5 +192,12 @@ class _GiftTile extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// 500000 doesn't fit in a grid cell — 500K does.
+  static String _short(int n) {
+    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(n % 1000000 == 0 ? 0 : 1)}M';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(n % 1000 == 0 ? 0 : 1)}K';
+    return '$n';
   }
 }

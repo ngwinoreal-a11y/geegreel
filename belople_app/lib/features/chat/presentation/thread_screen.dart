@@ -23,6 +23,7 @@ import '../application/chat_thread_controller.dart';
 import '../application/voice_player.dart';
 import '../data/chat_repository.dart';
 import '../data/message_model.dart';
+import '../../../core/widgets/top_toast.dart';
 
 /// 1:1 chat, styled to match the reference: white outgoing bubbles with an
 /// inline time + read tick, date separators, an online/typing header, voice
@@ -138,8 +139,7 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
     if (_recording) return;
     if (!await _recorder.hasPermission()) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Microphone permission is needed to record a voice note')));
+        showTopToast(context, 'Microphone permission is needed to record a voice note');
       }
       return;
     }
@@ -467,10 +467,9 @@ class _ThreadScreenState extends ConsumerState<ThreadScreen> {
               await ref.read(feedRepositoryProvider).setBlocked(thread.withUser.id, block);
               ref.invalidate(chatThreadControllerProvider(widget.username));
               if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text(block
+              showTopToast(context, block
                       ? 'Blocked @${thread.withUser.username}'
-                      : 'Unblocked @${thread.withUser.username}')));
+                      : 'Unblocked @${thread.withUser.username}');
             },
             itemBuilder: (context) => [
               thread.blocked

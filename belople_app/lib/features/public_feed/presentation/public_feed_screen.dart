@@ -285,10 +285,25 @@ class _PostCard extends ConsumerWidget {
             ),
           ),
           if (post.imageUrl != null)
-            AspectRatio(
-              aspectRatio: post.aspectRatio,
-              child: CachedNetworkImage(imageUrl: mediaUrl(post.imageUrl!), fit: BoxFit.contain, width: double.infinity),
-            )
+            // With real dimensions the box matches the photo, so `cover` fills
+            // it exactly and there is nothing left over to show as white. With
+            // unknown dimensions we DON'T impose a shape at all — the image
+            // takes its own height once decoded, which is what stops a short
+            // photo sitting in the middle of a tall empty card.
+            post.hasKnownSize
+                ? AspectRatio(
+                    aspectRatio: post.aspectRatio,
+                    child: CachedNetworkImage(
+                      imageUrl: mediaUrl(post.imageUrl!),
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                    ),
+                  )
+                : CachedNetworkImage(
+                    imageUrl: mediaUrl(post.imageUrl!),
+                    fit: BoxFit.fitWidth,
+                    width: double.infinity,
+                  )
           else if (post.content.isNotEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding),
@@ -537,7 +552,10 @@ class _VideoCardState extends State<_VideoCard> {
               // the Shorts feed, which threw away the video actually tapped.
               onTap: () => context.push('/v/${video.id}', extra: video),
               child: AspectRatio(
-                aspectRatio: 9 / 16,
+                // 4:5, not 9:16. A full-height portrait video filled the whole
+                // screen, so scrolling Public stopped feeling like Public and
+                // started feeling like Shorts. This is a preview you tap into.
+                aspectRatio: 4 / 5,
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
