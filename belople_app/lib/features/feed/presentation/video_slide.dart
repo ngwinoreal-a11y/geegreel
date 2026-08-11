@@ -279,12 +279,16 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
           // Image ad: the sponsor's still image, shown full-bleed. Ads carry no
           // poster frame, so without a placeholder the slide is a black panel
           // for the whole download — the "ads take ages to open" complaint.
+          // No placeholder on purpose: the feed pre-caches ad media as soon as
+          // the page loads (see FeedScreen._precacheAds), so by the time an ad
+          // is swiped to it's already decoded and paints on the first frame.
+          // A spinner here would only ever be seen if that pre-cache lost a
+          // race, and a flash of one is worse than none.
           CachedNetworkImage(
             imageUrl: mediaUrl(widget.video.videoUrl),
             fit: BoxFit.contain,
             width: double.infinity,
-            fadeInDuration: const Duration(milliseconds: 150),
-            placeholder: (_, __) => const Center(child: BrandRefreshDots()),
+            fadeInDuration: Duration.zero,
           )
         else if (_initialized && _controller != null)
           FittedBox(

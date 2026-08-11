@@ -7,6 +7,11 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// src/index.js. Every endpoint is prefixed with /api.
 const String kApiBaseUrl = 'https://video-app.ngwinoreal.workers.dev';
 
+/// The brand domain, for anything a person will SEE or open in a browser —
+/// share links, the staff hand-off to the web dashboard. The API keeps talking
+/// to the workers.dev origin; only user-facing URLs use this.
+const String kWebOrigin = 'https://www.belople.com';
+
 const _secureStorage = FlutterSecureStorage();
 const _tokenKey = 'belople_session_token';
 

@@ -22,6 +22,7 @@ import '../../overlays/presentation/more_options_sheet.dart';
 import '../../wallet/presentation/gift_sheet.dart';
 import '../application/feed_controller.dart';
 import '../data/feed_repository.dart';
+import '../data/video_model.dart';
 import 'video_slide.dart';
 
 /// The app's home surface — ports the video feed built inline in
@@ -57,6 +58,19 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
   // and whether a refresh is already running.
   double _pullDistance = 0;
   bool _refreshing = false;
+
+  /// Decodes ad media the moment the feed arrives, long before the viewer
+  /// swipes down to it. Ads carry no poster frame, so an ad that starts loading
+  /// when it reaches the screen shows a black panel for the whole download —
+  /// the one slide in the feed guaranteed to feel slow. Fetching it up front
+  /// costs one image while the viewer is still on video one.
+  void _precacheAds(List<VideoModel> videos) {
+    for (final v in videos) {
+      if (!v.isImageAd) continue;
+      precacheImage(CachedNetworkImageProvider(mediaUrl(v.videoUrl)), context)
+          .catchError((_) {}); // a failed pre-cache just means it loads later
+    }
+  }
 
   Future<void> _refreshFeed() async {
     setState(() => _refreshing = true);
@@ -215,6 +229,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
               onRetry: () => ref.invalidate(feedControllerProvider(_tab)),
             ),
             data: (state) {
+              // Warm ad media for this page as soon as it lands, not when it
+              // scrolls into view.
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _precacheAds(state.videos);
+              });
               if (state.videos.isEmpty) {
                 return const Center(
                   child: Text(

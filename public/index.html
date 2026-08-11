@@ -6170,6 +6170,10 @@ function handleDeepLink(params) {
     return true;
   }
   if (open === "wallet") { state.page = "wallet"; render(); return true; }
+  // The app's "Admin dashboard" link. Staff-only work lives on the web, so the
+  // app hands off here rather than reimplementing it — and it lands ON the
+  // dashboard instead of the front page, which is what the bare origin did.
+  if (open === "admin") { state.page = "admin"; render(); return true; }
   return false;
 }
 

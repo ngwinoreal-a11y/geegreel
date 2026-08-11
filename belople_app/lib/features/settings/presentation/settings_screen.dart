@@ -413,7 +413,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             _NavRow(
               label: 'Admin dashboard',
               trailing: me?.role ?? 'admin',
-              onTap: () => launchUrl(Uri.parse(kApiBaseUrl), mode: LaunchMode.externalApplication),
+              // Straight to the admin panel, not the site's front page — the
+              // bare origin dropped staff into the ordinary feed and left them
+              // to find their way. `?open=admin` is the web app's own deep
+              // link (handleDeepLink in index.html).
+              onTap: () => launchUrl(
+                Uri.parse('$kWebOrigin/?open=admin'),
+                mode: LaunchMode.externalApplication,
+              ),
             ),
           ],
 

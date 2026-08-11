@@ -211,11 +211,19 @@ const GIFTS = [
   { key: "trophy",   name: "Trophy",      coins: 1000, emoji: "🏆" },
 ];
 
+// 1 coin = 1 cent (COIN_PRICE_CENTS), so cents == coins for every pack. The
+// range runs to $500 because the old ceiling of $50 capped what a supporter
+// could give in one go — the big gifts (Rocket, Trophy) were unreachable
+// without repeat purchases.
 const COIN_PACKS = [
-  { coins: 100,   cents: 100 },
-  { coins: 500,   cents: 500 },
-  { coins: 1000,  cents: 1000 },
-  { coins: 5000,  cents: 5000 },
+  { coins: 100,    cents: 100 },    // $1
+  { coins: 500,    cents: 500 },    // $5
+  { coins: 1000,   cents: 1000 },   // $10
+  { coins: 2500,   cents: 2500 },   // $25
+  { coins: 5000,   cents: 5000 },   // $50
+  { coins: 10000,  cents: 10000 },  // $100
+  { coins: 20000,  cents: 20000 },  // $200
+  { coins: 50000,  cents: 50000 },  // $500
 ];
 
 const giftByKey = k => GIFTS.find(g => g.key === k);
@@ -3536,8 +3544,13 @@ async function handle(request, env, ctx) {
     `).bind(user.id, user.id).first();
 
     return json({
+      // One available balance, in coins. Kept as `coins` AND mirrored into
+      // giftBalanceCents (1 coin = 1 cent) so older clients that read the
+      // separate earnings field still show the right, single number.
       coins: user.coin_balance,
-      giftBalanceCents: user.gift_balance_cents,
+      availableCoins: user.coin_balance,
+      availableCents: user.coin_balance * COIN_PRICE_CENTS,
+      giftBalanceCents: user.coin_balance * COIN_PRICE_CENTS,
       lifetimeGiftsCents: user.lifetime_gifts_cents,
       giftsReceived: totals.gifts_received,
       giftsSent: totals.gifts_sent,
@@ -3611,8 +3624,15 @@ async function handle(request, env, ctx) {
         INSERT INTO gifts (id, sender_id, recipient_id, video_id, gift_key, coins, value_cents, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(giftId, user.id, video.user_id, video.id, gift.key, gift.coins, creatorCents, now()),
+      // ONE balance. A creator's earnings land as coins in the same wallet the
+      // coins they bought live in — 1 coin is 1 cent (COIN_PRICE_CENTS), so
+      // this is a rename, not a conversion. Splitting "coins you bought" from
+      // "money you earned" meant a creator could be holding a gift they
+      // couldn't spend; now every coin is spendable AND withdrawable.
+      // lifetime_gifts_cents stays as the earnings record payouts are measured
+      // against, and is never spent from.
       env.DB.prepare(`
-        UPDATE users SET gift_balance_cents = gift_balance_cents + ?,
+        UPDATE users SET coin_balance = coin_balance + ?,
                          lifetime_gifts_cents = lifetime_gifts_cents + ?
         WHERE id = ?
       `).bind(creatorCents, creatorCents, video.user_id),
