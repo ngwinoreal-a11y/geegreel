@@ -25,7 +25,6 @@ class VideoWatermarkService {
   static const _outroFallbackSeconds = 2;
 
   /// How long the watermark rests in one spot before hopping (seconds).
-  static const _hopSeconds = 10;
 
   /// Longest output edge — bigger videos are scaled down to this so the
   /// on-device re-encode finishes in reasonable time (the watermark/outro
@@ -193,7 +192,7 @@ class VideoWatermarkService {
   /// Pass 1: burn the moving watermark onto the main video and clamp it with
   /// `-shortest`, so picture and sound end together — that's what removes the
   /// frozen/silent tail that used to sit before the outro. The mark hops
-  /// through 6 spots (4 corners + left/right edge midpoints) every _hopSeconds.
+  /// sweeping left-to-right low in the frame.
   static List<String> _pass1Args({
     required String input,
     required String watermark,
@@ -203,10 +202,19 @@ class VideoWatermarkService {
     required bool hasAudio,
     required int wmDuration,
   }) {
-    const m = 24;
-    final n = 'mod(floor(t/$_hopSeconds),6)';
-    final xExpr = 'if(between($n,1,3),W-w-$m,$m)';
-    final yExpr = 'if(between($n,0,1),$m,if(eq($n,2)+eq($n,5),(H-h)/2,H-h-$m))';
+    const m = 20;
+    // A smooth left-to-right sweep, low in the frame — NOT the old six-spot
+    // hop. That jumped between corners and the vertical centre, so it kept
+    // landing over the middle of the picture (a face, usually) and read as a
+    // glitch rather than a mark. abs(mod(t/T,2)-1) is a triangle wave: 0 at
+    // the left margin, 1 at the right, and back, with no jump at the turn.
+    const sweepSeconds = 9;
+    final phase = 'abs(mod(t/$sweepSeconds,2)-1)';
+    final xExpr = '$m+($phase)*(W-w-${m * 2})';
+    // Held near the bottom edge, clear of the subject, with a small bob so the
+    // mark reads as alive rather than pasted on. A few pixels only — the
+    // motion the eye follows is still the horizontal sweep.
+    final yExpr = 'H-h-${m * 2}+6*sin(t*1.6)';
     final overlay = "overlay=x='$xExpr':y='$yExpr':eval=frame:shortest=1";
 
     final inputs = <String>[
@@ -305,10 +313,11 @@ class VideoWatermarkService {
   static const _logoPink = Color(0xFFFF1B6B);
 
   /// Small, transparent overlay: the real Belople logo, then "Belople" in the
-  /// logo's colour, with the poster's @username beneath — the thing that hops
-  /// between corners.
+  /// logo's colour, with the poster's @username beneath.
   static Future<ui.Image> _watermarkImage(String username, int videoWidth) async {
-    final scale = (videoWidth / 720).clamp(0.7, 2.2);
+    // Smaller than it was: a watermark should sign the video, not compete with
+    // it. Roughly two thirds of the previous size.
+    final scale = (videoWidth / 720).clamp(0.7, 2.2) * 0.66;
     final nameSize = 30.0 * scale;
     final userSize = 21.0 * scale;
     final pad = 10.0 * scale;
