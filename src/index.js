@@ -512,7 +512,9 @@ async function sendFcm(env, userId, { title, body, url, tag, route }) {
             // Read by PushService._routeFor when the user taps it.
             data: { route: route || "/", url: url || "/", tag: tag || "" },
             android: {
-              priority: "high", // wake the device rather than batch under Doze
+              // AndroidMessagePriority is an enum: "HIGH"/"NORMAL". Lowercase
+              // risks an INVALID_ARGUMENT rejection of the whole message.
+              priority: "HIGH", // wake the device rather than batch under Doze
               notification: { sound: "default", tag: tag || undefined },
             },
           },
@@ -520,12 +522,13 @@ async function sendFcm(env, userId, { title, body, url, tag, route }) {
       });
       if (res.ok) return;
       const text = await res.text().catch(() => "");
-      // The app was uninstalled or the token rotated — stop sending to it.
-      if (res.status === 404 || /UNREGISTERED|INVALID_ARGUMENT/.test(text)) {
+      // ONLY UNREGISTERED means a dead token. INVALID_ARGUMENT usually means a
+      // malformed payload — deleting the token for that would quietly
+      // unsubscribe a perfectly good device for a bug on our side.
+      if (res.status === 404 || /UNREGISTERED/.test(text)) {
         await env.DB.prepare("DELETE FROM fcm_devices WHERE token = ?").bind(d.token).run();
-      } else {
-        console.error("fcm failed", res.status, text.slice(0, 200));
       }
+      console.error("fcm failed", res.status, text.slice(0, 300));
     } catch (e) {
       console.error("fcm threw", e?.message || e);
     }
@@ -539,6 +542,8 @@ const NOTIF_TEXT = {
   follow: (name) => [`${name} started following you`, ""],
   gift: (name) => [`${name} sent you a gift`, ""],
   repost: (name) => [`${name} reposted your video`, ""],
+  post: (name, caption) => [`${name} posted a new video`, caption || "Tap to watch"],
+  message: (name, text) => [name, text || "Sent you a message"],
   ad_approved: () => ["Your ad is live", "It's now being shown to people."],
   ad_rejected: () => ["Your ad wasn't approved", "It didn't meet the guidelines."],
   ad_complete: () => ["Your ad finished", "It reached everyone it was paid for."],
@@ -559,8 +564,13 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
 
   const pref = type.startsWith("ad_") ? 1 // ad approval/rejection/completion always notifies
              : type === "follow" ? recipient.notify_follows
+             // A new video from someone you chose to follow belongs to the
+             // follows toggle, not the comments one.
+             : type === "post" ? recipient.notify_follows
              : type === "like" || type === "repost" ? recipient.notify_likes
-             : type === "gift" ? 1
+             // Gifts and direct messages are addressed to you personally —
+             // silently dropping either would look like the app is broken.
+             : type === "gift" || type === "message" ? 1
              : recipient.notify_comments; // comment, reply
   if (!pref) return;
 
@@ -580,7 +590,8 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
               : extra.username ? `/?user=${extra.username}` : "/";
     // The native app navigates by app route, the browser by web URL — send
     // both so one payload serves either client.
-    const route = extra.videoId ? `/v/${extra.videoId}`
+    const route = type === "message" && extra.username ? `/chat/${extra.username}`
+                : extra.videoId ? `/v/${extra.videoId}`
                 : extra.username ? `/profile/${extra.username}` : "/notifications";
     // Browsers and installed apps are different delivery channels, and a user
     // can have both. Neither failing may stop the other.
@@ -1914,6 +1925,65 @@ async function handle(request, env, ctx) {
     return json({ ok: true });
   }
 
+  // ----- push self-test: sends a notification to your own devices and reports
+  // exactly what FCM said. Push failures are invisible by design (they run in
+  // waitUntil, off the request path), so without this the only symptom is
+  // "nothing arrives" with nowhere to look. -----
+  if (path === "/api/push/test" && method === "POST") {
+    requireUser(user);
+    const sa = serviceAccount(env);
+    const report = {
+      secretPresent: !!env.FCM_SERVICE_ACCOUNT,
+      secretParsed: !!sa,
+      projectId: sa?.project_id || null,
+      clientEmail: sa?.client_email || null,
+      devices: 0,
+      accessToken: false,
+      sends: [],
+    };
+    if (!sa) return json(report);
+
+    const { results: devices } = await env.DB.prepare(
+      "SELECT token FROM fcm_devices WHERE user_id = ?"
+    ).bind(user.id).all().catch(() => ({ results: [] }));
+    report.devices = devices.length;
+
+    let accessToken = null;
+    try {
+      accessToken = await fcmAccessToken(env);
+    } catch (e) {
+      report.accessTokenError = String(e?.message || e);
+    }
+    report.accessToken = !!accessToken;
+    if (!accessToken || !devices.length) return json(report);
+
+    const endpoint = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
+    for (const d of devices) {
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: {
+              token: d.token,
+              notification: { title: "Belople", body: "Push is working 🎉" },
+              data: { route: "/notifications", url: "/", tag: "test" },
+              android: { priority: "HIGH", notification: { sound: "default" } },
+            },
+          }),
+        });
+        report.sends.push({
+          token: `${d.token.slice(0, 12)}…`,
+          status: res.status,
+          body: (await res.text().catch(() => "")).slice(0, 300),
+        });
+      } catch (e) {
+        report.sends.push({ token: `${d.token.slice(0, 12)}…`, error: String(e?.message || e) });
+      }
+    }
+    return json(report);
+  }
+
   // ----- native app push: FCM device registration -----
   if (path === "/api/push/device" && method === "POST") {
     requireUser(user);
@@ -2035,6 +2105,29 @@ async function handle(request, env, ctx) {
         VALUES (?, ?, ?, ?, ?, 0, ?)
       `).bind(newSoundId, form.get("song") || `Original sound - ${user.username}`, user.id, id, key, now()).run();
       await env.DB.prepare("UPDATE videos SET sound_id = ? WHERE id = ?").bind(newSoundId, id).run();
+    }
+
+    // Tell this creator's followers there's something new. Public uploads only
+    // — a followers-only or private post shouldn't announce itself beyond who
+    // can open it. Runs after the response (waitUntil) so a creator with many
+    // followers never waits on the fan-out, and is capped so one upload can't
+    // become an unbounded write burst.
+    if (visibility === "public") {
+      const caption = (form.get("caption") || "").slice(0, 120);
+      ctx.waitUntil((async () => {
+        try {
+          const { results: followers } = await env.DB.prepare(`
+            SELECT follower_id FROM follows
+            WHERE followee_id = ? AND status = 'accepted'
+            ORDER BY created_at DESC LIMIT 500
+          `).bind(user.id).all();
+          for (const f of followers || []) {
+            await notify(env, ctx, f.follower_id, user.id, "post", { videoId: id, text: caption });
+          }
+        } catch (e) {
+          console.error("new-post fan-out failed", e?.message || e);
+        }
+      })());
     }
 
     const row = await env.DB.prepare(FEED_SQL + " WHERE v.id = ?").bind(user.id, user.id, id).first();
@@ -3134,12 +3227,20 @@ async function handle(request, env, ctx) {
     // fires. tag is the sender's id, not a per-message id, so several
     // messages in a row from the same person coalesce into one
     // notification instead of stacking — same as WhatsApp.
-    ctx.waitUntil(sendPush(env, them.id, {
-      title: user.display_name || user.username,
-      body: (body?.trim() || (videoId ? "Sent a video" : "")).slice(0, 200),
-      url: `/?chat=${encodeURIComponent(user.username)}`,
-      tag: `message-${user.id}`,
-    }));
+    {
+      const payload = {
+        title: user.display_name || user.username,
+        body: (body?.trim() || (videoId ? "Sent a video" : "")).slice(0, 200),
+        url: `/?chat=${encodeURIComponent(user.username)}`,
+        tag: `message-${user.id}`,
+      };
+      // Both channels: browsers via Web Push, the installed app via FCM. This
+      // used to be sendPush alone, so a message never reached a phone at all.
+      ctx.waitUntil(Promise.all([
+        sendPush(env, them.id, payload),
+        sendFcm(env, them.id, { ...payload, route: `/chat/${user.username}` }),
+      ]));
+    }
 
     return json({ ok: true, id }, 201);
   }

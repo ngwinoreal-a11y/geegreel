@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_client.dart';
+import 'faststart_service.dart';
 
 /// `POST /api/videos` (multipart) — see src/index.js. Uses Dio's
 /// `onSendProgress` for the upload bar, matching the web app's raw-XHR
@@ -29,6 +30,9 @@ class UploadRepository {
     double? duration,
     void Function(int sent, int total)? onProgress,
   }) async {
+    // Rewrite the container so playback can start on the first bytes instead of
+    // the last — see FaststartService. Falls back to the original on failure.
+    final uploadFile = await FaststartService.prepare(file);
     final formData = FormData.fromMap({
       'caption': caption,
       'visibility': visibility,
@@ -41,9 +45,13 @@ class UploadRepository {
       if (duration != null) 'duration': '$duration',
       if (thumbnail != null)
         'thumbnail': await MultipartFile.fromFile(thumbnail.path, filename: 'thumb.jpg'),
-      'video': await MultipartFile.fromFile(file.path, filename: 'upload.mp4'),
+      'video': await MultipartFile.fromFile(uploadFile.path, filename: 'upload.mp4'),
     });
     final res = await _dio.post('/videos', data: formData, onSendProgress: onProgress);
+    // Clean up the remuxed copy; the user's original take is untouched.
+    if (uploadFile.path != file.path) {
+      try { await uploadFile.delete(); } catch (_) {}
+    }
     final data = res.data as Map<String, dynamic>;
     return (data['video'] as Map<String, dynamic>?)?['id']?.toString() ?? '';
   }
