@@ -4,6 +4,7 @@
 // Belo Flow — Belople's own recommendation engine (see src/belo_flow.js).
 import {
   buildBeloFeed, recordExposure, loadConfig, mergeConfig, DEFAULT_CONFIG,
+  markExposureSignal, markCreatorFollowed,
 } from "./belo_flow.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -2085,6 +2086,7 @@ async function handle(request, env, ctx) {
       ).bind(user.id, videoId, now()).run();
       const owner = await env.DB.prepare("SELECT user_id FROM videos WHERE id = ?").bind(videoId).first();
       if (owner) await notify(env, ctx, owner.user_id, user.id, "like", { videoId });
+      await markExposureSignal(env, { viewerId: user.id, videoId, field: "liked" });
     } else {
       await env.DB.prepare(
         "DELETE FROM likes WHERE user_id = ? AND video_id = ?"
@@ -2189,6 +2191,7 @@ async function handle(request, env, ctx) {
     await env.DB.prepare(
       "INSERT INTO comments (id, video_id, user_id, body, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
     ).bind(id, videoId, user.id, body.trim(), rootId, now()).run();
+    await markExposureSignal(env, { viewerId: user.id, videoId, field: "commented" });
 
     await notify(env, ctx, vid.user_id, user.id, "comment", { videoId, commentId: id, text: body.trim() });
     if (parentAuthorId && parentAuthorId !== vid.user_id) {
@@ -2327,6 +2330,9 @@ async function handle(request, env, ctx) {
     if (share.user_id !== user.id) return err("That isn't your share", 403);
 
     await env.DB.prepare("UPDATE shares SET completed = 1 WHERE id = ?").bind(shareCompleteMatch[1]).run();
+    // Marked here, not when the link was generated: this is the point the share
+    // actually happened, which is what the ranking signal is supposed to mean.
+    await markExposureSignal(env, { viewerId: share.user_id, videoId: share.video_id, field: "shared" });
     const c = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM shares WHERE video_id = ? AND completed = 1"
     ).bind(share.video_id).first();
@@ -2485,6 +2491,10 @@ async function handle(request, env, ctx) {
         VALUES (?, ?, 'accepted', ?)
       `).bind(user.id, targetId, now()).run();
       await notify(env, ctx, targetId, user.id, "follow", { username: user.username });
+      // Attribute the follow to the creator's last video this viewer saw — that
+      // video is what earned it (creator follower-conversion analytics), and it
+      // feeds the followCreator ranking signal.
+      await markCreatorFollowed(env, { viewerId: user.id, creatorId: targetId });
     } else {
       await env.DB.prepare(
         "DELETE FROM follows WHERE follower_id = ? AND followee_id = ?"

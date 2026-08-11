@@ -752,6 +752,44 @@ export async function recordExposure(env, {
   }
 }
 
+// The engagement flags on video_exposures that a viewer action can set. A
+// whitelist, because the field name is interpolated into the UPDATE — never
+// let a caller pass an arbitrary column here.
+const EXPOSURE_SIGNAL_FIELDS = new Set(["liked", "commented", "shared", "followed_creator"]);
+
+// Marks an engagement flag on the viewer's exposure row for a video.
+//
+// These columns are read by the scorer — `followed_creator` feeds the
+// followCreator ranking signal and all of them feed `viewerEngagedThis` (a
+// video the viewer loved decays its recency penalty faster, Scenario E) — but
+// nothing was writing them, so that whole 0.07 weight sat permanently at zero
+// and "engaged" only ever meant "watched to the end". UPDATE-only on purpose:
+// no exposure row means the viewer never actually watched it, and inventing one
+// with no watch data would pollute the per-video averages.
+export async function markExposureSignal(env, { viewerId, videoId, field } = {}) {
+  if (!viewerId || !videoId || !EXPOSURE_SIGNAL_FIELDS.has(field)) return;
+  try {
+    await env.DB.prepare(
+      `UPDATE video_exposures SET ${field} = 1 WHERE user_id = ? AND video_id = ?`
+    ).bind(viewerId, videoId).run();
+  } catch (_) { /* signal capture must never break the user's action */ }
+}
+
+// A follow has no video attached, so attribute it to the most recent video of
+// that creator this viewer saw — that IS the "this video earned a follow"
+// signal, and it's what creator analytics means by follower conversion.
+export async function markCreatorFollowed(env, { viewerId, creatorId } = {}) {
+  if (!viewerId || !creatorId) return;
+  try {
+    await env.DB.prepare(`
+      UPDATE video_exposures SET followed_creator = 1
+      WHERE user_id = ? AND creator_id = ? AND last_seen_at = (
+        SELECT MAX(last_seen_at) FROM video_exposures WHERE user_id = ? AND creator_id = ?
+      )
+    `).bind(viewerId, creatorId, viewerId, creatorId).run();
+  } catch (_) {}
+}
+
 // Bumps the viewer's affinity for a set of topics by `delta` (can be negative),
 // applying lazy time-decay to the existing score. Scores are clamped to 0..1.
 export async function updateInterests(env, viewerId, topics, delta, nowTs = Date.now(), cfg = DEFAULT_CONFIG) {

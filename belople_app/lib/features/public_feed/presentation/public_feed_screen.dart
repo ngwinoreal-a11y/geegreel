@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
@@ -127,11 +128,28 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
     super.dispose();
   }
 
+  /// Reaching for the phone's volume rocker while a muted preview is playing
+  /// means "let me hear this" — so it turns the feed's sound on, the way the
+  /// other photo/video feeds people use behave. The event is deliberately NOT
+  /// consumed: Android must still change the actual system volume.
+  KeyEventResult _onKey(FocusNode _, KeyEvent event) {
+    final k = event.logicalKey;
+    if (event is KeyDownEvent &&
+        (k == LogicalKeyboardKey.audioVolumeUp || k == LogicalKeyboardKey.audioVolumeDown) &&
+        !_soundOn) {
+      setState(() => _soundOn = true);
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     final feedAsync = ref.watch(publicFeedControllerProvider);
 
-    return Scaffold(
+    return Focus(
+      autofocus: true,
+      onKeyEvent: _onKey,
+      child: Scaffold(
       // Public is a light surface (a deliberate break from the app's dark
       // theme, like the white Messages inbox) — white page, dark ink.
       backgroundColor: Colors.white,
@@ -177,6 +195,7 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
             },
           );
         },
+      ),
       ),
     );
   }
@@ -401,7 +420,7 @@ class _VideoCardState extends State<_VideoCard> {
     if (!mounted) { c.dispose(); return; }
     setState(() { _controller = c; _initializing = false; });
     _applyVolume();
-    if (_visible) c.play();
+    _applyPlayback();
   }
 
   /// Only the card actually on screen may be heard — so scrolling past an
@@ -429,19 +448,33 @@ class _VideoCardState extends State<_VideoCard> {
     if (visible == _visible) return;
     _visible = visible;
     if (visible) {
-      _controller?.play();
       _startWatchMoreTimer();
     } else {
-      _controller?.pause();
       _cancelWatchMore();
     }
+    _applyPlayback();
     _applyVolume();
+  }
+
+  /// The card plays only while it's on screen AND the nudge isn't up — once
+  /// "Watch more videos" appears the preview stops, so the choice is to tap
+  /// through rather than keep half-watching a muted loop in a scroll feed.
+  void _applyPlayback() {
+    final c = _controller;
+    if (c == null) return;
+    if (_visible && !_showWatchMore) {
+      if (!c.value.isPlaying) c.play();
+    } else {
+      if (c.value.isPlaying) c.pause();
+    }
   }
 
   void _startWatchMoreTimer() {
     _watchMoreTimer?.cancel();
     _watchMoreTimer = Timer(_watchMoreAfter, () {
-      if (mounted) setState(() => _showWatchMore = true);
+      if (!mounted) return;
+      setState(() => _showWatchMore = true);
+      _applyPlayback(); // the nudge is up — hold the video here
     });
   }
 
@@ -492,9 +525,9 @@ class _VideoCardState extends State<_VideoCard> {
             key: Key('pubvid-${video.id}'),
             onVisibilityChanged: _onVisibility,
             child: GestureDetector(
-              // A public video takes you into the vertical Shorts feed so you
-              // can keep scrolling other shorts (not a single-video dead end).
-              onTap: () => context.go('/'),
+              // Opens THIS video full-screen. It used to send you to the top of
+              // the Shorts feed, which threw away the video actually tapped.
+              onTap: () => context.push('/v/${video.id}', extra: video),
               child: AspectRatio(
                 aspectRatio: 9 / 16,
                 child: Stack(
@@ -520,34 +553,31 @@ class _VideoCardState extends State<_VideoCard> {
                         ),
                       ),
 
-                    // "Watch more videos" — appears after the viewer has stayed
-                    // with this video for a while, as the way into the full
-                    // Shorts feed. Fades in so it never snaps into view.
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 16,
-                      child: IgnorePointer(
-                        child: AnimatedOpacity(
-                          opacity: _showWatchMore ? 1 : 0,
-                          duration: const Duration(milliseconds: 260),
-                          child: Center(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.62),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.play_circle_outline, color: Colors.white, size: 18),
-                                  const SizedBox(width: 7),
-                                  Text('Watch more videos',
-                                      style: AppTypography.sans(
-                                          fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
-                                ],
-                              ),
+                    // "Watch more videos" — appears in the MIDDLE of the frame
+                    // once the viewer has stayed with this video a while, and
+                    // the video holds there (see _applyPlayback). Tapping
+                    // anywhere on the card opens it full-screen, so the nudge
+                    // itself stays non-interactive.
+                    IgnorePointer(
+                      child: AnimatedOpacity(
+                        opacity: _showWatchMore ? 1 : 0,
+                        duration: const Duration(milliseconds: 260),
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.66),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 22),
+                                const SizedBox(width: 8),
+                                Text('Watch more videos',
+                                    style: AppTypography.sans(
+                                        fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
+                              ],
                             ),
                           ),
                         ),
