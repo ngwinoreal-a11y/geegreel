@@ -5464,6 +5464,21 @@ function adminPage() {
             ${rep.detail ? `<p style="margin:0 0 8px;font-size:13px">${esc(rep.detail)}</p>` : ""}
             ${rep.videoCaption ? `<p style="margin:0 0 8px;font-size:12px;color:var(--muted)">Video: "${esc(rep.videoCaption)}"</p>` : ""}
             ${rep.commentBody ? `<p style="margin:0 0 8px;font-size:12px;color:var(--muted)">Comment: "${esc(rep.commentBody)}"</p>` : ""}
+            ${rep.videoId ? `
+            <!-- The reported video itself. Moderating on a reason alone is
+                 guesswork; this is the evidence. Poster first, plays inline
+                 on tap, so a decision costs one click instead of leaving the
+                 dashboard to hunt the video down. -->
+            <div style="display:flex;gap:10px;align-items:flex-start;margin:0 0 10px">
+              <video src="${esc(rep.videoUrl || "")}" ${rep.videoThumb ? `poster="${esc(rep.videoThumb)}"` : ""}
+                     controls preload="none" playsinline
+                     style="width:110px;aspect-ratio:9/16;object-fit:cover;border-radius:8px;background:#000;border:1px solid var(--border)"></video>
+              <div style="flex:1;min-width:0">
+                ${rep.videoOwner ? `<p style="margin:0 0 4px;font-size:12px">Posted by <b>@${esc(rep.videoOwner)}</b></p>` : ""}
+                <a href="/v/${esc(rep.videoId)}" target="_blank" rel="noopener"
+                   style="font-size:11px;color:var(--accent);text-decoration:underline">Open full video</a>
+              </div>
+            </div>` : ""}
             <div style="display:flex;gap:6px;flex-wrap:wrap">
               <button data-r="${rep.id}" data-a="dismiss" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 0;color:var(--muted);font-size:11px;font-weight:600">Dismiss</button>
               ${rep.videoId ? `<button data-r="${rep.id}" data-a="remove_video" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 0;color:#FFD166;font-size:11px;font-weight:600">Remove video</button>` : ""}

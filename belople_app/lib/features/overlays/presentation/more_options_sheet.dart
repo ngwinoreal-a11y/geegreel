@@ -188,11 +188,28 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
     }
   }
 
+  /// Who this video has already been sent to in this sheet, and who is
+  /// in-flight — the button had no state at all, so tapping Send looked
+  /// identical to not tapping it.
+  final Set<String> _sentTo = {};
+  final Set<String> _sendingTo = {};
+
   Future<void> _sendTo(ThreadPreview t) async {
+    final id = t.user.id;
+    if (_sendingTo.contains(id) || _sentTo.contains(id)) return;
+    setState(() => _sendingTo.add(id));
     try {
-      await ref.read(chatRepositoryProvider).sendVideo(recipientId: t.user.id, videoId: video.id);
-      if (mounted) showTopToast(context, 'Sent to ${t.user.displayName}');
-    } catch (_) {}
+      await ref.read(chatRepositoryProvider).sendVideo(recipientId: id, videoId: video.id);
+      if (!mounted) return;
+      setState(() { _sendingTo.remove(id); _sentTo.add(id); });
+      showTopToast(context, 'Sent to ${t.user.displayName}');
+    } catch (_) {
+      // Was swallowed silently: a failed send and a successful one looked the
+      // same, which is why this button felt dead.
+      if (!mounted) return;
+      setState(() => _sendingTo.remove(id));
+      showTopToast(context, "Couldn't send — check your connection");
+    }
   }
 
   @override
@@ -294,11 +311,23 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
                           displayName: t.user.displayName,
                         ),
                         title: Text(t.user.displayName, style: AppTypography.sans(fontSize: 15, color: AppColors.sheetInk)),
-                        trailing: OutlinedButton(
-                          onPressed: () => _sendTo(t),
-                          style: OutlinedButton.styleFrom(foregroundColor: AppColors.sheetInk, side: const BorderSide(color: AppColors.sheetLine)),
-                          child: const Text('Send'),
-                        ),
+                        trailing: Builder(builder: (_) {
+                          final sent = _sentTo.contains(t.user.id);
+                          final sending = _sendingTo.contains(t.user.id);
+                          return OutlinedButton(
+                            onPressed: sent || sending ? null : () => _sendTo(t),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: sent ? AppColors.online : AppColors.sheetInk,
+                              side: BorderSide(color: sent ? AppColors.online : AppColors.sheetLine),
+                              disabledForegroundColor: sent ? AppColors.online : AppColors.sheetMuted,
+                            ),
+                            child: sending
+                                ? const SizedBox(
+                                    height: 14, width: 14,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.sheetInk))
+                                : Text(sent ? 'Sent' : 'Send'),
+                          );
+                        }),
                       ),
                   const SizedBox(height: 8),
                 ],
@@ -380,6 +409,36 @@ class _ShareCircle extends StatelessWidget {
   }
 }
 
+/// Asks the reporter to describe the problem in their own words. Returns null
+/// if they back out, so choosing "Other" and then changing your mind doesn't
+/// file an empty report.
+Future<String?> _askReportReason(BuildContext context) {
+  final controller = TextEditingController();
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: AppColors.sheetBg,
+      title: Text("What's wrong with this video?",
+          style: AppTypography.sans(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.sheetInk)),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        maxLines: 3,
+        maxLength: 300,
+        style: AppTypography.sans(fontSize: 14, color: AppColors.sheetInk),
+        decoration: const InputDecoration(hintText: 'Tell us what happened'),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(controller.text),
+          child: const Text('Send report'),
+        ),
+      ],
+    ),
+  );
+}
+
 void _showReportSheet(BuildContext context, WidgetRef ref, VideoModel video) {
   const reasons = ['Spam', 'Nudity or sexual content', 'Violence', 'Harassment', 'Other'];
   showModalBottomSheet(
@@ -399,12 +458,23 @@ void _showReportSheet(BuildContext context, WidgetRef ref, VideoModel video) {
               title: Text(reason, style: AppTypography.sans(fontSize: 15, color: AppColors.sheetInk)),
               onTap: () async {
                 Navigator.of(sheetContext).pop();
+                // "Other" means the listed reasons don't fit, so it has to
+                // accept the one the reporter actually has — otherwise the
+                // moderator receives the word "Other" and nothing else.
+                String finalReason = reason;
+                if (reason == 'Other' && context.mounted) {
+                  final typed = await _askReportReason(context);
+                  if (typed == null || typed.trim().isEmpty) return; // cancelled
+                  finalReason = 'Other: ${typed.trim()}';
+                }
                 try {
-                  await ref.read(feedRepositoryProvider).reportVideo(video.id, reason);
+                  await ref.read(feedRepositoryProvider).reportVideo(video.id, finalReason);
                   if (context.mounted) {
                     showTopToast(context, 'Report submitted — thank you');
                   }
-                } catch (_) {}
+                } catch (_) {
+                  if (context.mounted) showTopToast(context, "Couldn't send the report");
+                }
               },
             ),
           const SizedBox(height: 8),

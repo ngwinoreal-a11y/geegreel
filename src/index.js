@@ -668,8 +668,11 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
     // both so one payload serves either client. `username` is always the
     // actor's, so a "liked your video" can still offer their profile.
     const actorName = actor?.username || extra.username;
+    // A comment notification lands on the video WITH the comments open — the
+    // action button says "Reply", so it has to arrive somewhere you can.
+    const wantsComments = type === "comment" || type === "reply";
     const route = type === "message" && actorName ? `/chat/${actorName}`
-                : extra.videoId ? `/v/${extra.videoId}`
+                : extra.videoId ? `/v/${extra.videoId}${wantsComments ? "?comments=1" : ""}`
                 : actorName ? `/profile/${actorName}` : "/notifications";
     // The person's photo, shown as the notification's large icon — the app
     // draws it, so it needs an absolute URL it can fetch without a session.
@@ -4136,11 +4139,13 @@ async function handle(request, env, ctx) {
     const status = url.searchParams.get("status") || "open";
     const { results } = await env.DB.prepare(`
       SELECT r.*, u.username AS reporter_username,
-             v.caption AS video_caption, v.r2_key AS video_key,
+             v.caption AS video_caption, v.r2_key AS video_key, v.thumb_key AS video_thumb,
+             vu.username AS video_owner,
              c.body AS comment_body
       FROM reports r
       JOIN users u ON u.id = r.reporter_id
       LEFT JOIN videos v ON v.id = r.video_id
+      LEFT JOIN users vu ON vu.id = v.user_id
       LEFT JOIN comments c ON c.id = r.comment_id
       WHERE r.status = ? ORDER BY r.created_at DESC LIMIT 100
     `).bind(status).all();
@@ -4155,6 +4160,11 @@ async function handle(request, env, ctx) {
         videoId: r.video_id,
         videoCaption: r.video_caption,
         videoUrl: r.video_key ? `/api/media/${r.video_key}` : null,
+        // The poster and owner, so a moderator can see WHAT was reported
+        // before deciding — the list used to name a reason with no way to
+        // check it against the video.
+        videoThumb: r.video_thumb ? `/api/media/${r.video_thumb}` : null,
+        videoOwner: r.video_owner || null,
         commentId: r.comment_id,
         commentBody: r.comment_body,
         reportedUserId: r.reported_user_id,

@@ -111,6 +111,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       _route('/v/:id',
           (context, state) => SingleVideoScreen(
                 videoId: state.pathParameters['id']!,
+                // Set by a comment/reply notification, whose action button says
+                // "Reply" — it must land somewhere you can actually reply.
+                openComments: state.uri.queryParameters['comments'] == '1',
                 // When opened from a grid we already hold the full VideoModel;
                 // passing it renders the player instantly instead of showing a
                 // spinner while a redundant fetch runs.

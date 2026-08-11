@@ -28,8 +28,16 @@ final singleVideoProvider = FutureProvider.family.autoDispose<VideoModel, String
 /// bottom nav stays where it always is. Landing somewhere you can only back out
 /// of is the thing this screen used to get wrong.
 class SingleVideoScreen extends ConsumerStatefulWidget {
-  const SingleVideoScreen({super.key, required this.videoId, this.initialVideo});
+  const SingleVideoScreen({
+    super.key,
+    required this.videoId,
+    this.initialVideo,
+    this.openComments = false,
+  });
   final String videoId;
+
+  /// Open the comments sheet on arrival — used by comment/reply notifications.
+  final bool openComments;
 
   /// Passed when we already hold the video (tapped in a grid or the public
   /// feed) so the player shows immediately instead of spinning on a refetch.
@@ -53,6 +61,12 @@ class _SingleVideoScreenState extends ConsumerState<SingleVideoScreen> with Rout
     super.initState();
     if (widget.initialVideo != null) _videos.add(widget.initialVideo!);
     _loadMore();
+    if (widget.openComments) {
+      // After the first frame: the sheet needs a mounted route to open onto.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) showCommentsSheet(context, videoId: widget.videoId);
+      });
+    }
   }
 
   @override

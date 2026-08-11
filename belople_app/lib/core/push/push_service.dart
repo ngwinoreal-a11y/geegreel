@@ -32,12 +32,17 @@ final _localNotifications = FlutterLocalNotificationsPlugin();
 /// The action button offered per notification type — the "Reply"/"Open chat"
 /// affordance other apps have and this one didn't. Tapping one routes exactly
 /// where the body does; the value is only the label.
+/// The action button per notification type. Every one used to read "Watch",
+/// including on a message — the label has to name what you'd actually do next.
 String _actionLabel(String type) => switch (type) {
       'message' => 'Open chat',
+      'comment' || 'reply' => 'Reply',
       'follow' => 'View profile',
-      'comment' || 'reply' => 'View comment',
-      'gift' => 'View',
-      _ => 'Watch',
+      'like' => 'View video',
+      'gift' => 'Say thanks',
+      'repost' => 'View video',
+      'post' => 'Watch',
+      _ => 'Open',
     };
 
 /// Downloads the actor's photo and returns a local file path for it, or null.
