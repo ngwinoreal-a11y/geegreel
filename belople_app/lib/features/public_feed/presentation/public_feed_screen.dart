@@ -13,6 +13,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../../core/widgets/brand_refresh.dart';
 import '../../../core/widgets/brand_wordmark.dart';
 import '../../../core/widgets/linkified_text.dart';
 import '../../../core/widgets/skeleton.dart';
@@ -174,8 +175,14 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
             return Center(child: Text('No posts yet', style: AppTypography.sans(color: AppColors.onChromeMuted)));
           }
           final items = _interleave(state.posts);
-          return ListView.builder(
+          return BrandRefresh(
+            onRefresh: () async {
+              ref.invalidate(publicFeedControllerProvider);
+              await ref.read(publicFeedControllerProvider.future);
+            },
+            child: ListView.builder(
             controller: _scrollController,
+            physics: const AlwaysScrollableScrollPhysics(),
             itemCount: items.length,
             itemBuilder: (context, i) {
               final item = items[i];
@@ -193,6 +200,7 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
                     ref.read(publicFeedControllerProvider.notifier).toggleLike(post.id),
               );
             },
+            ),
           );
         },
       ),

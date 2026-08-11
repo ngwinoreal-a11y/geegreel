@@ -11,6 +11,9 @@ import '../../../core/widgets/bottom_nav_pill.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../data/chat_repository.dart';
 import '../data/message_model.dart';
+import '../../../core/widgets/brand_refresh.dart';
+import '../../notifications/data/notifications_repository.dart';
+import 'activity_row.dart';
 
 /// Instant-render-then-refresh (see LocalCache doc comment): shows the last
 /// known thread list immediately instead of a spinner, then quietly
@@ -99,13 +102,24 @@ class InboxScreen extends ConsumerWidget {
               ),
               data: (allThreads) {
                 final threads = allThreads.where((t) => !t.isPendingRequestToMe).toList();
-                if (threads.isEmpty) {
-                  return Center(child: Text('No messages yet', style: AppTypography.sans(color: AppColors.onChromeMuted)));
-                }
-                return ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 96),
-                  itemCount: threads.length,
-                  itemBuilder: (context, i) => _ThreadRow(thread: threads[i]),
+                // Index 0 is always the activity row — it isn't a conversation
+                // and must not be sorted among them or disappear when there
+                // are no messages yet.
+                return BrandRefresh(
+                  onRefresh: () async {
+                    ref.invalidate(inboxProvider);
+                    ref.invalidate(notificationsProvider);
+                    await ref.read(inboxProvider.future);
+                  },
+                  child: ListView.builder(
+                    padding: const EdgeInsets.only(bottom: 96),
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: threads.length + 1,
+                    itemBuilder: (context, i) {
+                      if (i == 0) return const ActivityRow();
+                      return _ThreadRow(thread: threads[i - 1]);
+                    },
+                  ),
                 );
               },
             ),

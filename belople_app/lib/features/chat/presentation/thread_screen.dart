@@ -748,10 +748,17 @@ class _TextWithMeta extends StatelessWidget {
             children: [
               Text(_shortTime(message.createdAt),
                   style: AppTypography.sans(fontSize: 11, color: metaColor)),
+              // Words, not ticks. One tick versus two is a convention people
+              // have to already know; "Sent"/"Seen" says the same thing to
+              // anyone reading it.
               if (message.outgoing) ...[
-                const SizedBox(width: 3),
-                Icon(message.read ? Icons.done_all : Icons.done,
-                    size: 14, color: message.read ? AppColors.tickRead : AppColors.tickSent),
+                const SizedBox(width: 5),
+                Text(message.read ? 'Seen' : 'Sent',
+                    style: AppTypography.sans(
+                      fontSize: 11,
+                      fontWeight: message.read ? FontWeight.w600 : FontWeight.w400,
+                      color: message.read ? AppColors.tickRead : metaColor,
+                    )),
               ],
             ],
           ),
@@ -1034,9 +1041,13 @@ class _VoiceContent extends ConsumerWidget {
         Row(mainAxisSize: MainAxisSize.min, children: [
           Text(_shortTime(message.createdAt), style: AppTypography.sans(fontSize: 10, color: AppColors.onSheetMuted)),
           if (mine) ...[
-            const SizedBox(width: 3),
-            Icon(message.read ? Icons.done_all : Icons.done,
-                size: 12, color: message.read ? AppColors.tickRead : AppColors.tickSent),
+            const SizedBox(width: 5),
+            Text(message.read ? 'Seen' : 'Sent',
+                style: AppTypography.sans(
+                  fontSize: 10,
+                  fontWeight: message.read ? FontWeight.w600 : FontWeight.w400,
+                  color: message.read ? AppColors.tickRead : AppColors.onSheetMuted,
+                )),
           ],
         ]),
       ],

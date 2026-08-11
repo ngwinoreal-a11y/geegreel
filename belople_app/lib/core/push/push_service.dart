@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../network/api_client.dart';
 import '../router/app_router.dart';
@@ -27,14 +29,106 @@ const _androidChannel = AndroidNotificationChannel(
 
 final _localNotifications = FlutterLocalNotificationsPlugin();
 
-/// Handles a message that arrives while the app is fully terminated. Must be a
-/// top-level function — Android spins up a separate isolate for it, so anything
-/// captured from the UI isolate simply isn't there. We only need Firebase up;
-/// the system draws the tray notification from the message's own `notification`
-/// block without us doing anything.
+/// The action button offered per notification type — the "Reply"/"Open chat"
+/// affordance other apps have and this one didn't. Tapping one routes exactly
+/// where the body does; the value is only the label.
+String _actionLabel(String type) => switch (type) {
+      'message' => 'Open chat',
+      'follow' => 'View profile',
+      'comment' || 'reply' => 'View comment',
+      'gift' => 'View',
+      _ => 'Watch',
+    };
+
+/// Downloads the actor's photo and returns a local file path for it, or null.
+/// Android's large icon has to come from a bitmap on disk, so a remote avatar
+/// must be fetched before the notification can be built. Failure is fine: the
+/// notification just shows without a photo rather than not showing at all.
+Future<String?> _downloadAvatar(String url) async {
+  if (url.isEmpty) return null;
+  // dart:io's HttpClient rather than a package: this also runs in the
+  // background isolate, where the fewer moving parts the better.
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  try {
+    final res = await client
+        .getUrl(Uri.parse(url))
+        .then((req) => req.close())
+        .timeout(const Duration(seconds: 10));
+    if (res.statusCode != 200) return null;
+    final bytes = await consolidateHttpClientResponseBytes(res);
+    if (bytes.isEmpty) return null;
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/notif_${url.hashCode}.jpg');
+    await file.writeAsBytes(bytes);
+    return file.path;
+  } catch (_) {
+    return null;
+  } finally {
+    client.close();
+  }
+}
+
+/// Builds and shows one notification from a data-only FCM message.
+///
+/// Shared by the foreground listener and the background isolate, so a
+/// notification looks identical whether the app was open, backgrounded, or
+/// killed. The server sends data only — Android's own rendering can't show a
+/// person's photo or an action button — so everything here is ours to draw.
+Future<void> _showFromData(Map<String, dynamic> data) async {
+  final title = (data['title'] ?? 'Belople').toString();
+  final body = (data['body'] ?? '').toString();
+  final type = (data['type'] ?? '').toString();
+  final route = (data['route'] ?? '/').toString();
+  final tag = (data['tag'] ?? type).toString();
+
+  final avatarPath = await _downloadAvatar((data['avatar'] ?? '').toString());
+
+  final android = AndroidNotificationDetails(
+    _channelId,
+    _androidChannel.name,
+    channelDescription: _androidChannel.description,
+    importance: Importance.high,
+    priority: Priority.high,
+    // Small icon stays the Belople mark; the large icon is the person who did
+    // the thing — the same arrangement every messaging app uses.
+    icon: '@drawable/ic_stat_belople',
+    largeIcon: avatarPath != null ? FilePathAndroidBitmap(avatarPath) : null,
+    // A long caption should be readable when the notification is expanded
+    // instead of being cut off at one line.
+    styleInformation: body.isNotEmpty
+        ? BigTextStyleInformation(body, contentTitle: title)
+        : null,
+    // Same tag = replace, so ten likes don't become ten rows in the shade.
+    tag: tag.isEmpty ? null : tag,
+    actions: [AndroidNotificationAction('open', _actionLabel(type), showsUserInterface: true)],
+  );
+
+  await _localNotifications.show(
+    tag.hashCode,
+    title,
+    body,
+    NotificationDetails(android: android),
+    payload: route,
+  );
+}
+
+/// Handles a message that arrives while the app is backgrounded or fully
+/// terminated. Must be a top-level function — Android spins up a separate
+/// isolate for it, so anything captured from the UI isolate simply isn't there,
+/// including the notification plugin's own setup. That's why the channel and
+/// the plugin are initialised again here rather than assumed.
 @pragma('vm:entry-point')
 Future<void> firebaseBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+  await _localNotifications.initialize(
+    const InitializationSettings(
+      android: AndroidInitializationSettings('@drawable/ic_stat_belople'),
+    ),
+  );
+  await _localNotifications
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(_androidChannel);
+  await _showFromData(message.data);
 }
 
 /// Registers this device with FCM and hands the token to the backend, which
@@ -67,30 +161,22 @@ class PushService {
     await _localNotifications
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(_androidChannel);
+
+    // A tap that COLD-STARTS the app doesn't come through the callback above —
+    // the plugin wasn't listening yet when it happened. The launch details are
+    // the only record of it, and they're only readable once, right here.
+    final launch = await _localNotifications.getNotificationAppLaunchDetails();
+    final route = launch?.notificationResponse?.payload;
+    if (launch?.didNotificationLaunchApp == true && route != null && route.startsWith('/')) {
+      _go(route);
+    }
   }
 
-  /// FCM does NOT draw a tray notification while the app is in the foreground —
-  /// it hands the message to the app instead. Without this, testing the feature
-  /// with the app open looks exactly like it being broken.
+  /// A data-only message is never drawn by Android on its own, in any app
+  /// state — drawing it is entirely ours. Same builder as the background
+  /// isolate so a notification looks the same however it arrived.
   void _showForeground(RemoteMessage message) {
-    final n = message.notification;
-    if (n == null) return;
-    _localNotifications.show(
-      message.hashCode,
-      n.title,
-      n.body,
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          _channelId,
-          _androidChannel.name,
-          channelDescription: _androidChannel.description,
-          importance: Importance.high,
-          priority: Priority.high,
-          icon: '@drawable/ic_stat_belople',
-        ),
-      ),
-      payload: message.data['route']?.toString(),
-    );
+    _showFromData(message.data);
   }
 
   /// Called once after Firebase.initializeApp() and again whenever the signed-in

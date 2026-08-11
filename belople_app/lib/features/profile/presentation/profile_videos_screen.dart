@@ -77,6 +77,9 @@ class _ProfileVideosScreenState extends ConsumerState<ProfileVideosScreen> with 
 
   Widget _slide(VideoModel video, bool isActive) {
     return VideoSlide(
+      // Per-video State, so swiping never lands on a slide still holding the
+      // previous video's player or counts.
+      key: ValueKey(video.id),
       video: video,
       isActive: isActive,
       onLikeTap: () {

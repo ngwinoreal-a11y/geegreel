@@ -123,11 +123,23 @@ class ThreadPreview {
   /// messageRequestsPage().
   bool get isPendingRequestToMe => requestStatus == 'pending' && !requestedByMe;
 
+  /// What the inbox row shows under the name. A voice note or a photo has no
+  /// body text, so reading `body` alone left those conversations looking
+  /// empty — as if nothing had been sent.
+  static String? _preview(Map<String, dynamic> json) {
+    if (json['deleted'] == true) return 'Message deleted';
+    final body = (json['lastMessage'] ?? json['body']) as String?;
+    if (body != null && body.trim().isNotEmpty) return body;
+    if (json['hasAudio'] == true) return '🎤 Voice message';
+    if (json['hasImage'] == true) return '📷 Photo';
+    return body;
+  }
+
   factory ThreadPreview.fromJson(Map<String, dynamic> json) {
     final userJson = json['user'] as Map<String, dynamic>? ?? json['with'] as Map<String, dynamic>? ?? const {};
     return ThreadPreview(
       user: UserModel.fromJson(userJson),
-      lastMessage: json['lastMessage'] as String? ?? json['body'] as String?,
+      lastMessage: _preview(json),
       lastMessageAt: (json['lastMessageAt'] ?? json['createdAt']) != null
           ? parseTimestamp(json['lastMessageAt'] ?? json['createdAt'])
           : null,

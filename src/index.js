@@ -479,7 +479,15 @@ async function fcmAccessToken(env) {
 }
 
 // Delivers one notification to every native device registered to a user.
-async function sendFcm(env, userId, { title, body, url, tag, route }) {
+//
+// DATA-ONLY on purpose. If the message carried a `notification` block, Android
+// would draw it itself — and the system's own rendering has no way to show the
+// actor's photo or an action button; FCM's schema has no field for either. By
+// sending the pieces as data and letting PushService build the notification,
+// the app controls the large icon, the actions and where a tap lands. The
+// trade-off is that the app must be woken to draw it, which is what
+// priority HIGH and the background isolate handler are for.
+async function sendFcm(env, userId, { title, body, url, tag, route, type, avatar, actorName }) {
   const sa = serviceAccount(env);
   if (!sa?.project_id) return; // not configured — web push still runs
 
@@ -506,16 +514,23 @@ async function sendFcm(env, userId, { title, body, url, tag, route }) {
         body: JSON.stringify({
           message: {
             token: d.token,
-            // `notification` is what makes Android draw a tray entry while the
-            // app is closed — a data-only message would need the app running.
-            notification: { title, body: body || "" },
-            // Read by PushService._routeFor when the user taps it.
-            data: { route: route || "/", url: url || "/", tag: tag || "" },
+            // Every value must be a string — FCM rejects the message otherwise.
+            data: {
+              title: title || "Belople",
+              body: body || "",
+              route: route || "/",
+              url: url || "/",
+              tag: tag || "",
+              type: type || "",
+              avatar: avatar || "",
+              actor: actorName || "",
+            },
             android: {
               // AndroidMessagePriority is an enum: "HIGH"/"NORMAL". Lowercase
               // risks an INVALID_ARGUMENT rejection of the whole message.
-              priority: "HIGH", // wake the device rather than batch under Doze
-              notification: { sound: "default", tag: tag || undefined },
+              // HIGH also lets a data message wake the app under Doze, which a
+              // normal-priority one would be held back from doing.
+              priority: "HIGH",
             },
           },
         }),
@@ -552,6 +567,19 @@ const NOTIF_TEXT = {
 // Writes the in-app notification (always) and fires a push (best-effort),
 // respecting the recipient's existing notify_* toggles — gifts are the one
 // exception, since money landing on your video shouldn't be optional.
+// Absolute base for URLs that leave the Worker and get fetched by something
+// else — notably the avatar the phone downloads to draw a notification, which
+// has no request context to resolve a relative path against.
+const PUBLIC_ORIGIN = "https://www.belople.com";
+
+// The link-preview fetchers. Matched on user agent because that is the only
+// thing distinguishing them from a browser — they request the same URL. Kept
+// deliberately narrow: a false positive would serve a real person a blank
+// redirect page instead of the app.
+const CRAWLER_UA = /whatsapp|facebookexternalhit|facebot|twitterbot|telegrambot|slackbot|discordbot|linkedinbot|skypeuripreview|pinterest|redditbot|embedly|vkshare|tiktok|bingbot|googlebot|applebot|iframely|quora link preview|nuzzel|outbrain|w3c_validator/i;
+
+const isCrawler = (request) => CRAWLER_UA.test(request.headers.get("User-Agent") || "");
+
 async function notify(env, ctx, userId, actorId, type, extra = {}) {
   // ad_* are account notifications about your OWN ad, so a self-target is
   // allowed there (ad_complete has no other actor); everything else blocks it.
@@ -574,6 +602,30 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
              : recipient.notify_comments; // comment, reply
   if (!pref) return;
 
+  // Collapse repeats instead of stacking them. Following, unfollowing and
+  // following again produced a fresh row every time, so one person filled the
+  // list with "started following you" over and over. A like has the same shape
+  // (like, unlike, like) but is per-video, so it collapses on the video too.
+  // Comments, replies, gifts and messages each carry distinct content and are
+  // never collapsed — every one of those is genuinely a new thing to read.
+  const collapsible = type === "follow" || type === "like" || type === "repost";
+  if (collapsible) {
+    const existing = await env.DB.prepare(`
+      SELECT id FROM notifications
+      WHERE user_id = ? AND actor_id = ? AND type = ?
+        AND (video_id IS ? OR video_id = ?)
+      LIMIT 1
+    `).bind(userId, actorId, type, extra.videoId || null, extra.videoId || null).first();
+    if (existing) {
+      // Move it back to the top and mark it unread again — the event did just
+      // happen — but don't push a second time for something already reported.
+      await env.DB.prepare(
+        "UPDATE notifications SET created_at = ?, read = 0 WHERE id = ?"
+      ).bind(now(), existing.id).run();
+      return;
+    }
+  }
+
   const id = uid();
   await env.DB.prepare(`
     INSERT INTO notifications (id, user_id, actor_id, type, video_id, comment_id, read, created_at)
@@ -581,7 +633,9 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
   `).bind(id, userId, actorId, type, extra.videoId || null, extra.commentId || null, now()).run();
 
   ctx.waitUntil((async () => {
-    const actor = await env.DB.prepare("SELECT username, display_name FROM users WHERE id = ?").bind(actorId).first();
+    const actor = await env.DB.prepare(
+      "SELECT username, display_name, avatar_key FROM users WHERE id = ?"
+    ).bind(actorId).first();
     const name = actor?.display_name || actor?.username || "Someone";
     const build = NOTIF_TEXT[type];
     if (!build) return;
@@ -589,15 +643,26 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
     const url = extra.videoId ? `/?video=${extra.videoId}`
               : extra.username ? `/?user=${extra.username}` : "/";
     // The native app navigates by app route, the browser by web URL — send
-    // both so one payload serves either client.
-    const route = type === "message" && extra.username ? `/chat/${extra.username}`
+    // both so one payload serves either client. `username` is always the
+    // actor's, so a "liked your video" can still offer their profile.
+    const actorName = actor?.username || extra.username;
+    const route = type === "message" && actorName ? `/chat/${actorName}`
                 : extra.videoId ? `/v/${extra.videoId}`
-                : extra.username ? `/profile/${extra.username}` : "/notifications";
+                : actorName ? `/profile/${actorName}` : "/notifications";
+    // The person's photo, shown as the notification's large icon — the app
+    // draws it, so it needs an absolute URL it can fetch without a session.
+    const avatar = actor?.avatar_key ? `${PUBLIC_ORIGIN}/api/media/${actor.avatar_key}` : null;
     // Browsers and installed apps are different delivery channels, and a user
     // can have both. Neither failing may stop the other.
     await Promise.all([
       sendPush(env, userId, { title, body, url, tag: type }),
-      sendFcm(env, userId, { title, body, url, tag: type, route }),
+      sendFcm(env, userId, {
+        title, body, url, route,
+        // Per-conversation for messages so a run of them collapses into one
+        // entry; per-type otherwise.
+        tag: type === "message" ? `message-${actorId}` : type,
+        type, avatar, actorName,
+      }),
     ]);
   })().catch(() => {}));
 }
@@ -821,6 +886,54 @@ async function handle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
+
+  // ----- link unfurling: /v/:id for a chat app's crawler -----
+  //
+  // WhatsApp, Facebook and the rest fetch a shared URL once and read the OG
+  // tags out of the HTML. They do NOT run JavaScript, so the SPA's index.html
+  // gives them nothing to show and the link renders as a bare address. Serving
+  // a small pre-filled document to those crawlers (only — real browsers still
+  // get the app) is what puts a thumbnail, title and creator on the preview.
+  const unfurlMatch = /^\/v\/([\w-]+)$/.exec(path);
+  if (unfurlMatch && method === "GET" && isCrawler(request)) {
+    const row = await env.DB.prepare(`
+      SELECT v.caption, v.thumb_key, v.r2_key, v.width, v.height,
+             u.username, u.display_name
+      FROM videos v JOIN users u ON u.id = v.user_id WHERE v.id = ?
+    `).bind(unfurlMatch[1]).first();
+    if (row) {
+      const esc = (s) => String(s || "").replace(/[&<>"]/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      const name = row.display_name || row.username;
+      const title = row.caption?.trim() ? `${name}: ${row.caption.trim().slice(0, 90)}` : `${name} on Belople`;
+      const image = row.thumb_key ? `${PUBLIC_ORIGIN}/api/media/${row.thumb_key}` : `${PUBLIC_ORIGIN}/icons/icon-512.png`;
+      const pageUrl = `${PUBLIC_ORIGIN}/v/${unfurlMatch[1]}`;
+      return new Response(`<!doctype html><html><head>
+<meta charset="utf-8">
+<title>${esc(title)}</title>
+<meta property="og:site_name" content="Belople">
+<meta property="og:type" content="video.other">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="Watch on Belople">
+<meta property="og:url" content="${esc(pageUrl)}">
+<meta property="og:image" content="${esc(image)}">
+<meta property="og:image:width" content="${row.width || 720}">
+<meta property="og:image:height" content="${row.height || 1280}">
+<meta property="og:video" content="${esc(`${PUBLIC_ORIGIN}/api/media/${row.r2_key}`)}">
+<meta property="og:video:type" content="video/mp4">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:image" content="${esc(image)}">
+<meta http-equiv="refresh" content="0; url=${esc(pageUrl)}">
+</head><body></body></html>`, {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          // Short cache: a caption can be edited, and crawlers re-fetch.
+          "Cache-Control": "public, max-age=300",
+        },
+      });
+    }
+  }
 
   if (!path.startsWith("/api/")) return null; // fall through to static assets
 
@@ -1968,12 +2081,23 @@ async function handle(request, env, ctx) {
         const res = await fetch(endpoint, {
           method: "POST",
           headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+          // Same data-only shape as a real notification, so this exercises the
+          // path that actually ships rather than a simpler one that might pass
+          // while the real one fails.
           body: JSON.stringify({
             message: {
               token: d.token,
-              notification: { title: "Belople", body: "Push is working 🎉" },
-              data: { route: "/notifications", url: "/", tag: "test" },
-              android: { priority: "HIGH", notification: { sound: "default" } },
+              data: {
+                title: "Belople",
+                body: "Push is working 🎉",
+                route: "/notifications",
+                url: "/",
+                tag: "test",
+                type: "test",
+                avatar: "",
+                actor: "",
+              },
+              android: { priority: "HIGH" },
             },
           }),
         });
@@ -2578,7 +2702,10 @@ async function handle(request, env, ctx) {
     ).bind(contentId).first();
     // ?s= is this specific share event, not just the video — it's how the
     // person who opens the link finds out who sent it to them.
-    return json({ count: c.n, shareId, url: `${url.origin}/v/${shareMatch[1]}?s=${shareId}` });
+    // Always the brand domain, never whatever origin the request happened to
+    // arrive on — a shared link is the first thing a stranger sees of Belople,
+    // and "video-app.ngwinoreal.workers.dev" isn't it.
+    return json({ count: c.n, shareId, url: `${PUBLIC_ORIGIN}/v/${shareMatch[1]}?s=${shareId}` });
   }
 
   // Marks a share as having actually reached somewhere — navigator.share

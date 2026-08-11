@@ -10,6 +10,7 @@ import '../application/playback_speed.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../../core/widgets/brand_refresh.dart';
 import '../data/video_model.dart';
 import '../data/feed_repository.dart';
 
@@ -275,8 +276,16 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
       children: [
         Container(color: Colors.black),
         if (widget.video.isImageAd)
-          // Image ad: the sponsor's still image, shown full-bleed.
-          CachedNetworkImage(imageUrl: mediaUrl(widget.video.videoUrl), fit: BoxFit.contain, width: double.infinity)
+          // Image ad: the sponsor's still image, shown full-bleed. Ads carry no
+          // poster frame, so without a placeholder the slide is a black panel
+          // for the whole download — the "ads take ages to open" complaint.
+          CachedNetworkImage(
+            imageUrl: mediaUrl(widget.video.videoUrl),
+            fit: BoxFit.contain,
+            width: double.infinity,
+            fadeInDuration: const Duration(milliseconds: 150),
+            placeholder: (_, __) => const Center(child: BrandRefreshDots()),
+          )
         else if (_initialized && _controller != null)
           FittedBox(
             fit: BoxFit.cover,
@@ -287,7 +296,11 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
             ),
           )
         else if (widget.video.thumbUrl != null)
-          CachedNetworkImage(imageUrl: mediaUrl(widget.video.thumbUrl!), fit: BoxFit.cover),
+          CachedNetworkImage(imageUrl: mediaUrl(widget.video.thumbUrl!), fit: BoxFit.cover)
+        else
+          // No poster to show (video ads don't have one) — the dots say the
+          // app is working rather than leaving a dead black frame.
+          const Center(child: BrandRefreshDots()),
 
         // Pause glyph — design-5.css: faint, only while paused-by-tap.
         if (_showPauseGlyph)

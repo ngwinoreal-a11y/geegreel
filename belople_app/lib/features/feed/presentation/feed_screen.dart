@@ -10,6 +10,7 @@ import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/bottom_nav_pill.dart';
+import '../../../core/widgets/brand_refresh.dart';
 import '../../../core/widgets/top_toast.dart';
 import '../../../core/widgets/seg_control.dart';
 import '../../../core/widgets/skeleton.dart';
@@ -51,6 +52,30 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
 
   PageController _controllerFor(FeedTab tab) =>
       _pageControllers.putIfAbsent(tab, () => PageController(keepPage: false));
+
+  // Pull-to-refresh on the first video: how far past the top the drag has gone,
+  // and whether a refresh is already running.
+  double _pullDistance = 0;
+  bool _refreshing = false;
+
+  Future<void> _refreshFeed() async {
+    setState(() => _refreshing = true);
+    _pullDistance = 0;
+    try {
+      ref.invalidate(feedControllerProvider(_tab));
+      await ref.read(feedControllerProvider(_tab).future);
+      if (mounted) {
+        setState(() => _activeIndex = 0);
+        final c = _controllerFor(_tab);
+        if (c.hasClients) c.jumpToPage(0);
+      }
+    } catch (_) {
+      // A failed refresh leaves the existing feed on screen — better than
+      // emptying it because the network blipped.
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
 
   // Whether the feed is the visible top-of-stack route. Another screen
   // pushed on top (single video, profile, sound, notifications...) sets
@@ -198,7 +223,22 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                   ),
                 );
               }
-              return PageView.builder(
+              return NotificationListener<ScrollNotification>(
+                // Pull-to-refresh on a vertical PageView: RefreshIndicator
+                // can't drive a page-snapped scrollable, so the overscroll at
+                // the top of the feed is measured directly. Only from the
+                // first video — dragging down anywhere else is just paging.
+                onNotification: (n) {
+                  if (_activeIndex != 0) { _pullDistance = 0; return false; }
+                  if (n is OverscrollNotification && n.overscroll < 0) {
+                    _pullDistance -= n.overscroll;
+                    if (_pullDistance > 110 && !_refreshing) _refreshFeed();
+                  } else if (n is ScrollEndNotification) {
+                    _pullDistance = 0;
+                  }
+                  return false;
+                },
+                child: PageView.builder(
                 // Keyed by tab so switching tabs builds a brand-new Scrollable
                 // instead of handing the other tab's scroll position to it.
                 key: ValueKey(_tab),
@@ -229,6 +269,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                   }
                   return RepaintBoundary(
                     child: VideoSlide(
+                    // Keyed by video id, NOT by list position. Posting a new
+                    // video prepends it, so every video shifts down a slot;
+                    // without a key Flutter reuses the State at that slot and
+                    // the slide kept the previous video's player and counts —
+                    // a fresh upload appeared with someone else's likes and
+                    // comments until the app was restarted.
+                    key: ValueKey(video.id),
                     video: video,
                     isActive: index == _activeIndex && _routeVisible,
                     onLikeTap: () => _requireLogin(() => video.isAd
@@ -261,9 +308,31 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                   ),
                   );
                 },
+              ),
               );
             },
           ),
+
+          // Refresh indicator for the pull gesture above.
+          if (_refreshing)
+            Positioned(
+              top: 0, left: 0, right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 70),
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: const BrandRefreshDots(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
 
           // Top chrome: avatar, For You / Following tabs, search — floats
           // on the picture, no backdrop (design-feed.css section B).
