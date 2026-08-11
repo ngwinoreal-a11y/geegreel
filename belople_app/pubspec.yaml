@@ -75,6 +75,10 @@ dependencies:
   # sendFcm in src/index.js). Requires android/app/google-services.json. ---
   firebase_core: ^3.8.1
   firebase_messaging: ^15.1.6
+  # Creates the app's own high-importance notification channel and draws
+  # notifications that arrive while the app is open — FCM's own tray
+  # notification only appears when the app is in the background.
+  flutter_local_notifications: ^18.0.1
 
   # --- Native share sheet (shows installed apps: WhatsApp, Facebook, …) and
   # saving a downloaded video into the phone's gallery ---

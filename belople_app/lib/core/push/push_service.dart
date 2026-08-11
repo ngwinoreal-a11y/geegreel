@@ -4,10 +4,28 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../network/api_client.dart';
 import '../router/app_router.dart';
+
+/// Must match `default_notification_channel_id` in AndroidManifest.xml.
+/// Android 8+ silently discards a notification whose channel doesn't exist —
+/// the send succeeds, FCM answers 200, and nothing is ever drawn — so the
+/// channel is created at startup rather than left to an implicit fallback.
+const _channelId = 'belople_default';
+
+const _androidChannel = AndroidNotificationChannel(
+  _channelId,
+  'Belople',
+  description: 'Likes, comments, follows, gifts and messages',
+  // Anything lower than `high` will not pop up over the screen — it lands
+  // silently in the shade, which reads as "notifications don't work".
+  importance: Importance.high,
+);
+
+final _localNotifications = FlutterLocalNotificationsPlugin();
 
 /// Handles a message that arrives while the app is fully terminated. Must be a
 /// top-level function — Android spins up a separate isolate for it, so anything
@@ -31,18 +49,63 @@ class PushService {
 
   StreamSubscription<String>? _refreshSub;
   StreamSubscription<RemoteMessage>? _openedSub;
+  StreamSubscription<RemoteMessage>? _foregroundSub;
   String? _lastSentToken;
+
+  /// Registers the notification channel and the local-notification plugin used
+  /// to draw messages that arrive while the app is open.
+  Future<void> _setupLocal() async {
+    await _localNotifications.initialize(
+      const InitializationSettings(
+        android: AndroidInitializationSettings('@drawable/ic_stat_belople'),
+      ),
+      onDidReceiveNotificationResponse: (response) {
+        final route = response.payload;
+        if (route != null && route.startsWith('/')) _go(route);
+      },
+    );
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(_androidChannel);
+  }
+
+  /// FCM does NOT draw a tray notification while the app is in the foreground —
+  /// it hands the message to the app instead. Without this, testing the feature
+  /// with the app open looks exactly like it being broken.
+  void _showForeground(RemoteMessage message) {
+    final n = message.notification;
+    if (n == null) return;
+    _localNotifications.show(
+      message.hashCode,
+      n.title,
+      n.body,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          _channelId,
+          _androidChannel.name,
+          channelDescription: _androidChannel.description,
+          importance: Importance.high,
+          priority: Priority.high,
+          icon: '@drawable/ic_stat_belople',
+        ),
+      ),
+      payload: message.data['route']?.toString(),
+    );
+  }
 
   /// Called once after Firebase.initializeApp() and again whenever the signed-in
   /// user changes, since a token is only useful once it's tied to an account.
   Future<void> start() async {
     try {
       final messaging = FirebaseMessaging.instance;
+      await _setupLocal();
 
       // Android 13+ shows the system permission sheet here. Declining is a
       // normal outcome, not an error — we just never get a token to send.
       final settings = await messaging.requestPermission();
       if (settings.authorizationStatus == AuthorizationStatus.denied) return;
+
+      _foregroundSub ??= FirebaseMessaging.onMessage.listen(_showForeground);
 
       await _sendToken(await messaging.getToken());
 
@@ -81,9 +144,11 @@ class PushService {
   /// ready-made app path in `data.route`; the web-style `data.url`
   /// (`/?video=…`) is translated for older payloads.
   void _openFromMessage(RemoteMessage message) {
-    final data = message.data;
-    final route = _routeFor(data);
-    if (route == null) return;
+    final route = _routeFor(message.data);
+    if (route != null) _go(route);
+  }
+
+  void _go(String route) {
     // The router may not be mounted yet on a cold start — go after this frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
@@ -111,6 +176,7 @@ class PushService {
   void dispose() {
     _refreshSub?.cancel();
     _openedSub?.cancel();
+    _foregroundSub?.cancel();
   }
 }
 

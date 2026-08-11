@@ -1934,6 +1934,11 @@ async function handle(request, env, ctx) {
     const sa = serviceAccount(env);
     const report = {
       secretPresent: !!env.FCM_SERVICE_ACCOUNT,
+      // Length only — never the value. A Windows console truncates pasted
+      // input at 254 characters, so a service-account key pasted at a prompt
+      // arrives cut in half and JSON.parse fails; the length is what makes that
+      // diagnosable at a glance (a real key is ~2300).
+      secretLength: env.FCM_SERVICE_ACCOUNT ? env.FCM_SERVICE_ACCOUNT.length : 0,
       secretParsed: !!sa,
       projectId: sa?.project_id || null,
       clientEmail: sa?.client_email || null,

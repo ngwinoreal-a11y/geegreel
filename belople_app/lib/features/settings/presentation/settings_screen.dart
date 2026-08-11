@@ -102,9 +102,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final sends = (data['sends'] as List?) ?? const [];
       final ok = sends.any((s) => (s is Map && (s['status'] as num?)?.toInt() == 200));
 
-      if (data['secretParsed'] != true) {
+      if (data['secretPresent'] != true) {
         headline = "Server isn't set up for push";
-        detail = 'The Firebase server key is missing or unreadable.';
+        detail = 'No Firebase server key is stored on the server.';
+      } else if (data['secretParsed'] != true) {
+        final len = (data['secretLength'] as num?)?.toInt() ?? 0;
+        headline = 'Server key is damaged';
+        detail = 'The stored Firebase key is $len characters and is not valid '
+            'JSON. A real key is around 2300 — a much smaller number means it '
+            'was cut off when it was saved.';
       } else if (devices == 0) {
         headline = 'This phone is not registered';
         detail = 'Allow notifications for Belople in your phone settings, then '
