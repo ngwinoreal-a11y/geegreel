@@ -610,12 +610,32 @@ class _MessageBubble extends StatelessWidget {
             style: AppTypography.sans(fontSize: 14, color: AppColors.muted)
                 .copyWith(fontStyle: FontStyle.italic)),
       );
-    } else if (message.audioUrl != null) {
+    } else if (message.audioUrl != null || (message.localPath != null && message.audioDuration != null)) {
       content = _bubble(
         bg: bg,
         border: selected,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         child: _VoiceContent(message: message, mine: mine, avatarUrl: avatarUrl),
+      );
+    } else if (message.localPath != null) {
+      // A photo still uploading: drawn straight from the file on this phone,
+      // dimmed with a spinner, so the message is on screen the instant it's
+      // sent. The next poll swaps in the server's copy.
+      content = Stack(
+        alignment: Alignment.center,
+        children: [
+          Opacity(
+            opacity: 0.6,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadii.lg),
+              child: Image.file(File(message.localPath!), width: 200, fit: BoxFit.cover),
+            ),
+          ),
+          const SizedBox(
+            height: 26, width: 26,
+            child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+          ),
+        ],
       );
     } else if (message.imageUrl != null) {
       content = GestureDetector(

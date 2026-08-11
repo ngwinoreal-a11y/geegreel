@@ -5313,8 +5313,8 @@ function adminPage() {
   const shell = (inner) => `
     <div class="pagehead"><button id="back">${I.back}</button><h2>Admin</h2></div>
     <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:18px;padding-bottom:2px">
-      ${[["overview", "Overview"], ["apps", "Applications"], ["coins", "Coins"], ["reports", "Reports"],
-         ["users", "Users"], ["ads", "Ads"], ["payouts", "Payouts"], ["log", "Log"]]
+      ${[["overview", "Overview"], ["announce", "Announce"], ["apps", "Applications"], ["coins", "Coins"],
+         ["reports", "Reports"], ["users", "Users"], ["ads", "Ads"], ["payouts", "Payouts"], ["log", "Log"]]
         .map(([k, l]) => `
           <button data-tab="${k}" style="flex-shrink:0;padding:7px 12px;border-radius:16px;font-size:12px;font-weight:600;
             background:${tab === k ? "#fff" : "var(--surface)"};color:${tab === k ? "#000" : "var(--muted)"};
@@ -5450,6 +5450,46 @@ function adminPage() {
             toast("Rejected"); load();
           } catch (e) { toast(e.message); }
         });
+      }
+
+      if (tab === "announce") {
+        // One message to everyone. It lands in each user's Activity like any
+        // other notification and pushes to their phone, so an announcement
+        // reaches people who aren't currently in the app.
+        body.innerHTML = `
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
+            <p style="margin:0 0 10px;font-size:13px;color:var(--muted)">
+              Sends to every account. It appears in Activity and as a phone notification.
+            </p>
+            <input id="anTitle" maxlength="60" placeholder="Title (optional — defaults to Belople)"
+              style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);
+                     border-radius:8px;padding:10px;color:var(--text);font-size:14px;margin-bottom:8px">
+            <textarea id="anBody" rows="4" maxlength="300" placeholder="What do you want to tell everyone?"
+              style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);
+                     border-radius:8px;padding:10px;color:var(--text);font-size:14px;resize:vertical"></textarea>
+            <button id="anSend" style="margin-top:10px;width:100%;border-radius:10px;padding:11px 0;
+              background:var(--accent);color:#111;font-size:14px;font-weight:700;border:0">Send to everyone</button>
+            <p id="anOut" style="margin:10px 0 0;font-size:12px;color:var(--muted)"></p>
+          </div>`;
+        const out = body.querySelector("#anOut");
+        body.querySelector("#anSend").onclick = async (e) => {
+          const text = body.querySelector("#anBody").value.trim();
+          if (!text) { out.textContent = "Write a message first."; return; }
+          if (!confirm(`Send this to EVERY user?\n\n"${text}"`)) return;
+          e.target.disabled = true;
+          out.textContent = "Sending…";
+          try {
+            const r = await api("/admin/broadcast", {
+              method: "POST",
+              body: { title: body.querySelector("#anTitle").value.trim(), body: text },
+            });
+            out.textContent = `Queued for ${r.recipients} people.`;
+            body.querySelector("#anBody").value = "";
+          } catch (err) {
+            out.textContent = err?.message || "Couldn't send.";
+          }
+          e.target.disabled = false;
+        };
       }
 
       if (tab === "reports") {

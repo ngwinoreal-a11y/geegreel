@@ -124,9 +124,24 @@ class ChatThreadController extends FamilyAsyncNotifier<ThreadData, String>
     } catch (_) {}
   }
 
+  /// Photos and voice notes now echo locally the moment they're sent, the same
+  /// way text already did. They used to wait for the upload to finish before
+  /// appearing at all, so sending a photo looked like nothing had happened
+  /// until the file had gone all the way to R2 and come back.
+  void _echo(ThreadData current, MessageModel optimistic) {
+    state = AsyncData(_copyWithMessages(current, [...current.messages, optimistic]));
+  }
+
   Future<void> sendImage(File file) async {
     final current = state.valueOrNull;
     if (current == null) return;
+    _echo(current, MessageModel(
+      id: 'pending-${DateTime.now().microsecondsSinceEpoch}',
+      outgoing: true,
+      localPath: file.path,
+      sending: true,
+      createdAt: DateTime.now(),
+    ));
     try {
       await ref.read(chatRepositoryProvider).sendMedia(
             recipientId: current.withUser.id,
@@ -142,6 +157,14 @@ class ChatThreadController extends FamilyAsyncNotifier<ThreadData, String>
   Future<void> sendVoice(File file, double durationSeconds) async {
     final current = state.valueOrNull;
     if (current == null) return;
+    _echo(current, MessageModel(
+      id: 'pending-${DateTime.now().microsecondsSinceEpoch}',
+      outgoing: true,
+      localPath: file.path,
+      audioDuration: durationSeconds,
+      sending: true,
+      createdAt: DateTime.now(),
+    ));
     try {
       await ref.read(chatRepositoryProvider).sendMedia(
             recipientId: current.withUser.id,

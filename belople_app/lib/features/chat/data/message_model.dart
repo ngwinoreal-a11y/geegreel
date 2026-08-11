@@ -50,6 +50,8 @@ class MessageModel {
     this.deleted = false,
     this.reactions = const [],
     this.replyTo,
+    this.localPath,
+    this.sending = false,
   });
 
   final String id;
@@ -64,6 +66,15 @@ class MessageModel {
   final bool deleted;
   final List<MessageReaction> reactions;
   final MessageReplyTo? replyTo;
+
+  /// The file on THIS phone, for a photo or voice note still uploading. The
+  /// bubble draws from here so the message appears the instant it's sent
+  /// instead of after the round-trip; the next poll replaces it with the
+  /// server's copy.
+  final String? localPath;
+
+  /// Still uploading — drawn dimmed with a spinner.
+  final bool sending;
 
   /// A short one-line preview used when THIS message is quoted in a reply
   /// banner (before the server round-trip supplies a snippet of its own).

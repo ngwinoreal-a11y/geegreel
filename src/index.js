@@ -580,6 +580,8 @@ const NOTIF_TEXT = {
   gift: (name) => [`${name} sent you a gift`, ""],
   repost: (name) => [`${name} reposted your video`, ""],
   post: (name, caption) => [`${name} posted a new video`, caption || "Tap to watch"],
+  // From Belople itself, not a person — so it doesn't read "@admin says".
+  announcement: (_name, text) => ["Belople", text || ""],
   message: (name, text) => [name, text || "Sent you a message"],
   ad_approved: () => ["Your ad is live", "It's now being shown to people."],
   ad_rejected: () => ["Your ad wasn't approved", "It didn't meet the guidelines."],
@@ -2061,6 +2063,48 @@ async function handle(request, env, ctx) {
     requireUser(user);
     await env.DB.prepare("UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0").bind(user.id).run();
     return json({ ok: true });
+  }
+
+  // ----- admin broadcast: one announcement to every user -----
+  //
+  // Writes a notification row per recipient (so it appears in Activity like
+  // anything else) and pushes it. Batched and run after the response, because
+  // on a growing platform this is the one action whose cost scales with the
+  // whole user base.
+  if (path === "/api/admin/broadcast" && method === "POST") {
+    requireUser(user);
+    if (!isAdmin(user)) throw new HttpError("Admins only", 403);
+    const { title, body } = await request.json().catch(() => ({}));
+    const text = (body || "").trim();
+    if (!text) return err("Write the message to send");
+    const heading = (title || "Belople").trim().slice(0, 60);
+
+    const { results: recipients } = await env.DB.prepare(
+      "SELECT id FROM users WHERE status != 'banned' AND id != ?"
+    ).bind(user.id).all();
+
+    ctx.waitUntil((async () => {
+      const at = now();
+      for (const r of recipients) {
+        try {
+          await env.DB.prepare(`
+            INSERT INTO notifications (id, user_id, actor_id, type, video_id, comment_id, read, created_at)
+            VALUES (?, ?, ?, 'announcement', NULL, NULL, 0, ?)
+          `).bind(uid(), r.id, user.id, at).run();
+          await Promise.all([
+            sendPush(env, r.id, { title: heading, body: text, url: "/", tag: "announcement" }),
+            sendFcm(env, r.id, {
+              title: heading, body: text, url: "/", route: "/notifications",
+              tag: "announcement", type: "announcement", avatar: null, actorName: null,
+            }),
+          ]);
+        } catch (e) {
+          console.error("broadcast to one user failed", e?.message || e);
+        }
+      }
+    })());
+
+    return json({ ok: true, recipients: recipients.length });
   }
 
   // ----- push self-test: sends a notification to your own devices and reports
