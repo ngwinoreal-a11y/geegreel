@@ -219,12 +219,18 @@ class _PostCard extends ConsumerWidget {
     final me = ref.watch(authControllerProvider).valueOrNull;
     final isMine = me != null && me.id == post.user.id;
     return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.md),
+      // A post's media runs edge to edge, so without a real gap AND a rule the
+      // next post's picture butts straight onto the previous one and the two
+      // read as one item — which is what "they're stuck together" was.
+      padding: const EdgeInsets.only(bottom: 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Hairline above each post's header: the boundary the eye needs when
+          // two full-bleed pictures sit one under the other.
+          const Divider(height: 1, thickness: 1, color: Color(0xFFEDEDED)),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding, vertical: 12),
             child: Row(
               children: [
                 GestureDetector(
@@ -519,12 +525,18 @@ class _VideoCardState extends State<_VideoCard> {
     final video = widget.video;
     final c = _controller;
     return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.md),
+      // A post's media runs edge to edge, so without a real gap AND a rule the
+      // next post's picture butts straight onto the previous one and the two
+      // read as one item — which is what "they're stuck together" was.
+      padding: const EdgeInsets.only(bottom: 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Hairline above each post's header: the boundary the eye needs when
+          // two full-bleed pictures sit one under the other.
+          const Divider(height: 1, thickness: 1, color: Color(0xFFEDEDED)),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding, vertical: 12),
             child: Row(
               children: [
                 GestureDetector(

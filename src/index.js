@@ -3168,7 +3168,7 @@ async function handle(request, env, ctx) {
         GROUP BY a, b
       )
       SELECT m.id, m.sender_id, m.recipient_id, m.body, m.image_key, m.audio_key, m.created_at, m.deleted_everyone,
-             u.username, u.display_name, u.avatar_key, u.last_active_at,
+             u.id AS other_id, u.username, u.display_name, u.avatar_key, u.last_active_at,
              cs.status AS req_status, cs.requested_by AS req_by,
              (SELECT COUNT(*) FROM messages um
                WHERE um.recipient_id = ? AND um.read = 0
@@ -3192,6 +3192,12 @@ async function handle(request, env, ctx) {
         createdAt: m.created_at,
         unreadCount: m.unread_count,
         with: {
+          // The id was missing here. Anything that acts on a thread's person
+          // rather than just displaying them — the share sheet's Send, which
+          // posts to a recipient id — received an empty string for EVERY row,
+          // so every send failed and per-row state keyed on the id matched all
+          // of them at once (four spinners for one tap).
+          id: m.other_id,
           username: m.username,
           displayName: m.display_name,
           avatarUrl: m.avatar_key ? `/api/media/${m.avatar_key}` : null,

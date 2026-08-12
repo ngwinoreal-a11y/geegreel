@@ -196,6 +196,12 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
 
   Future<void> _sendTo(ThreadPreview t) async {
     final id = t.user.id;
+    // A blank id would key every row's state to the same entry — one tap would
+    // spin all of them — and the send itself has no recipient. Say so instead.
+    if (id.isEmpty) {
+      showTopToast(context, "Couldn't send — reopen Messages and try again");
+      return;
+    }
     if (_sendingTo.contains(id) || _sentTo.contains(id)) return;
     setState(() => _sendingTo.add(id));
     try {
