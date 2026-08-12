@@ -131,7 +131,7 @@ class _NotificationRow extends StatelessWidget {
                 children: [
                   RichText(
                     text: TextSpan(
-                      style: AppTypography.sans(fontSize: 14, color: AppColors.text),
+                      style: AppTypography.sans(fontSize: 16, color: AppColors.text),
                       children: item.isAnnouncement
                           // An announcement is from Belople, not from a person
                           // doing something to you — so it reads as the message
@@ -151,7 +151,7 @@ class _NotificationRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(_relativeTime(item.createdAt),
-                      style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
+                      style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
                 ],
               ),
             ),

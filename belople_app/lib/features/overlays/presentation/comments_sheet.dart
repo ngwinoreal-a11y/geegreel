@@ -179,7 +179,7 @@ class _CommentsSheetState extends ConsumerState<_CommentsSheet> {
                 border: Border(bottom: BorderSide(color: AppColors.sheetLine)),
               ),
               child: Center(
-                child: Text('Comments', style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.sheetInk)),
+                child: Text('Comments', style: AppTypography.sans(fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.sheetInk)),
               ),
             ),
             Expanded(
@@ -274,7 +274,7 @@ class _CommentRow extends StatelessWidget {
                   const SizedBox(width: 8),
                   Text(
                     expanded ? 'Hide replies' : 'View $n ${n == 1 ? 'reply' : 'replies'}',
-                    style: AppTypography.sans(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.onSheetMuted),
+                    style: AppTypography.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.onSheetMuted),
                   ),
                 ],
               ),
@@ -330,19 +330,19 @@ class _CommentContent extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(comment.user.displayName,
-                    style: AppTypography.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.onSheetMuted)),
-                Text(comment.body, style: AppTypography.sans(fontSize: 14, color: AppColors.sheetInk)),
+                    style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.onSheetMuted)),
+                Text(comment.body, style: AppTypography.sans(fontSize: 16, color: AppColors.sheetInk)),
                 const SizedBox(height: 5),
                 Row(
                   children: [
                     Text(_relativeTime(comment.createdAt),
-                        style: AppTypography.sans(fontSize: 12, color: AppColors.onSheetMuted)),
+                        style: AppTypography.sans(fontSize: 13, color: AppColors.onSheetMuted)),
                     const SizedBox(width: 16),
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: onReply,
                       child: Text('Reply',
-                          style: AppTypography.sans(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.onSheetMuted)),
+                          style: AppTypography.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.onSheetMuted)),
                     ),
                   ],
                 ),

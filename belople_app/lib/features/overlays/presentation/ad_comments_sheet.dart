@@ -154,9 +154,9 @@ class _CommentRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(comment.user.displayName,
-                    style: AppTypography.sans(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.onSheetMuted)),
+                    style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.onSheetMuted)),
                 const SizedBox(height: 2),
-                Text(comment.body, style: AppTypography.sans(fontSize: 14, color: AppColors.sheetInk)),
+                Text(comment.body, style: AppTypography.sans(fontSize: 16, color: AppColors.sheetInk)),
               ],
             ),
           ),

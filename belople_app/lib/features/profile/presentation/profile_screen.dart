@@ -92,11 +92,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             displayName: profile.user.displayName,
           ),
           const SizedBox(height: 10),
-          Text(profile.user.displayName, style: AppTypography.pageHeading.copyWith(fontSize: 18)),
-          Text('@${profile.user.username}', style: AppTypography.sans(color: AppColors.muted, fontSize: 13)),
+          Text(profile.user.displayName, style: AppTypography.pageHeading.copyWith(fontSize: 22)),
+          Text('@${profile.user.username}', style: AppTypography.sans(color: AppColors.muted, fontSize: 15)),
           if (profile.user.bio != null && profile.user.bio!.isNotEmpty) ...[
             const SizedBox(height: 8),
-            Text(profile.user.bio!, style: AppTypography.sans(fontSize: 14), textAlign: TextAlign.center),
+            Text(profile.user.bio!, style: AppTypography.sans(fontSize: 15), textAlign: TextAlign.center),
           ],
           const SizedBox(height: 16),
           Row(
@@ -204,7 +204,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: Text("This can't be undone.",
-                  style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+                  style: AppTypography.sans(fontSize: 15, color: AppColors.muted)),
             ),
             ListTile(
               leading: const Icon(Icons.delete_outline, color: AppColors.danger),
@@ -423,10 +423,10 @@ class _TabBarDelegate extends SliverPersistentHeaderDelegate {
                   alignment: Alignment.center,
                   child: RichText(
                     text: TextSpan(
-                      style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700, color: i == current ? AppColors.text : AppColors.muted),
+                      style: AppTypography.sans(fontSize: 17, fontWeight: FontWeight.w700, color: i == current ? AppColors.text : AppColors.muted),
                       children: [
                         TextSpan(text: labels[i].$1),
-                        TextSpan(text: ' ${labels[i].$2}', style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+                        TextSpan(text: ' ${labels[i].$2}', style: AppTypography.sans(fontSize: 14, color: AppColors.muted)),
                       ],
                     ),
                   ),
