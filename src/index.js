@@ -770,7 +770,7 @@ const privateUser = u => ({
 const FEED_SQL = `
   SELECT
     v.id, v.caption, v.song, v.r2_key, v.thumb_key, v.width, v.height,
-    v.duration, v.views, v.created_at, v.repost_of, v.sound_id,
+    v.duration, v.views, v.created_at, v.repost_of, v.sound_id, v.visibility,
     u.id AS user_id, u.username, u.display_name, u.avatar_key,
     ru.id AS repost_of_user_id, ru.username AS repost_of_username,
     ru.display_name AS repost_of_display_name, ru.avatar_key AS repost_of_avatar_key,
@@ -827,6 +827,9 @@ const shapeVideo = r => ({
   width: r.width,
   height: r.height,
   duration: r.duration,
+  // Surfaced so the owner sees at a glance which of their videos are not
+  // public — a profile grid of identical tiles gave no way to tell.
+  visibility: r.visibility || "public",
   views: r.views,
   createdAt: r.created_at,
   // The person who made this row exist — for a repost, that's whoever
@@ -2338,8 +2341,24 @@ async function handle(request, env, ctx) {
   // ----- single video -----
   const videoMatch = /^\/api\/videos\/([\w-]+)$/.exec(path);
   if (videoMatch && method === "GET") {
-    const row = await env.DB.prepare(FEED_SQL + " WHERE v.id = ?")
-      .bind(user?.id || "", user?.id || "", videoMatch[1]).first();
+    // Visibility was never checked here. Every list endpoint filters, but this
+    // one fetched by id alone — so a "Private" or followers-only video was
+    // readable by anyone who had the id, which is exactly what a share link
+    // hands out. The same rule the feed uses is applied here: yours always,
+    // public when the account is public, followers-only when you actually
+    // follow them, and private to nobody but the owner.
+    const viewerId = user?.id || "";
+    const row = await env.DB.prepare(FEED_SQL + `
+      WHERE v.id = ? AND (
+        v.user_id = ?
+        OR (v.visibility = 'public' AND u.is_private = 0)
+        OR ((v.visibility = 'followers' OR u.is_private = 1) AND v.visibility != 'private' AND EXISTS(
+              SELECT 1 FROM follows f
+              WHERE f.follower_id = ? AND f.followee_id = v.user_id AND f.status = 'accepted'))
+      )`)
+      .bind(viewerId, viewerId, videoMatch[1], viewerId, viewerId).first();
+    // Deliberately the same 404 as a missing video: a distinct "no permission"
+    // would confirm to a stranger that the id exists.
     if (!row) return err("Video not found", 404);
     return json({ video: shapeVideo(row) });
   }
@@ -3072,9 +3091,24 @@ async function handle(request, env, ctx) {
       canSeeVideos = !!f;
     }
 
+    // canSeeVideos is an ACCOUNT-level gate (is this profile private, do I
+    // follow it). It says nothing about an individual video's own setting, so
+    // on its own it published every "Private" and followers-only clip to
+    // anyone allowed to view the profile at all. Each video is now checked
+    // too — the owner sees all of theirs, everyone else sees only what that
+    // video's visibility actually permits.
+    const viewerId = user?.id || "";
     const { results } = canSeeVideos
-      ? await env.DB.prepare(FEED_SQL + " WHERE v.user_id = ? ORDER BY v.created_at DESC LIMIT 60")
-          .bind(user?.id || "", user?.id || "", u.id).all()
+      ? await env.DB.prepare(FEED_SQL + `
+          WHERE v.user_id = ? AND (
+            v.user_id = ?
+            OR (v.visibility = 'public' AND u.is_private = 0)
+            OR ((v.visibility = 'followers' OR u.is_private = 1) AND v.visibility != 'private' AND EXISTS(
+                  SELECT 1 FROM follows f
+                  WHERE f.follower_id = ? AND f.followee_id = v.user_id AND f.status = 'accepted'))
+          )
+          ORDER BY v.created_at DESC LIMIT 60`)
+          .bind(viewerId, viewerId, u.id, viewerId, viewerId).all()
       : { results: [] };
 
     // Public posts have no privacy gate of their own — the whole point of the

@@ -7,6 +7,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../../core/badges_provider.dart';
 import '../../../core/widgets/bottom_nav_pill.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../data/chat_repository.dart';
@@ -136,6 +137,11 @@ class InboxScreen extends ConsumerWidget {
                 (icon: Icons.mail_outline, label: 'Messages'),
                 (icon: Icons.videocam, label: 'Shorts'),
               ],
+              // The count belongs on the nav icon here too — the Activity row
+              // showed 5 waiting while the Messages tab beneath it showed
+              // nothing, so the badge that tells you to look was missing from
+              // the one place you'd look next.
+              badges: [ref.watch(unreadMessagesProvider).valueOrNull ?? 0, 0],
               activeIndex: 0,
               onTap: (i) {
                 // Feed/home: pop back to the live Feed underneath (reached
