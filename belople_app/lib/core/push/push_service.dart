@@ -49,7 +49,9 @@ String _actionLabel(String type) => switch (type) {
 /// Android's large icon has to come from a bitmap on disk, so a remote avatar
 /// must be fetched before the notification can be built. Failure is fine: the
 /// notification just shows without a photo rather than not showing at all.
-Future<String?> _downloadAvatar(String url) async {
+/// Downloads one image for a notification (the actor's avatar, or the video's
+/// poster for the expanded view) and returns a local path.
+Future<String?> _downloadImage(String url, {String prefix = 'notif'}) async {
   if (url.isEmpty) return null;
   // dart:io's HttpClient rather than a package: this also runs in the
   // background isolate, where the fewer moving parts the better.
@@ -63,7 +65,7 @@ Future<String?> _downloadAvatar(String url) async {
     final bytes = await consolidateHttpClientResponseBytes(res);
     if (bytes.isEmpty) return null;
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/notif_${url.hashCode}.jpg');
+    final file = File('${dir.path}/${prefix}_${url.hashCode}.jpg');
     await file.writeAsBytes(bytes);
     return file.path;
   } catch (_) {
@@ -86,7 +88,14 @@ Future<void> _showFromData(Map<String, dynamic> data) async {
   final route = (data['route'] ?? '/').toString();
   final tag = (data['tag'] ?? type).toString();
 
-  final avatarPath = await _downloadAvatar((data['avatar'] ?? '').toString());
+  // Both images at once: the notification can't be drawn until they're here,
+  // and fetching them one after the other doubles the wait for no reason.
+  final results = await Future.wait([
+    _downloadImage((data['avatar'] ?? '').toString(), prefix: 'notif_av'),
+    _downloadImage((data['image'] ?? '').toString(), prefix: 'notif_img'),
+  ]);
+  final avatarPath = results[0];
+  final imagePath = results[1];
 
   final android = AndroidNotificationDetails(
     _channelId,
@@ -98,11 +107,20 @@ Future<void> _showFromData(Map<String, dynamic> data) async {
     // the thing — the same arrangement every messaging app uses.
     icon: '@drawable/ic_stat_belople',
     largeIcon: avatarPath != null ? FilePathAndroidBitmap(avatarPath) : null,
-    // A long caption should be readable when the notification is expanded
-    // instead of being cut off at one line.
-    styleInformation: body.isNotEmpty
-        ? BigTextStyleInformation(body, contentTitle: title)
-        : null,
+    // Expanded, show the VIDEO it's about — a like or comment means nothing
+    // until you know which of your videos it landed on, and a 44px thumbnail
+    // isn't enough to tell. Falls back to big text when there's no image, so a
+    // long caption still isn't cut off at one line.
+    styleInformation: imagePath != null
+        ? BigPictureStyleInformation(
+            FilePathAndroidBitmap(imagePath),
+            contentTitle: title,
+            summaryText: body.isNotEmpty ? body : null,
+            // The avatar stays the large icon while collapsed; hiding it on
+            // expand is what lets the picture have the full width.
+            hideExpandedLargeIcon: true,
+          )
+        : (body.isNotEmpty ? BigTextStyleInformation(body, contentTitle: title) : null),
     // Same tag = replace, so ten likes don't become ten rows in the shade.
     tag: tag.isEmpty ? null : tag,
     actions: [AndroidNotificationAction('open', _actionLabel(type), showsUserInterface: true)],

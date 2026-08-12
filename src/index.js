@@ -509,7 +509,7 @@ async function fcmAccessToken(env) {
 // the app controls the large icon, the actions and where a tap lands. The
 // trade-off is that the app must be woken to draw it, which is what
 // priority HIGH and the background isolate handler are for.
-async function sendFcm(env, userId, { title, body, url, tag, route, type, avatar, actorName }) {
+async function sendFcm(env, userId, { title, body, url, tag, route, type, avatar, actorName, image }) {
   const sa = serviceAccount(env);
   if (!sa?.project_id) return; // not configured — web push still runs
 
@@ -546,6 +546,10 @@ async function sendFcm(env, userId, { title, body, url, tag, route, type, avatar
               type: type || "",
               avatar: avatar || "",
               actor: actorName || "",
+              // The video's poster, shown large when the notification is
+              // expanded. A like or comment means little until you can see
+              // WHICH of your videos it landed on.
+              image: image || "",
             },
             android: {
               // AndroidMessagePriority is an enum: "HIGH"/"NORMAL". Lowercase
@@ -657,9 +661,16 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
   `).bind(id, userId, actorId, type, extra.videoId || null, extra.commentId || null, now()).run();
 
   ctx.waitUntil((async () => {
-    const actor = await env.DB.prepare(
-      "SELECT username, display_name, avatar_key FROM users WHERE id = ?"
-    ).bind(actorId).first();
+    // Actor and, when this is about a video, its poster — fetched together
+    // rather than one after the other, since neither depends on the other.
+    const [actor, vid] = await Promise.all([
+      env.DB.prepare("SELECT username, display_name, avatar_key FROM users WHERE id = ?")
+        .bind(actorId).first(),
+      extra.videoId
+        ? env.DB.prepare("SELECT thumb_key FROM videos WHERE id = ?")
+            .bind(extra.videoId).first().catch(() => null)
+        : Promise.resolve(null),
+    ]);
     const name = actor?.display_name || actor?.username || "Someone";
     const build = NOTIF_TEXT[type];
     if (!build) return;
@@ -689,6 +700,9 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
         // entry; per-type otherwise.
         tag: type === "message" ? `message-${actorId}` : type,
         type, avatar, actorName,
+        // Shown large when the notification is expanded, so you can see which
+        // of your videos it's about.
+        image: vid?.thumb_key ? `${PUBLIC_ORIGIN}/api/media/${vid.thumb_key}` : null,
       }),
     ]);
   })().catch(() => {}));
