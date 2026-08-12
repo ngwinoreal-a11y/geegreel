@@ -730,6 +730,26 @@ const INTERESTS = [
   "Art & Design", "Fitness", "News", "Animals & Pets", "Family",
 ];
 
+/// A video's category is drawn from the SAME list people pick their interests
+/// from at signup, so "Music" on a video and "Music" in a viewer's profile are
+/// the same token and match directly instead of being inferred from a caption.
+const isValidCategory = c => typeof c === "string" && INTERESTS.includes(c);
+
+/// Up to 3 country NAMES, stored as a JSON array. Empty means everywhere.
+/// Names rather than codes because users.country already holds names from
+/// signup — a code would need a mapping on both sides to compare the two.
+const MAX_TARGET_COUNTRIES = 3;
+function normalizeCountries(raw) {
+  let list = raw;
+  if (typeof raw === "string") {
+    try { list = JSON.parse(raw); } catch { list = raw.split(",").map(s => s.trim()); }
+  }
+  if (!Array.isArray(list)) return null;                 // null = everywhere
+  const clean = [...new Set(list.map(c => String(c || "").trim()).filter(Boolean))]
+    .slice(0, MAX_TARGET_COUNTRIES);
+  return clean.length ? JSON.stringify(clean) : null;
+}
+
 // ---------- feed shaping ----------
 
 const publicUser = u => ({
@@ -771,6 +791,7 @@ const FEED_SQL = `
   SELECT
     v.id, v.caption, v.song, v.r2_key, v.thumb_key, v.width, v.height,
     v.duration, v.views, v.created_at, v.repost_of, v.sound_id, v.visibility,
+    v.category, v.countries,
     u.id AS user_id, u.username, u.display_name, u.avatar_key,
     ru.id AS repost_of_user_id, ru.username AS repost_of_username,
     ru.display_name AS repost_of_display_name, ru.avatar_key AS repost_of_avatar_key,
@@ -830,6 +851,9 @@ const shapeVideo = r => ({
   // Surfaced so the owner sees at a glance which of their videos are not
   // public — a profile grid of identical tiles gave no way to tell.
   visibility: r.visibility || "public",
+  category: r.category || null,
+  // Parsed back to a list for the client; stored as JSON. Empty = everywhere.
+  countries: (() => { try { return r.countries ? JSON.parse(r.countries) : []; } catch { return []; } })(),
   views: r.views,
   createdAt: r.created_at,
   // The person who made this row exist — for a repost, that's whoever
@@ -2286,8 +2310,8 @@ async function handle(request, env, ctx) {
     }
 
     await env.DB.prepare(`
-      INSERT INTO videos (id, user_id, r2_key, thumb_key, caption, song, width, height, duration, visibility, sound_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO videos (id, user_id, r2_key, thumb_key, caption, song, width, height, duration, visibility, sound_id, created_at, category, countries)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id, user.id, key, thumbKey,
       form.get("caption") || "",
@@ -2297,7 +2321,12 @@ async function handle(request, env, ctx) {
       duration,
       visibility,
       soundId,
-      now()
+      now(),
+      // Both optional. A video with no category still ranks — Belo Flow falls
+      // back to topics read from the caption — it just doesn't get the direct
+      // interest match. No countries means shown everywhere.
+      isValidCategory(form.get("category")) ? form.get("category") : null,
+      normalizeCountries(form.get("countries"))
     ).run();
 
     if (useSoundId) {
@@ -2360,6 +2389,51 @@ async function handle(request, env, ctx) {
     // Deliberately the same 404 as a missing video: a distinct "no permission"
     // would confirm to a stranger that the id exists.
     if (!row) return err("Video not found", 404);
+    return json({ video: shapeVideo(row) });
+  }
+
+  // ----- edit your own video: visibility, category, target countries -----
+  //
+  // Deleting was the only thing you could do to a video you'd already posted,
+  // so a clip published to the wrong audience had to be deleted and re-uploaded
+  // — losing its likes, comments and watch history with it.
+  if (videoMatch && method === "PATCH") {
+    requireUser(user);
+    const own = await env.DB.prepare("SELECT user_id FROM videos WHERE id = ?").bind(videoMatch[1]).first();
+    if (!own) return err("Video not found", 404);
+    if (own.user_id !== user.id && !isStaff(user)) return err("That isn't your video", 403);
+
+    const patch = await request.json().catch(() => ({}));
+    const sets = [];
+    const binds = [];
+
+    if (patch.visibility !== undefined) {
+      if (!["public", "followers", "private"].includes(patch.visibility)) {
+        return err("visibility must be public, followers or private");
+      }
+      sets.push("visibility = ?");
+      binds.push(patch.visibility);
+    }
+    if (patch.category !== undefined) {
+      // null clears it; anything else has to be a real category.
+      if (patch.category !== null && !isValidCategory(patch.category)) {
+        return err("That isn't one of the categories");
+      }
+      sets.push("category = ?");
+      binds.push(patch.category);
+    }
+    if (patch.countries !== undefined) {
+      sets.push("countries = ?");
+      binds.push(normalizeCountries(patch.countries));
+    }
+    if (!sets.length) return err("Nothing to change");
+
+    binds.push(videoMatch[1]);
+    await env.DB.prepare(`UPDATE videos SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+
+    const viewerId = user.id;
+    const row = await env.DB.prepare(FEED_SQL + " WHERE v.id = ?")
+      .bind(viewerId, viewerId, videoMatch[1]).first();
     return json({ video: shapeVideo(row) });
   }
 

@@ -281,6 +281,13 @@ export function scoreCandidate(cand, profile, cfg = DEFAULT_CONFIG, nowTs = Date
     }
   }
   topicMatch = clamp01(topicMatch);
+
+  // A STATED category the viewer actually chose at signup is a much stronger
+  // signal than a topic guessed out of a caption, so it counts as a full match
+  // on its own rather than being averaged in with the guesses.
+  const categoryMatch = cand.category && profile?.interests?.has?.(cand.category) ? 1 : 0;
+  if (categoryMatch) topicMatch = clamp01(Math.max(topicMatch, 0.85));
+
   const followBonus = cand.viewerFollowsCreator ? 1 : 0;
   const familiarity = clamp01(cand.viewerCreatorFamiliarity || 0);
   const personalization = clamp01(0.6 * topicMatch + 0.3 * followBonus + 0.1 * familiarity);
@@ -321,6 +328,24 @@ export function scoreCandidate(cand, profile, cfg = DEFAULT_CONFIG, nowTs = Date
     base += cfg.smallCreator.bonus * qualityGate;
   }
 
+  // --- country targeting -----------------------------------------------
+  // A creator who named countries is saying "these people especially", NOT
+  // "nobody else" — so an untargeted viewer is damped, never excluded. Hard
+  // filtering would strand a video on a small platform where most people
+  // haven't set a country at all.
+  const targets = cand.countries || [];
+  let countryFit = 1;
+  if (targets.length) {
+    if (profile?.country && targets.includes(profile.country)) {
+      countryFit = 1.25;   // in a country the creator asked for
+    } else if (profile?.country) {
+      countryFit = 0.55;   // targeted elsewhere — still eligible, just quieter
+    } else {
+      countryFit = 0.85;   // viewer's country unknown; don't punish them for it
+    }
+    base *= countryFit;
+  }
+
   // --- negative signals (viewer-specific): they skipped or hid this before ---
   if (cand.viewerSkips > 0) base *= Math.pow(0.7, Math.min(cand.viewerSkips, 3));
   if (cand.viewerNotInterested) base *= 0.15;
@@ -332,12 +357,14 @@ export function scoreCandidate(cand, profile, cfg = DEFAULT_CONFIG, nowTs = Date
   if (freshness > 0.6) reasons.push("Fresh upload");
   if (coldStart > 0.05) reasons.push("New video getting its first audience");
   if (smallCreator && creatorDiscovery > 0.3) reasons.push("Discovering a small creator");
+  if (categoryMatch) reasons.push(`Because you follow ${cand.category}`);
+  if (countryFit > 1) reasons.push("Popular where you are");
   if (share > 0.3) reasons.push("People are sharing it");
   if (reasons.length === 0) reasons.push("Adding variety to your feed");
 
   const signals = {
     watchQuality, completion, rewatch, share, comment, like, followCreator,
-    personalization, freshness, creatorDiscovery, coldStart,
+    personalization, freshness, creatorDiscovery, coldStart, categoryMatch, countryFit,
     topicMatch, smallCreator: !!smallCreator, unfamiliar,
     effectiveViews: cappedViews, uniqViewers: uniq,
   };
@@ -504,7 +531,10 @@ function candidateSql(cfg) {
   return `
   SELECT
     v.id, v.caption, v.song, v.r2_key, v.thumb_key, v.width, v.height,
-    v.duration, v.views, v.created_at, v.repost_of, v.sound_id,
+    v.duration, v.views, v.created_at, v.repost_of, v.sound_id, v.visibility,
+    -- Stated targeting: the creator's own category and the countries they aimed
+    -- this at. Both beat guessing topics out of a caption when they're present.
+    v.category, v.countries,
     u.id AS user_id, u.username, u.display_name, u.avatar_key, u.interests AS creator_interests,
     ru.id AS repost_of_user_id, ru.username AS repost_of_username,
     ru.display_name AS repost_of_display_name, ru.avatar_key AS repost_of_avatar_key,
@@ -555,7 +585,7 @@ function candidateSql(cfg) {
 // which case the engine leans on freshness + diversity + exploration.
 export async function loadUserProfile(env, viewerId, cfg = DEFAULT_CONFIG, nowTs = Date.now()) {
   const topics = {};
-  if (!viewerId) return { topics };
+  if (!viewerId) return { topics, country: null };
 
   try {
     const { results } = await env.DB.prepare(
@@ -570,17 +600,27 @@ export async function loadUserProfile(env, viewerId, cfg = DEFAULT_CONFIG, nowTs
   } catch (_) { /* table may not exist yet */ }
 
   // Fold in declared interests as a soft prior if behaviour is thin.
+  // Declared interests as a soft prior, plus the viewer's country — the side
+  // that country targeting is matched against. Kept in their ORIGINAL form too
+  // ("Fashion & Beauty"), because a video's category is stored from the very
+  // same list and comparing the raw names is exact where the slugged topic
+  // token is lossy.
+  const interests = new Set();
+  let country = null;
   try {
-    const u = await env.DB.prepare("SELECT interests FROM users WHERE id = ?").bind(viewerId).first();
+    const u = await env.DB.prepare("SELECT interests, country FROM users WHERE id = ?").bind(viewerId).first();
+    country = u?.country || null;
     if (u && u.interests) {
       for (const raw of String(u.interests).split(/[,;]/)) {
-        const t = raw.toLowerCase().trim().replace(/\s+/g, "_");
+        const name = raw.trim();
+        if (name) interests.add(name);
+        const t = name.toLowerCase().replace(/\s+/g, "_");
         if (t) topics[t] = Math.max(topics[t] || 0, 0.4);
       }
     }
   } catch (_) {}
 
-  return { topics };
+  return { topics, interests, country };
 }
 
 // Builds the ordered Belo feed. Returns { rows, reasons, nextOffset, total },
@@ -648,6 +688,9 @@ export async function buildBeloFeed(env, { viewerId = "", limit = 15, cursor, se
       viewerEngagedThis: !!(r.my_liked || r.my_shared || r.my_followed || (r.my_completion || 0) > 0.8 || (r.my_replays || 0) > 0),
       viewerSkips: r.my_skips || 0,
       viewerNotInterested: !!r.my_not_interested,
+      // Stated targeting, straight from the creator.
+      category: r.category || null,
+      countries: safeCountries(r.countries),
     };
 
     const sc = scoreCandidate(cand, profile, cfg, nowTs);
@@ -689,6 +732,19 @@ export async function buildBeloFeed(env, { viewerId = "", limit = 15, cursor, se
 
   const hasMore = offset + limit < ordered.length;
   return { rows, nextOffset: hasMore ? offset + limit : null, total: ordered.length };
+}
+
+/// A video's target countries, stored as a JSON array of names. Anything
+/// unparseable means "everywhere" rather than "nowhere" — a malformed value
+/// must never make a video invisible.
+function safeCountries(raw) {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch (_) {
+    return [];
+  }
 }
 
 function safeInterests(raw) {

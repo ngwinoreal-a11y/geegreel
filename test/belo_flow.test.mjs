@@ -220,3 +220,41 @@ test("Explainability: every recommendation carries a human-readable reason", () 
   assert.ok(sc.reasons.length > 0);
   assert.ok(sc.reasons.some((r) => typeof r === "string" && r.length > 0));
 });
+
+// ---------------------------------------------------------------------------
+// Stated targeting: a creator's chosen category and countries.
+// ---------------------------------------------------------------------------
+
+test("Category: a stated category the viewer chose beats guessed topics", () => {
+  // Same video twice; only the viewer's declared interests differ.
+  const cand = { category: "Dance", topics: [], uniqViewers: 5, avgCompletion: 0.5, avgWatchMs: 8000 };
+  const matched = scoreCandidate(cand, { topics: {}, interests: new Set(["Dance"]) });
+  const unmatched = scoreCandidate(cand, { topics: {}, interests: new Set(["Gaming"]) });
+
+  assert.ok(matched.base > unmatched.base,
+    "a category the viewer picked at signup must rank above one they didn't");
+  assert.ok(matched.signals.categoryMatch === 1);
+  assert.ok(matched.reasons.some((r) => r.includes("Dance")),
+    "and it must be able to say so");
+});
+
+test("Country targeting damps but never excludes an untargeted viewer", () => {
+  const cand = { countries: ["Rwanda"], topics: [], uniqViewers: 5, avgCompletion: 0.5, avgWatchMs: 8000 };
+  const inside = scoreCandidate(cand, { topics: {}, country: "Rwanda" });
+  const outside = scoreCandidate(cand, { topics: {}, country: "Kenya" });
+  const unknown = scoreCandidate(cand, { topics: {}, country: null });
+
+  assert.ok(inside.base > outside.base, "the targeted country should rank highest");
+  // The important half: naming countries means "these especially", not
+  // "nobody else". A hard filter would strand videos on a small platform.
+  assert.ok(outside.base > 0, "an untargeted viewer stays eligible");
+  assert.ok(unknown.base > outside.base,
+    "a viewer with no country set must not be punished for it");
+});
+
+test("Untargeted videos are unaffected by country logic", () => {
+  const cand = { topics: [], uniqViewers: 5, avgCompletion: 0.5, avgWatchMs: 8000 };
+  const a = scoreCandidate({ ...cand, countries: [] }, { topics: {}, country: "Rwanda" });
+  const b = scoreCandidate({ ...cand, countries: [] }, { topics: {}, country: "Kenya" });
+  assert.equal(a.base, b.base, "a video with no target list ranks the same everywhere");
+});
