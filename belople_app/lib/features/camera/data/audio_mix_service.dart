@@ -26,9 +26,16 @@ class AudioMixService {
 
       final String filter;
       if (hasMic) {
+        // normalize=0 is the whole point: amix normalizes by DEFAULT, dividing
+        // every input by the number of inputs and re-weighting as tracks come
+        // and go. That threw away the two levels the poster had just set — the
+        // mic ended up buried under a mastered-loud library track no matter
+        // where the sliders were, which is exactly the "the original can't be
+        // heard" complaint. With normalize off, volume= is taken literally.
         filter =
             '[0:a]volume=$micVolume[a0];[1:a]volume=$soundVolume,apad,asetpts=PTS-STARTPTS[a1];'
-            '[a0][a1]amix=inputs=2:duration=first:dropout_transition=0,aresample=44100[aout]';
+            '[a0][a1]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,'
+            'aresample=44100[aout]';
       } else {
         // No mic track — the chosen sound simply becomes the audio.
         filter = '[1:a]volume=$soundVolume,aresample=44100[aout]';
@@ -56,6 +63,12 @@ class AudioMixService {
       return videoPath;
     }
   }
+
+  /// Does this file carry an audio track at all? The composer asks before
+  /// showing a "Your audio" slider — a clip recorded with no sound has nothing
+  /// for that slider to raise, and a control that can't do anything is worse
+  /// than no control.
+  static Future<bool> hasAudio(String path) => _hasAudio(path);
 
   static Future<bool> _hasAudio(String path) async {
     try {

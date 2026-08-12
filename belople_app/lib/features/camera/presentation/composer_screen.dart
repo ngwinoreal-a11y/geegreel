@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -77,9 +78,26 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   bool _soundShareable = true;
   SoundModel? _pickedSound;
   // Mix levels for "use sound": the chosen sound vs the video's own (mic)
-  // audio. Set mic to 0 for a pure lip-sync/soundtrack.
+  // audio. Set mic to 0 for a pure lip-sync/soundtrack. The range goes to 200%
+  // deliberately: a phone's mic records quiet and library sounds are mastered
+  // loud, so with a 100% ceiling there was NO position of either slider that
+  // let the video's own audio be heard over the sound.
   double _soundVolume = 1.0;
   double _micVolume = 1.0;
+  // Whether the clip has any audio of its own. Null until probed. False means
+  // the "Your audio" slider is hidden — there is nothing for it to raise.
+  bool? _clipHasAudio;
+
+  /// video_player and just_audio both cap at 1.0, so a 160% mic can't be
+  /// previewed literally. Preview the RATIO instead — scale both down by the
+  /// louder one — which is what the ear judges, and is the same balance
+  /// FFmpeg writes on publish now that amix no longer normalizes.
+  void _applyPreviewVolumes() {
+    final peak = _micVolume > _soundVolume ? _micVolume : _soundVolume;
+    final scale = peak > 1.0 ? 1.0 / peak : 1.0;
+    _previewController?.setVolume((_micVolume * scale).clamp(0.0, 1.0));
+    _soundPreview?.setVolume((_soundVolume * scale).clamp(0.0, 1.0));
+  }
   // Video is a 3-step wizard: 1 pick/record → 2 edit (sound/volume/caption) →
   // 3 audience + Publish. Photo/Text stay single-step.
   int _videoStep = 1;
@@ -191,9 +209,15 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
     setState(() {
       _videoFile = file;
       _previewController = controller;
+      _clipHasAudio = null; // re-probe: this is a different clip
       _videoStep = 2; // a clip is in hand — move to the edit step
     });
     _setupSoundPreview();
+    // Probe in the background — the step-2 controls appear immediately and the
+    // mic slider settles in once we know whether there's anything to mix.
+    unawaited(AudioMixService.hasAudio(file.path).then((has) {
+      if (mounted) setState(() => _clipHasAudio = has);
+    }));
   }
 
   /// Loads and loops the attached sound so step 2 previews the actual mix. No-op
@@ -218,7 +242,7 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
       final player = _soundPreview ??= AudioPlayer();
       await player.setLoopMode(LoopMode.one);
       await player.setUrl(mediaUrl(audioUrl));
-      await player.setVolume(_soundVolume);
+      _applyPreviewVolumes();
       _soundPreviewId = soundId;
       if (mounted && _videoStep == 2) player.play();
     } catch (_) {/* preview is best-effort; publish still mixes for real */}
@@ -544,21 +568,37 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
                   value: _soundVolume,
                   onChanged: (v) => setState(() {
                     _soundVolume = v;
-                    _soundPreview?.setVolume(v); // hear the change live
+                    _applyPreviewVolumes(); // hear the change live
                   }),
                 ),
-                _VolumeSlider(
-                  icon: Icons.mic,
-                  label: 'Your audio',
-                  value: _micVolume,
-                  onChanged: (v) => setState(() {
-                    _micVolume = v;
-                    _previewController?.setVolume(v); // hear the change live
-                  }),
-                ),
+                // Hidden once we know the clip is silent: there is no "your
+                // audio" to raise, and leaving the slider there is what made
+                // it look like the control was broken.
+                if (_clipHasAudio != false)
+                  _VolumeSlider(
+                    icon: Icons.mic,
+                    label: 'Your audio',
+                    value: _micVolume,
+                    onChanged: (v) => setState(() {
+                      _micVolume = v;
+                      _applyPreviewVolumes(); // hear the change live
+                    }),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(children: [
+                      const Icon(Icons.mic_off, size: 18, color: AppColors.muted),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text('This clip was recorded without sound',
+                            style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+                      ),
+                    ]),
+                  ),
               ],
-              const SizedBox(height: 12),
-              _captionField(),
+              // The caption lives on the publish step, beside the clip it
+              // belongs to. A second one here asked the same question twice.
               ], // end step 2
               // Step 3: who can see this video.
               if (_videoStep == 3) ...[
@@ -840,7 +880,9 @@ class _PickerBox extends StatelessWidget {
   }
 }
 
-/// One 0–100% mix level (the sound, or the video's own audio).
+/// One 0–200% mix level (the sound, or the video's own audio). 100% is the
+/// track as recorded; above that it is boosted, which is the only way a quiet
+/// phone-mic recording can hold its own against a mastered library sound.
 class _VolumeSlider extends StatelessWidget {
   const _VolumeSlider({required this.icon, required this.label, required this.value, required this.onChanged});
   final IconData icon;
@@ -861,12 +903,14 @@ class _VolumeSlider extends StatelessWidget {
         Expanded(
           child: Slider(
             value: value,
+            max: 2.0,
+            divisions: 40, // 5% steps — fine enough to tune, coarse enough to hit
             onChanged: onChanged,
             activeColor: AppColors.accent,
           ),
         ),
         SizedBox(
-          width: 40,
+          width: 46,
           child: Text('${(value * 100).round()}%',
               textAlign: TextAlign.right,
               style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
