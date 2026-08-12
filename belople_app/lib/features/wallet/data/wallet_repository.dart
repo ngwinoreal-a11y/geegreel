@@ -60,11 +60,18 @@ class CoinPack {
   final int cents;
 }
 
+/// Must stay in step with COIN_PACKS in src/index.js — /api/coins/buy rejects
+/// any amount that isn't a known pack, so a pack listed here and not there is
+/// a button that always fails. 1 coin = 1 cent, so cents == coins throughout.
 const List<CoinPack> kCoinPacks = [
-  CoinPack(100, 100),
-  CoinPack(500, 500),
-  CoinPack(1000, 1000),
-  CoinPack(5000, 5000),
+  CoinPack(100, 100),       // $1
+  CoinPack(500, 500),       // $5
+  CoinPack(1000, 1000),     // $10
+  CoinPack(2500, 2500),     // $25
+  CoinPack(5000, 5000),     // $50
+  CoinPack(10000, 10000),   // $100
+  CoinPack(20000, 20000),   // $200
+  CoinPack(50000, 50000),   // $500
 ];
 
 /// `GET /api/wallet`, `GET /api/wallet/history`, `POST /api/coins/buy` — see
