@@ -440,19 +440,43 @@ Future<String?> _askReportReason(BuildContext context) {
       backgroundColor: AppColors.sheetBg,
       title: Text("What's wrong with this video?",
           style: AppTypography.sans(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.sheetInk)),
+      // This dialog is WHITE (sheetBg), but the field inherited the app's dark
+      // InputDecoration theme — a dark box with near-black ink in it, so
+      // whatever the reporter typed was invisible, and the two actions were
+      // white-on-white. Every colour here is stated rather than inherited.
       content: TextField(
         controller: controller,
         autofocus: true,
         maxLines: 3,
         maxLength: 300,
-        style: AppTypography.sans(fontSize: 14, color: AppColors.sheetInk),
-        decoration: const InputDecoration(hintText: 'Tell us what happened'),
+        cursorColor: AppColors.sheetInk,
+        style: AppTypography.sans(fontSize: 16, color: AppColors.sheetInk),
+        decoration: InputDecoration(
+          hintText: 'Tell us what happened',
+          hintStyle: AppTypography.sans(fontSize: 16, color: AppColors.sheetMuted),
+          filled: true,
+          fillColor: AppColors.sheetFill,
+          counterStyle: AppTypography.sans(fontSize: 11, color: AppColors.sheetMuted),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: AppColors.sheetLine),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: AppColors.sheetInk),
+          ),
+        ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: Text('Cancel', style: AppTypography.sans(fontSize: 15, color: AppColors.sheetMuted)),
+        ),
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(controller.text),
-          child: const Text('Send report'),
+          child: Text('Send report',
+              style: AppTypography.sans(
+                  fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.danger)),
         ),
       ],
     ),

@@ -256,10 +256,11 @@ class _FriendRow extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
               decoration: BoxDecoration(
-                // Already-following reads as brand amber instead of another
-                // grey pill — it's the state worth seeing at a glance down a
-                // long list, and grey-on-dark said nothing.
-                color: user.following ? AppColors.accentSoft : AppColors.text,
+                // Amber is for the ACTION (Follow). Already-following is a
+                // state you've reached, so it steps back — the same rule the
+                // profile header follows, and it stops a list of people you
+                // already follow from being a wall of amber.
+                color: user.following ? AppColors.surface : AppColors.text,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
@@ -267,7 +268,7 @@ class _FriendRow extends StatelessWidget {
                 style: AppTypography.sans(
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
-                  color: user.following ? AppColors.accent : AppColors.bg,
+                  color: user.following ? AppColors.muted : AppColors.bg,
                 ),
               ),
             ),

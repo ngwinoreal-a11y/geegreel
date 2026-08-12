@@ -4404,12 +4404,42 @@ async function handle(request, env, ctx) {
             if (v.thumb_key) await env.MEDIA.delete(v.thumb_key).catch(() => {});
           }
         }
+        // The sound this video created, if it created one. Uploads default to
+        // soundShareable, so nearly every video is the source of a `sounds`
+        // row pointing back at it — leaving that row behind is what made
+        // "Remove video" fail on essentially every report. Unlike the owner's
+        // own delete, a moderator is not blocked when other people are using
+        // the sound: the video is coming down either way. The sound is only
+        // dropped when nothing else references it.
+        let orphanedSoundId = null;
+        if (v.sound_id) {
+          const sound = await env.DB.prepare("SELECT source_video_id FROM sounds WHERE id = ?")
+            .bind(v.sound_id).first();
+          if (sound && sound.source_video_id === v.id) {
+            const stillUsed = await env.DB.prepare(
+              "SELECT COUNT(*) AS n FROM videos WHERE sound_id = ? AND id != ?"
+            ).bind(v.sound_id, v.id).first();
+            if (stillUsed.n === 0) orphanedSoundId = v.sound_id;
+          }
+        }
+
         await env.DB.batch([
           env.DB.prepare("DELETE FROM likes WHERE video_id = ?").bind(v.id),
           env.DB.prepare("DELETE FROM comments WHERE video_id = ?").bind(v.id),
           env.DB.prepare("DELETE FROM shares WHERE video_id = ?").bind(v.id),
+          env.DB.prepare("DELETE FROM gifts WHERE video_id = ?").bind(v.id),
+          // Watch history and notifications about a video that no longer
+          // exists would otherwise linger as rows pointing at nothing.
+          env.DB.prepare("DELETE FROM video_exposures WHERE video_id = ?").bind(v.id),
+          env.DB.prepare("DELETE FROM notifications WHERE video_id = ?").bind(v.id),
+          // Detach any video still using the sound before the sound goes.
+          env.DB.prepare("UPDATE videos SET sound_id = NULL WHERE sound_id = ? AND id != ?")
+            .bind(v.sound_id || "", v.id),
           env.DB.prepare("DELETE FROM videos WHERE repost_of = ?").bind(v.id),
           env.DB.prepare("DELETE FROM videos WHERE id = ?").bind(v.id),
+          ...(orphanedSoundId
+            ? [env.DB.prepare("DELETE FROM sounds WHERE id = ?").bind(orphanedSoundId)]
+            : []),
         ]);
       }
     }
