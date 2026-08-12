@@ -258,6 +258,26 @@ class _VideoCell extends StatelessWidget {
                 // (mirrors the web grid's `<video #t=0.1>` fallback).
                 : _FirstFrameThumb(videoUrl: mediaUrl(video.videoUrl)),
           ),
+          // Who can see this. Without it the owner had no way to tell which of
+          // their own videos aren't public — the grid looked identical whether
+          // a clip was visible to everyone or to nobody but them.
+          if (video.visibility != 'public')
+            Positioned(
+              right: 5,
+              top: 5,
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Icon(
+                  video.visibility == 'private' ? Icons.lock_rounded : Icons.group_rounded,
+                  color: Colors.white,
+                  size: 14,
+                ),
+              ),
+            ),
           Positioned(
             left: 6,
             bottom: 6,

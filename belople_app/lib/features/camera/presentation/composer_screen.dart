@@ -19,6 +19,8 @@ import '../../profile/data/profile_repository.dart';
 import '../../public_feed/application/public_feed_controller.dart';
 import '../../sounds/data/sound_repository.dart';
 import '../../sounds/presentation/sound_picker_sheet.dart';
+import '../../../core/widgets/country_picker.dart';
+import '../../auth/data/signup_options.dart';
 import '../data/audio_mix_service.dart';
 import '../data/upload_repository.dart';
 import 'posted_sheet.dart';
@@ -83,6 +85,20 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   int _videoStep = 1;
   // 'public' = everyone · 'followers' = people who follow you · 'private'.
   String _visibility = 'public';
+
+  /// Optional targeting the recommender matches against a viewer's signup
+  /// choices. Category is one of kInterests — the SAME list people pick their
+  /// interests from — so the two sides compare exactly rather than by guess.
+  /// One country: it gets shown there most, elsewhere less, never nowhere.
+  String? _category;
+  String? _country;
+
+  Future<void> _pickCountry() async {
+    final picked = await showCountryPicker(context, current: _country);
+    // null = dismissed, leave the existing choice; the sentinel = "everywhere".
+    if (picked == null || !mounted) return;
+    setState(() => _country = picked == kEverywhere ? null : picked);
+  }
   double _progress = 0;
   String? _error;
 
@@ -279,6 +295,8 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
           file: fileToUpload,
           caption: _captionController.text.trim(),
           visibility: _visibility,
+          category: _category,
+          country: _country,
           soundId: _effectiveSoundId,
           soundShareable: _soundShareable,
           thumbnail: thumb,
@@ -570,6 +588,75 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
                   group: _visibility,
                   onTap: () => setState(() => _visibility = 'private'),
                 ),
+
+                const SizedBox(height: 22),
+                // Category and country are what the recommender matches a
+                // viewer's own signup choices against. Both are optional — a
+                // video with neither still ranks, Belo Flow just falls back to
+                // reading topics out of the caption, which guesses.
+                Text('CATEGORY', style: AppTypography.sectionLabel),
+                const SizedBox(height: 6),
+                Text('Belople shows this to people who chose the same interest',
+                    style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final c in kInterests)
+                      _ChoiceChip(
+                        label: c,
+                        selected: _category == c,
+                        // Tapping the chosen one clears it.
+                        onTap: () => setState(() => _category = _category == c ? null : c),
+                      ),
+                  ],
+                ),
+
+                const SizedBox(height: 22),
+                Text('COUNTRY', style: AppTypography.sectionLabel),
+                const SizedBox(height: 6),
+                Text(
+                  _country == null
+                      ? 'Everywhere — anyone can be shown this'
+                      : 'Shown most in $_country, less elsewhere',
+                  style: AppTypography.sans(fontSize: 13, color: AppColors.muted),
+                ),
+                const SizedBox(height: 10),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _pickCountry,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(AppRadii.md),
+                      border: Border.all(
+                          color: _country == null ? AppColors.border : AppColors.accent),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.public, size: 20, color: AppColors.muted),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(_country ?? 'Everywhere',
+                              style: AppTypography.sans(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: _country == null ? AppColors.muted : AppColors.text)),
+                        ),
+                        if (_country != null)
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => setState(() => _country = null),
+                            child: const Icon(Icons.close, size: 20, color: AppColors.muted),
+                          )
+                        else
+                          const Icon(Icons.chevron_right, color: AppColors.muted),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ] else if (_mode == _ComposerMode.photo) ...[
               if (_imageFile != null)
@@ -757,6 +844,39 @@ class _VolumeSlider extends StatelessWidget {
               style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
         ),
       ],
+    );
+  }
+}
+
+/// A selectable pill for the category list. Brand amber when chosen, so the one
+/// picked out of seventeen is obvious at a glance.
+class _ChoiceChip extends StatelessWidget {
+  const _ChoiceChip({required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.accentSoft : AppColors.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: selected ? AppColors.accent : AppColors.border),
+        ),
+        child: Text(
+          label,
+          style: AppTypography.sans(
+            fontSize: 15,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: selected ? AppColors.accent : AppColors.text,
+          ),
+        ),
+      ),
     );
   }
 }

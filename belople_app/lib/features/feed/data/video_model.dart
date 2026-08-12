@@ -65,6 +65,7 @@ class VideoModel {
     required this.caption,
     this.song,
     this.soundId,
+    this.visibility = 'public',
     required this.videoUrl,
     this.thumbUrl,
     this.width,
@@ -94,6 +95,10 @@ class VideoModel {
   final String caption;
   final String? song;
   final String? soundId;
+
+  /// 'public' | 'followers' | 'private'. Shown as a badge on the owner's own
+  /// grid so they can tell which of their videos aren't public.
+  final String visibility;
   final String videoUrl;
   final String? thumbUrl;
   final int? width;
@@ -149,6 +154,7 @@ class VideoModel {
       caption: caption,
       song: song,
       soundId: soundId,
+      visibility: visibility,
       videoUrl: videoUrl,
       thumbUrl: thumbUrl,
       width: width,
@@ -215,6 +221,7 @@ class VideoModel {
       caption: json['caption'] as String? ?? '',
       song: json['song'] as String?,
       soundId: json['soundId']?.toString(),
+      visibility: json['visibility'] as String? ?? 'public',
       videoUrl: json['videoUrl'] as String? ?? '',
       thumbUrl: json['thumbUrl'] as String?,
       width: (json['width'] as num?)?.toInt(),

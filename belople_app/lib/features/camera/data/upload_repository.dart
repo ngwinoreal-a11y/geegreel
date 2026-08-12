@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,6 +23,12 @@ class UploadRepository {
     required File file,
     required String caption,
     String visibility = 'public',
+    /// One of kInterests, or null. Matched against the viewer's own signup
+    /// interests by Belo Flow.
+    String? category,
+    /// A single country name, or null for everywhere. Sent as a JSON array
+    /// because that's the column's shape — it can hold more later.
+    String? country,
     String? soundId,
     bool soundShareable = false,
     File? thumbnail,
@@ -36,6 +43,8 @@ class UploadRepository {
     final formData = FormData.fromMap({
       'caption': caption,
       'visibility': visibility,
+      if (category != null) 'category': category,
+      if (country != null) 'countries': jsonEncode([country]),
       // A video either uses an existing sound OR opts in to become a new
       // shareable sound — never both (mirrors the /api/videos handler).
       if (soundId != null) 'soundId': soundId,

@@ -735,10 +735,11 @@ const INTERESTS = [
 /// the same token and match directly instead of being inferred from a caption.
 const isValidCategory = c => typeof c === "string" && INTERESTS.includes(c);
 
-/// Up to 3 country NAMES, stored as a JSON array. Empty means everywhere.
+/// ONE country name, stored as a JSON array (the array shape is kept so the
+/// column can hold more later without a migration). Empty means everywhere.
 /// Names rather than codes because users.country already holds names from
 /// signup — a code would need a mapping on both sides to compare the two.
-const MAX_TARGET_COUNTRIES = 3;
+const MAX_TARGET_COUNTRIES = 1;
 function normalizeCountries(raw) {
   let list = raw;
   if (typeof raw === "string") {
