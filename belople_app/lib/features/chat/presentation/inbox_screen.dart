@@ -52,11 +52,35 @@ final inboxProvider =
 /// online-dot presence. Like the web (`.page.msgs-page { background:#fff }`)
 /// the inbox is a deliberate white break from the app's dark theme, headed by
 /// a big "Inbox" title (h2: 28px/800) instead of the brand wordmark.
-class InboxScreen extends ConsumerWidget {
+class InboxScreen extends ConsumerStatefulWidget {
   const InboxScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<InboxScreen> createState() => _InboxScreenState();
+}
+
+class _InboxScreenState extends ConsumerState<InboxScreen> {
+  final _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  /// Name, @username and the last message all match — looking for a
+  /// conversation, you remember whichever of the three stuck.
+  bool _matches(ThreadPreview t) {
+    if (_query.isEmpty) return true;
+    final q = _query.toLowerCase();
+    return t.user.displayName.toLowerCase().contains(q) ||
+        t.user.username.toLowerCase().contains(q) ||
+        (t.lastMessage ?? '').toLowerCase().contains(q);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final inboxAsync = ref.watch(inboxProvider);
 
     final pendingCount = inboxAsync.valueOrNull?.where((t) => t.isPendingRequestToMe).length ?? 0;
@@ -81,6 +105,48 @@ class InboxScreen extends ConsumerWidget {
             onPressed: () => context.push('/message-requests'),
           ),
         ],
+        // Search sits in the app bar, above the list, so it's there the moment
+        // Inbox opens instead of only after scrolling to the top.
+        //
+        // Every colour here is spelled out. This is a WHITE screen inside an
+        // otherwise dark app, so an input that inherits the app's theme comes
+        // out dark-on-light-grey with an invisible cursor — the same mistake
+        // that has hidden text three times before.
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(56),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (v) => setState(() => _query = v.trim()),
+              textInputAction: TextInputAction.search,
+              style: AppTypography.sans(fontSize: 15, color: AppColors.onChrome),
+              cursorColor: AppColors.onChrome,
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: AppColors.sheetFill,
+                hintText: 'Search messages',
+                hintStyle: AppTypography.sans(fontSize: 15, color: AppColors.onSheetMuted),
+                prefixIcon: const Icon(Icons.search, size: 20, color: AppColors.onSheetMuted),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close, size: 18, color: AppColors.onSheetMuted),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() => _query = '');
+                        },
+                      ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 11),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
       body: Stack(
         children: [
@@ -102,10 +168,22 @@ class InboxScreen extends ConsumerWidget {
                 child: Text("Couldn't load messages", style: AppTypography.sans(color: AppColors.onChromeMuted)),
               ),
               data: (allThreads) {
-                final threads = allThreads.where((t) => !t.isPendingRequestToMe).toList();
+                final threads = allThreads
+                    .where((t) => !t.isPendingRequestToMe)
+                    .where(_matches)
+                    .toList();
+                if (_query.isNotEmpty && threads.isEmpty) {
+                  return Center(
+                    child: Text('No conversations match "$_query"',
+                        style: AppTypography.sans(color: AppColors.onChromeMuted)),
+                  );
+                }
                 // Index 0 is always the activity row — it isn't a conversation
                 // and must not be sorted among them or disappear when there
-                // are no messages yet.
+                // are no messages yet. While searching it's hidden: it isn't a
+                // result, and leaving it pinned above an empty list reads as a
+                // match that isn't one.
+                final showActivity = _query.isEmpty;
                 return BrandRefresh(
                   onRefresh: () async {
                     ref.invalidate(inboxProvider);
@@ -115,10 +193,13 @@ class InboxScreen extends ConsumerWidget {
                   child: ListView.builder(
                     padding: const EdgeInsets.only(bottom: 96),
                     physics: const AlwaysScrollableScrollPhysics(),
-                    itemCount: threads.length + 1,
+                    itemCount: threads.length + (showActivity ? 1 : 0),
                     itemBuilder: (context, i) {
-                      if (i == 0) return const ActivityRow();
-                      return _ThreadRow(thread: threads[i - 1]);
+                      if (showActivity) {
+                        if (i == 0) return const ActivityRow();
+                        return _ThreadRow(thread: threads[i - 1]);
+                      }
+                      return _ThreadRow(thread: threads[i]);
                     },
                   ),
                 );
