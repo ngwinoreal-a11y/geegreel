@@ -2008,7 +2008,7 @@ async function handle(request, env, ctx) {
     const { results } = await env.DB.prepare(
       "SELECT * FROM ads ORDER BY created_at DESC"
     ).all();
-    return json({ ads: results.map(a => ({ ...shapeAd(a), status: a.status, impressions: a.impressions, clicks: a.clicks, createdAt: a.created_at })) });
+    return json({ ads: results.map(a => ({ ...shapeAd(a), status: a.status, impressions: a.impressions, clicks: a.clicks, createdAt: a.created_at, countries: (() => { try { return a.countries ? JSON.parse(a.countries) : []; } catch { return []; } })() })) });
   }
 
   if (path === "/api/admin/ads" && method === "POST") {

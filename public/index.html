@@ -5617,6 +5617,17 @@ function adminPage() {
           <div class="field"><input id="adCaption" placeholder="Caption (optional)"></div>
           <div class="field"><input id="adCta" placeholder="Button text" value="Learn more"></div>
           <div class="field"><input id="adLink" placeholder="https://..."></div>
+          <!-- Where the ad runs. Self-serve ads could already be aimed at a
+               country; house ads had no way to say it, so every one of them ran
+               everywhere whether that was wanted or not. Blank = everywhere.
+               A datalist rather than a <select>: the country list is long, and
+               typing beats scrolling it. -->
+          <div class="field">
+            <input id="adCountry" list="adCountryList" placeholder="Country (blank = everywhere)" autocomplete="off">
+            <datalist id="adCountryList">
+              ${COUNTRIES.map(c => `<option value="${esc(c)}"></option>`).join("")}
+            </datalist>
+          </div>
           <div class="field"><input id="adFile" type="file" accept="image/*,video/*"></div>
           <button class="btn-primary" id="adSubmit" style="margin-bottom:22px">Publish ad</button>
           <p class="sect">Running</p>
@@ -5639,7 +5650,7 @@ function adminPage() {
                     background:${a.status === "active" ? "#4ADE80" : "var(--raised)"};color:${a.status === "active" ? "#000" : "var(--muted)"}">${a.status}</span>
                 </p>
                 <p style="margin:3px 0 0;font-size:12px;color:var(--muted)">"${esc(a.ctaText)}" → ${esc(a.linkUrl)}</p>
-                <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">${fmt(a.impressions)} views · ${fmt(a.clicks)} clicks</p>
+                <p style="margin:6px 0 0;font-size:11px;color:var(--muted)">${fmt(a.impressions)} views · ${fmt(a.clicks)} clicks · ${a.countries && a.countries.length ? esc(a.countries[0]) : "everywhere"}</p>
                 <div style="display:flex;gap:6px;margin-top:8px">
                   <button data-toggle="${a.id}" data-next="${a.status === "active" ? "paused" : "active"}"
                     style="flex:1;border:1px solid var(--border);border-radius:6px;padding:6px 0;font-size:11px;font-weight:600;color:var(--muted)">
@@ -5680,6 +5691,11 @@ function adminPage() {
           fd.append("caption", body.querySelector("#adCaption").value.trim());
           fd.append("ctaText", body.querySelector("#adCta").value.trim() || "Learn more");
           fd.append("linkUrl", linkUrl);
+          // Sent as a JSON array — the column's shape, so it can hold more than
+          // one later without a migration. Omitted entirely when blank, which
+          // the server reads as "everywhere".
+          const adCountry = body.querySelector("#adCountry").value.trim();
+          if (adCountry) fd.append("countries", JSON.stringify([adCountry]));
 
           ev.currentTarget.disabled = true;
           try {
