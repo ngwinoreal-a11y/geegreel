@@ -244,25 +244,30 @@ class _FriendRow extends StatelessWidget {
         imageUrl: user.avatarUrl != null ? mediaUrl(user.avatarUrl!) : null,
         displayName: user.displayName,
       ),
-      title: Text(user.displayName, style: AppTypography.sans(fontWeight: FontWeight.w600)),
-      subtitle: Text(subtitle ?? '@${user.username}', style: AppTypography.sans(color: AppColors.muted, fontSize: 12)),
+      title: Text(user.displayName,
+          style: AppTypography.sans(fontSize: 17, fontWeight: FontWeight.w700)),
+      subtitle: Text(subtitle ?? '@${user.username}',
+          style: AppTypography.sans(color: AppColors.muted, fontSize: 14)),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           GestureDetector(
             onTap: onFollowTap,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
               decoration: BoxDecoration(
-                color: user.following ? AppColors.surface : AppColors.text,
-                borderRadius: BorderRadius.circular(16),
+                // Already-following reads as brand amber instead of another
+                // grey pill — it's the state worth seeing at a glance down a
+                // long list, and grey-on-dark said nothing.
+                color: user.following ? AppColors.accentSoft : AppColors.text,
+                borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
                 user.following ? 'Following' : followLabel,
                 style: AppTypography.sans(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: user.following ? AppColors.text : AppColors.bg,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: user.following ? AppColors.accent : AppColors.bg,
                 ),
               ),
             ),

@@ -44,7 +44,10 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
   final _picker = ImagePicker();
 
   // Max-record options shown as pills in Short mode.
-  static const _durations = [15, 60, 180];
+  // 3 minutes was dropped: at phone bitrates that's a very large upload for
+  // both the poster's data and everyone who watches it. 2 minutes is the
+  // ceiling that still covers a long take.
+  static const _durations = [15, 60, 120];
   String _durationLabel(int s) => s < 60 ? '${s}s' : '${s ~/ 60}m';
 
   @override
@@ -301,9 +304,17 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
                                         onTap: () => setState(() => _maxSeconds = s),
                                         child: Text(_durationLabel(s),
                                             style: AppTypography.sans(
-                                              fontSize: _maxSeconds == s ? 15 : 13,
-                                              fontWeight: _maxSeconds == s ? FontWeight.w700 : FontWeight.w500,
-                                              color: _maxSeconds == s ? Colors.white : Colors.white60,
+                                              // Read at arm's length while
+                                              // framing a shot — the old
+                                              // 13/15px was hard to pick out
+                                              // against a bright viewfinder.
+                                              fontSize: _maxSeconds == s ? 20 : 17,
+                                              fontWeight: _maxSeconds == s ? FontWeight.w800 : FontWeight.w600,
+                                              color: _maxSeconds == s ? AppColors.accent : Colors.white70,
+                                            ).copyWith(
+                                              // Readable over a bright
+                                              // viewfinder, not just a dark one.
+                                              shadows: const [Shadow(color: Colors.black87, blurRadius: 6)],
                                             )),
                                       ),
                                     ),

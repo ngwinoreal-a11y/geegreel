@@ -766,7 +766,7 @@ class _TextWithMeta extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(_shortTime(message.createdAt),
-                  style: AppTypography.sans(fontSize: 11, color: metaColor)),
+                  style: AppTypography.sans(fontSize: 12, color: metaColor)),
               // Words, not ticks. One tick versus two is a convention people
               // have to already know; "Sent"/"Seen" says the same thing to
               // anyone reading it.
@@ -823,7 +823,9 @@ final _urlRegex = RegExp(r'(https?:\/\/[^\s]+)');
 /// Renders body text with any URLs as tappable links.
 Widget _linkedText(String body, Color color) {
   if (!_urlRegex.hasMatch(body)) {
-    return Text(body, style: AppTypography.sans(fontSize: 14, color: color));
+    // The message itself: 14px was noticeably smaller than any other
+    // messenger's body text.
+    return Text(body, style: AppTypography.sans(fontSize: 16, color: color));
   }
   final spans = <InlineSpan>[];
   var index = 0;
@@ -1297,15 +1299,17 @@ class _Composer extends StatelessWidget {
                     ),
                   ),
                 const SizedBox(width: 8),
-                // Tap-to-record (matches the web app's chat mic): tap the mic
-                // to start, tap the green send to stop and send. No holding.
+                // Tap-to-record: tap the mic to start, tap send to stop and
+                // send. No holding. Brand amber, not the generic presence
+                // green this used to borrow — the composer button is Belople
+                // chrome, not an online indicator.
                 if (recording)
                   GestureDetector(
                     onTap: onRecordEnd,
                     child: Container(
                       width: 48, height: 48,
-                      decoration: const BoxDecoration(color: AppColors.online, shape: BoxShape.circle),
-                      child: const Icon(Icons.send_rounded, color: Colors.white, size: 22),
+                      decoration: const BoxDecoration(color: AppColors.accent, shape: BoxShape.circle),
+                      child: const Icon(Icons.send_rounded, color: AppColors.onAccent, size: 22),
                     ),
                   )
                 else if (hasText)
@@ -1313,8 +1317,8 @@ class _Composer extends StatelessWidget {
                     onTap: onSend,
                     child: Container(
                       width: 48, height: 48,
-                      decoration: const BoxDecoration(color: AppColors.online, shape: BoxShape.circle),
-                      child: const Icon(Icons.send_rounded, color: Colors.white, size: 22),
+                      decoration: const BoxDecoration(color: AppColors.accent, shape: BoxShape.circle),
+                      child: const Icon(Icons.send_rounded, color: AppColors.onAccent, size: 22),
                     ),
                   )
                 else
@@ -1322,8 +1326,8 @@ class _Composer extends StatelessWidget {
                     onTap: onRecordStart,
                     child: Container(
                       width: 48, height: 48,
-                      decoration: const BoxDecoration(color: AppColors.online, shape: BoxShape.circle),
-                      child: const Icon(Icons.mic, color: Colors.white, size: 22),
+                      decoration: const BoxDecoration(color: AppColors.accent, shape: BoxShape.circle),
+                      child: const Icon(Icons.mic, color: AppColors.onAccent, size: 22),
                     ),
                   ),
               ],

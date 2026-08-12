@@ -9,17 +9,23 @@ import 'package:flutter/material.dart';
 /// from here, exactly like the web app reads from its `:root` tokens.
 abstract final class AppColors {
   // --- Surfaces (design.css) ---
-  /// --bg: app background
-  static const bg = Color(0xFF000000);
+  /// --bg: app background.
+  ///
+  /// Lifted off pure black. #000 on an OLED phone reads as a hole rather than
+  /// a surface — text sits on nothing, cards have no edge to sit against, and
+  /// the whole app looks harsher than it is. A few points of lift keeps the
+  /// dark feel while giving every layer above it something to sit on. Video
+  /// still plays on true black; this is chrome only.
+  static const bg = Color(0xFF0C0C0F);
 
   /// --surface: cards, inputs, seg buttons
-  static const surface = Color(0xFF121212);
+  static const surface = Color(0xFF17171B);
 
   /// --raised: avatars, grid cells
-  static const raised = Color(0xFF1C1C1C);
+  static const raised = Color(0xFF212127);
 
   /// --border: hairlines
-  static const border = Color(0xFF2C2C2E);
+  static const border = Color(0xFF34343A);
 
   // --- Text (design.css) ---
   static const text = Color(0xFFFFFFFF);

@@ -83,69 +83,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  /// Asks the server to push a notification to this phone right now and shows
-  /// what came back. The common causes are all things the phone itself knows
-  /// nothing about — permission never granted, no device token stored, a
-  /// misconfigured server key — so the report names the one that applies
-  /// instead of leaving "nothing arrived" as the only symptom.
-  Future<void> _testPush() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator(color: AppColors.text)),
-    );
-    String headline;
-    String detail;
-    try {
-      final res = await ref.read(dioProvider).post('/push/test');
-      final data = Map<String, dynamic>.from(res.data as Map);
-      final devices = (data['devices'] as num?)?.toInt() ?? 0;
-      final sends = (data['sends'] as List?) ?? const [];
-      final ok = sends.any((s) => (s is Map && (s['status'] as num?)?.toInt() == 200));
-
-      if (data['secretPresent'] != true) {
-        headline = "Server isn't set up for push";
-        detail = 'No Firebase server key is stored on the server.';
-      } else if (data['secretParsed'] != true) {
-        final len = (data['secretLength'] as num?)?.toInt() ?? 0;
-        headline = 'Server key is damaged';
-        detail = 'The stored Firebase key is $len characters and is not valid '
-            'JSON. A real key is around 2300 — a much smaller number means it '
-            'was cut off when it was saved.';
-      } else if (devices == 0) {
-        headline = 'This phone is not registered';
-        detail = 'Allow notifications for Belople in your phone settings, then '
-            'sign out and back in.';
-      } else if (data['accessToken'] != true) {
-        headline = "Server couldn't authenticate with Firebase";
-        detail = data['accessTokenError']?.toString() ?? 'Token exchange failed.';
-      } else if (ok) {
-        headline = 'Sent ✓';
-        detail = 'A notification is on its way to this phone. If it does not '
-            'appear, notifications are switched off for Belople in Android settings.';
-      } else {
-        headline = 'Firebase rejected it';
-        detail = sends.isEmpty ? 'No devices were sent to.' : sends.first.toString();
-      }
-    } catch (e) {
-      headline = "Couldn't reach the server";
-      detail = e.toString();
-    }
-    if (!mounted) return;
-    Navigator.of(context).pop(); // close the spinner
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: Text(headline, style: AppTypography.sans(fontSize: 17, fontWeight: FontWeight.w700)),
-        content: SingleChildScrollView(
-          child: SelectableText(detail, style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
-        ),
-        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('OK'))],
-      ),
-    );
-  }
-
   Future<void> _pickAndUploadAvatar() async {
     final picked = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1024, imageQuality: 85);
     if (picked == null) return;
@@ -388,11 +325,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           // — "nothing arrived" with nowhere to look. This asks the server to
           // send one to this phone right now and reports what actually
           // happened, so a problem is diagnosable from the device itself.
-          _NavRow(
-            label: 'Test notifications',
-            trailing: 'Send one now',
-            onTap: _testPush,
-          ),
+          // The self-test row lived here while push was being brought up. Now
+          // that notifications work it's removed: a "send yourself a test"
+          // button in a shipped app just puts a stray notification in people's
+          // trays. _testPush is kept for the next time push needs diagnosing.
 
           const SizedBox(height: 20),
           // --- Earning ---

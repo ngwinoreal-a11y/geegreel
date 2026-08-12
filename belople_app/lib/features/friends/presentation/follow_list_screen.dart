@@ -55,7 +55,7 @@ class FollowListScreen extends ConsumerWidget {
                   displayName: u.displayName,
                 ),
                 title: Text(u.displayName, style: AppTypography.sans(fontWeight: FontWeight.w600)),
-                subtitle: Text('@${u.username}', style: AppTypography.sans(color: AppColors.muted, fontSize: 13)),
+                subtitle: Text('@${u.username}', style: AppTypography.sans(color: AppColors.muted, fontSize: 14)),
                 onTap: () => context.push('/profile/${u.username}'),
               );
             },
