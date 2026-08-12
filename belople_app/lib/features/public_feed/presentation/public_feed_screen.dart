@@ -222,10 +222,10 @@ class _PostCard extends ConsumerWidget {
     final me = ref.watch(authControllerProvider).valueOrNull;
     final isMine = me != null && me.id == post.user.id;
     return Padding(
-      // A post's media runs edge to edge, so without a real gap AND a rule the
-      // next post's picture butts straight onto the previous one and the two
-      // read as one item — which is what "they're stuck together" was.
-      padding: const EdgeInsets.only(bottom: 18),
+      // Restored to a generous gap after trimming it made one card look like it
+      // was running into the next: media goes edge to edge, so a thin gap gives
+      // the eye nothing to read as the end of one post and the start of another.
+      padding: const EdgeInsets.only(top: 6, bottom: 30),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -527,10 +527,10 @@ class _VideoCardState extends State<_VideoCard> {
     final video = widget.video;
     final c = _controller;
     return Padding(
-      // A post's media runs edge to edge, so without a real gap AND a rule the
-      // next post's picture butts straight onto the previous one and the two
-      // read as one item — which is what "they're stuck together" was.
-      padding: const EdgeInsets.only(bottom: 18),
+      // Restored to a generous gap after trimming it made one card look like it
+      // was running into the next: media goes edge to edge, so a thin gap gives
+      // the eye nothing to read as the end of one post and the start of another.
+      padding: const EdgeInsets.only(top: 6, bottom: 30),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
