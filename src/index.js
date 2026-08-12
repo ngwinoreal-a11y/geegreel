@@ -2021,7 +2021,7 @@ async function handle(request, env, ctx) {
     requireUser(user);
     const cursor = url.searchParams.get("cursor");
     let sql = `
-      SELECT n.id, n.type, n.video_id, n.comment_id, n.read, n.created_at,
+      SELECT n.id, n.type, n.video_id, n.comment_id, n.read, n.created_at, n.body,
              a.id AS actor_id, a.username AS actor_username, a.display_name AS actor_display_name, a.avatar_key AS actor_avatar_key,
              v.thumb_key AS video_thumb_key
       FROM notifications n
@@ -2087,10 +2087,13 @@ async function handle(request, env, ctx) {
       const at = now();
       for (const r of recipients) {
         try {
+          // The text is stored, not just pushed: an announcement has no actor
+          // or video to derive wording from, so without this the Activity list
+          // showed an empty row and the message existed only in the push.
           await env.DB.prepare(`
-            INSERT INTO notifications (id, user_id, actor_id, type, video_id, comment_id, read, created_at)
-            VALUES (?, ?, ?, 'announcement', NULL, NULL, 0, ?)
-          `).bind(uid(), r.id, user.id, at).run();
+            INSERT INTO notifications (id, user_id, actor_id, type, video_id, comment_id, read, created_at, body)
+            VALUES (?, ?, ?, 'announcement', NULL, NULL, 0, ?, ?)
+          `).bind(uid(), r.id, user.id, at, text).run();
           await Promise.all([
             sendPush(env, r.id, { title: heading, body: text, url: "/", tag: "announcement" }),
             sendFcm(env, r.id, {

@@ -132,10 +132,21 @@ class _NotificationRow extends StatelessWidget {
                   RichText(
                     text: TextSpan(
                       style: AppTypography.sans(fontSize: 14, color: AppColors.text),
-                      children: [
-                        TextSpan(text: item.actorDisplayName, style: const TextStyle(fontWeight: FontWeight.w600)),
-                        TextSpan(text: ' ${item.message}'),
-                      ],
+                      children: item.isAnnouncement
+                          // An announcement is from Belople, not from a person
+                          // doing something to you — so it reads as the message
+                          // itself under the app's name, and never as
+                          // "<admin's display name> <verb>".
+                          ? [
+                              const TextSpan(
+                                  text: 'Belople  ',
+                                  style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.accent)),
+                              TextSpan(text: item.message),
+                            ]
+                          : [
+                              TextSpan(text: item.actorDisplayName, style: const TextStyle(fontWeight: FontWeight.w600)),
+                              TextSpan(text: ' ${item.message}'),
+                            ],
                     ),
                   ),
                   const SizedBox(height: 3),
