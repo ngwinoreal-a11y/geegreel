@@ -92,13 +92,18 @@ class FeedTabs extends StatelessWidget {
                 child: Text(
                   labels[i],
                   style: AppTypography.display(
-                    fontSize: 26,
+                    // 26px with NEGATIVE tracking, then squeezed again by the
+                    // FittedBox wrapping the row, ran the letters into each
+                    // other — "Following" read as one dense block. A smaller
+                    // base leaves the FittedBox nothing to shrink, and positive
+                    // tracking lets the letters breathe.
+                    fontSize: 22,
                     fontWeight: FontWeight.w800,
                     color: i == selectedIndex
                         ? Colors.white
                         : Colors.white.withValues(alpha: 0.5),
                   ).copyWith(
-                    letterSpacing: -0.5,
+                    letterSpacing: 0.2,
                     shadows: const [Shadow(color: Colors.black54, blurRadius: 6)],
                   ),
                 ),
