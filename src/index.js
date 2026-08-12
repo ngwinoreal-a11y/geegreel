@@ -3072,15 +3072,31 @@ async function handle(request, env, ctx) {
     if (targetId === user.id) return err("You can't follow yourself");
 
     if (method === "POST") {
+      // A PRIVATE account has to approve its followers. This wrote 'accepted'
+      // unconditionally, so marking an account private did nothing at all —
+      // anyone could follow it and immediately see followers-only content. The
+      // pending queue and its approve/reject endpoints already existed; nothing
+      // was ever putting a row in it.
+      const target = await env.DB.prepare("SELECT is_private FROM users WHERE id = ?")
+        .bind(targetId).first();
+      if (!target) return err("Account not found", 404);
+      const status = target.is_private ? "pending" : "accepted";
+
       await env.DB.prepare(`
         INSERT OR IGNORE INTO follows (follower_id, followee_id, status, created_at)
-        VALUES (?, ?, 'accepted', ?)
-      `).bind(user.id, targetId, now()).run();
-      await notify(env, ctx, targetId, user.id, "follow", { username: user.username });
-      // Attribute the follow to the creator's last video this viewer saw — that
-      // video is what earned it (creator follower-conversion analytics), and it
-      // feeds the followCreator ranking signal.
-      await markCreatorFollowed(env, { viewerId: user.id, creatorId: targetId });
+        VALUES (?, ?, ?, ?)
+      `).bind(user.id, targetId, status, now()).run();
+
+      // A request isn't a follow: don't tell them someone started following
+      // them, and don't credit the video with a follow that hasn't happened.
+      if (status === "accepted") {
+        await notify(env, ctx, targetId, user.id, "follow", { username: user.username });
+        // Attribute the follow to the creator's last video this viewer saw — that
+        // video is what earned it (creator follower-conversion analytics), and it
+        // feeds the followCreator ranking signal.
+        await markCreatorFollowed(env, { viewerId: user.id, creatorId: targetId });
+      }
+      return json({ following: status === "accepted", requested: status === "pending" });
     } else {
       await env.DB.prepare(
         "DELETE FROM follows WHERE follower_id = ? AND followee_id = ?"

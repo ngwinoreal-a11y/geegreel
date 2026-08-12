@@ -226,9 +226,8 @@ class _PostCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Hairline above each post's header: the boundary the eye needs when
-          // two full-bleed pictures sit one under the other.
-          const Divider(height: 1, thickness: 1, color: Color(0xFFEDEDED)),
+          // No rule between posts — the gap below each one does the separating.
+          // A hairline across a white feed read as clutter.
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding, vertical: 12),
             child: Row(
@@ -532,9 +531,8 @@ class _VideoCardState extends State<_VideoCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Hairline above each post's header: the boundary the eye needs when
-          // two full-bleed pictures sit one under the other.
-          const Divider(height: 1, thickness: 1, color: Color(0xFFEDEDED)),
+          // No rule between posts — the gap below each one does the separating.
+          // A hairline across a white feed read as clutter.
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding, vertical: 12),
             child: Row(

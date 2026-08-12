@@ -116,17 +116,36 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           else
             Row(
               children: [
+                // Follow is the action; Following is a state you've already
+                // reached. Both used the same loud amber button, so the screen
+                // shouted at you to do a thing you'd already done. Filled for
+                // the action, quiet outline once it's done.
                 Expanded(
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      if (me == null) { context.push('/login'); return; }
-                      try {
-                        await ref.read(feedRepositoryProvider).setFollowing(profile.user.id, !profile.following);
-                        ref.invalidate(profileProvider(widget.handle));
-                      } catch (_) {}
-                    },
-                    child: Text(profile.following ? 'Following' : 'Follow'),
-                  ),
+                  child: profile.following
+                      ? OutlinedButton(
+                          onPressed: () async {
+                            if (me == null) { context.push('/login'); return; }
+                            try {
+                              await ref.read(feedRepositoryProvider).setFollowing(profile.user.id, false);
+                              ref.invalidate(profileProvider(widget.handle));
+                            } catch (_) {}
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.muted,
+                            side: const BorderSide(color: AppColors.border),
+                          ),
+                          child: const Text('Following'),
+                        )
+                      : ElevatedButton(
+                          onPressed: () async {
+                            if (me == null) { context.push('/login'); return; }
+                            try {
+                              await ref.read(feedRepositoryProvider).setFollowing(profile.user.id, true);
+                              ref.invalidate(profileProvider(widget.handle));
+                            } catch (_) {}
+                          },
+                          child: const Text('Follow'),
+                        ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
