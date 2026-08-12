@@ -183,10 +183,19 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
               ref.invalidate(publicFeedControllerProvider);
               await ref.read(publicFeedControllerProvider.future);
             },
-            child: ListView.builder(
+            child: ListView.separated(
             controller: _scrollController,
             physics: const AlwaysScrollableScrollPhysics(),
             itemCount: items.length,
+            // One post ended where the next began with nothing between them —
+            // media runs edge to edge, so a bare gap gives the eye no edge to
+            // stop at and the feed reads as one long column. A hairline plus
+            // real air does the separating. (The old note that a rule was
+            // clutter was written when this feed was white; it isn't now.)
+            separatorBuilder: (_, _) => const Padding(
+              padding: EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding),
+              child: Divider(height: 1, thickness: 1, color: AppColors.border),
+            ),
             itemBuilder: (context, i) {
               final item = items[i];
               if (item is _VideoItem) {
@@ -222,15 +231,12 @@ class _PostCard extends ConsumerWidget {
     final me = ref.watch(authControllerProvider).valueOrNull;
     final isMine = me != null && me.id == post.user.id;
     return Padding(
-      // Restored to a generous gap after trimming it made one card look like it
-      // was running into the next: media goes edge to edge, so a thin gap gives
-      // the eye nothing to read as the end of one post and the start of another.
-      padding: const EdgeInsets.only(top: 6, bottom: 30),
+      // Even air on both sides of the separator line between posts, so a card
+      // is visibly one thing with a gap and a rule around it.
+      padding: const EdgeInsets.only(top: 14, bottom: 22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // No rule between posts — the gap below each one does the separating.
-          // A hairline across a white feed read as clutter.
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding, vertical: 12),
             child: Row(
@@ -527,15 +533,12 @@ class _VideoCardState extends State<_VideoCard> {
     final video = widget.video;
     final c = _controller;
     return Padding(
-      // Restored to a generous gap after trimming it made one card look like it
-      // was running into the next: media goes edge to edge, so a thin gap gives
-      // the eye nothing to read as the end of one post and the start of another.
-      padding: const EdgeInsets.only(top: 6, bottom: 30),
+      // Even air on both sides of the separator line between posts, so a card
+      // is visibly one thing with a gap and a rule around it.
+      padding: const EdgeInsets.only(top: 14, bottom: 22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // No rule between posts — the gap below each one does the separating.
-          // A hairline across a white feed read as clutter.
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.publicPostPadding, vertical: 12),
             child: Row(
@@ -565,10 +568,15 @@ class _VideoCardState extends State<_VideoCard> {
               // the Shorts feed, which threw away the video actually tapped.
               onTap: () => context.push('/v/${video.id}', extra: video),
               child: AspectRatio(
-                // 4:5, not 9:16. A full-height portrait video filled the whole
-                // screen, so scrolling Public stopped feeling like Public and
-                // started feeling like Shorts. This is a preview you tap into.
-                aspectRatio: 4 / 5,
+                // The video's OWN shape, not a fixed 4:5. A portrait clip is
+                // 9:16; forcing it into 4:5 with BoxFit.cover threw away about
+                // a third of the frame — heads cropped off the top, captions
+                // off the bottom — and left the video sitting in a box smaller
+                // than the photos beside it. The clamp keeps the two ends
+                // sensible: never taller than 2:3 (so Public still reads as a
+                // scroll feed rather than Shorts) and never wider than a
+                // letterbox 1.91:1.
+                aspectRatio: video.aspectRatio.clamp(2 / 3, 1.91),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
