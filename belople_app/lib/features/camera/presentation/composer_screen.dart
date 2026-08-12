@@ -562,6 +562,34 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
               ], // end step 2
               // Step 3: who can see this video.
               if (_videoStep == 3) ...[
+                // Caption beside the clip it belongs to. On the previous
+                // layout the publish step showed audience options with no
+                // sight of the video at all, so the last thing you saw before
+                // posting wasn't what you were posting.
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: _captionField()),
+                    const SizedBox(width: 12),
+                    if (_previewController?.value.isInitialized ?? false)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(AppRadii.md),
+                        child: SizedBox(
+                          width: 84,
+                          height: 112,
+                          child: FittedBox(
+                            fit: BoxFit.cover,
+                            child: SizedBox(
+                              width: _previewController!.value.size.width,
+                              height: _previewController!.value.size.height,
+                              child: VideoPlayer(_previewController!),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 22),
                 Text('WHO CAN SEE THIS', style: AppTypography.sectionLabel),
                 const SizedBox(height: 8),
                 _AudienceOption(

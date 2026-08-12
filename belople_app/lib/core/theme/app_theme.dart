@@ -59,17 +59,22 @@ abstract final class AppTheme {
       // call-to-action style (auth screen, save bars, "Use this sound", etc).
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.text,
-          foregroundColor: AppColors.bg,
-          disabledBackgroundColor: AppColors.text.withValues(alpha: 0.5),
-          disabledForegroundColor: AppColors.bg,
-          minimumSize: const Size.fromHeight(48),
+          // Brand amber, not white. Every primary action in the app — Publish,
+          // Next, Pay, Send — is the thing you came to the screen to do, and a
+          // plain white pill said nothing about whose app it was. Taller and
+          // heavier too: at 48px/15px it read as secondary next to the media
+          // filling the rest of the screen.
+          backgroundColor: AppColors.accent,
+          foregroundColor: AppColors.onAccent,
+          disabledBackgroundColor: AppColors.accent.withValues(alpha: 0.4),
+          disabledForegroundColor: AppColors.onAccent.withValues(alpha: 0.6),
+          minimumSize: const Size.fromHeight(54),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppRadii.md),
           ),
           textStyle: AppTypography.sans(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),
