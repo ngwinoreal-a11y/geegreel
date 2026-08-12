@@ -590,6 +590,10 @@ const NOTIF_TEXT = {
   ad_approved: () => ["Your ad is live", "It's now being shown to people."],
   ad_rejected: () => ["Your ad wasn't approved", "It didn't meet the guidelines."],
   ad_complete: () => ["Your ad finished", "It reached everyone it was paid for."],
+  // From Belople, about the poster's OWN video — they need to know it's gone
+  // and why, or it just silently disappears from their profile.
+  video_removed: (_name, reason) =>
+    ["Your video was removed", reason ? `Reported for ${reason}.` : "It broke the community guidelines."],
 };
 
 // Writes the in-app notification (always) and fires a push (best-effort),
@@ -626,7 +630,9 @@ async function notify(env, ctx, userId, actorId, type, extra = {}) {
              : type === "like" || type === "repost" ? recipient.notify_likes
              // Gifts and direct messages are addressed to you personally —
              // silently dropping either would look like the app is broken.
-             : type === "gift" || type === "message" ? 1
+             // A moderation notice is not a preference either: your video is
+             // gone whether or not you asked to hear about comments.
+             : type === "gift" || type === "message" || type === "video_removed" ? 1
              : recipient.notify_comments; // comment, reply
   if (!pref) return;
 
@@ -763,6 +769,91 @@ function normalizeCountries(raw) {
   const clean = [...new Set(list.map(c => String(c || "").trim()).filter(Boolean))]
     .slice(0, MAX_TARGET_COUNTRIES);
   return clean.length ? JSON.stringify(clean) : null;
+}
+
+/// Every row that references ONE video, in an order the foreign keys allow.
+///
+/// D1 enforces the REFERENCES clauses, so deleting a video while anything
+/// still points at it is a constraint failure, not a warning — and each delete
+/// path used to clear only the tables somebody remembered at the time. Two
+/// reports on the same clip was enough to break it: handling the first deleted
+/// the video, the second still pointed at it, and "Remove video" came back as
+/// "Something went wrong on our end" on essentially every reported clip.
+///
+/// The referrers, read off the live schema rather than assumed —
+/// videos(id): videos.repost_of, likes, comments, shares, messages, reports,
+/// gifts. comments(id): comments.parent_id, comment_reactions,
+/// reports.comment_id. notifications and video_exposures carry a video_id
+/// with no REFERENCES, so they can't block a delete, but are tidied here too
+/// rather than left pointing at nothing.
+function videoChildStatements(env, videoId, handledBy) {
+  const t = now();
+  // Any other report about this video (or about a comment on it) is moot once
+  // the video is gone — closing them is what stops the next moderator click
+  // hitting the very same constraint.
+  const closeReports = (column) => env.DB.prepare(`
+    UPDATE reports SET ${column} = NULL,
+      status      = CASE WHEN status = 'open' THEN 'resolved' ELSE status END,
+      handled_by  = COALESCE(handled_by, ?),
+      handled_at  = COALESCE(handled_at, ?),
+      action_taken= COALESCE(action_taken, 'video deleted')
+    WHERE ${column} ${column === "video_id" ? "= ?" : "IN (SELECT id FROM comments WHERE video_id = ?)"}
+  `).bind(handledBy, t, videoId);
+
+  return [
+    // Comments and everything hanging off them, deepest first.
+    env.DB.prepare(
+      "DELETE FROM comment_reactions WHERE comment_id IN (SELECT id FROM comments WHERE video_id = ?)"
+    ).bind(videoId),
+    closeReports("comment_id"),
+    env.DB.prepare(
+      "DELETE FROM comments WHERE parent_id IN (SELECT id FROM comments WHERE video_id = ?)"
+    ).bind(videoId),
+    env.DB.prepare("DELETE FROM comments WHERE video_id = ?").bind(videoId),
+
+    env.DB.prepare("DELETE FROM likes  WHERE video_id = ?").bind(videoId),
+    env.DB.prepare("DELETE FROM shares WHERE video_id = ?").bind(videoId),
+    env.DB.prepare("DELETE FROM gifts  WHERE video_id = ?").bind(videoId),
+    // A conversation keeps its message; it just loses the attachment. Deleting
+    // the message would take someone else's chat history with it.
+    env.DB.prepare("UPDATE messages SET video_id = NULL WHERE video_id = ?").bind(videoId),
+    closeReports("video_id"),
+    env.DB.prepare("DELETE FROM video_exposures WHERE video_id = ?").bind(videoId),
+    env.DB.prepare("DELETE FROM notifications   WHERE video_id = ?").bind(videoId),
+  ];
+}
+
+/// Deletes [v] and everything that points at it, reposts included. A repost is
+/// itself a row in `videos` and can carry its own likes, comments and reports,
+/// so it needs the same teardown before the parent can go.
+///
+/// [orphanedSoundId] is the sound to delete outright (this video created it and
+/// nobody else uses it); pass null to just decrement the reuse counter.
+/// [handledBy] is the moderator closing the reports, or null when the owner is
+/// deleting their own video — nobody "handled" anything in that case.
+async function deleteVideoEverywhere(env, v, { orphanedSoundId = null, handledBy = null } = {}) {
+  const reposts = await env.DB.prepare("SELECT id FROM videos WHERE repost_of = ?").bind(v.id).all();
+  const statements = [];
+  for (const id of [...reposts.results.map(r => r.id), v.id]) {
+    statements.push(...videoChildStatements(env, id, handledBy));
+  }
+  // Videos that merely USE this one's sound have to let go before it can go.
+  statements.push(
+    env.DB.prepare("UPDATE videos SET sound_id = NULL WHERE sound_id = ? AND id != ?")
+      .bind(v.sound_id || "", v.id),
+    env.DB.prepare("DELETE FROM videos WHERE repost_of = ?").bind(v.id),
+    env.DB.prepare("DELETE FROM videos WHERE id = ?").bind(v.id),
+  );
+  if (orphanedSoundId) {
+    statements.push(env.DB.prepare("DELETE FROM sounds WHERE id = ?").bind(orphanedSoundId));
+  } else if (v.sound_id) {
+    // This video only used the sound — its reuse count has to come back down
+    // or the sound's owner is permanently blocked from deleting their video.
+    statements.push(
+      env.DB.prepare("UPDATE sounds SET uses = MAX(0, uses - 1) WHERE id = ?").bind(v.sound_id)
+    );
+  }
+  await env.DB.batch(statements);
 }
 
 // ---------- feed shaping ----------
@@ -923,6 +1014,39 @@ const shapeAd = r => ({
     avatarUrl: r.owner_avatar_key ? `/api/media/${r.owner_avatar_key}` : null,
   } : null,
 });
+
+/// One active ad this viewer is allowed to see, or null.
+///
+/// [video] splits the two feeds by what the ad IS: Shorts carries the video
+/// ads, Public the photo ones. Every ad used to go to Shorts regardless, so a
+/// photo ad sat as a still frame in a full-screen vertical video feed while
+/// Public — a photo feed, the one place a photo ad belongs — carried none.
+///
+/// Country targeting. Unlike a video's (a preference the recommender damps
+/// by), an ad's is a hard constraint: the advertiser paid to reach a place,
+/// and spending their reach elsewhere is spending their money wrongly. An
+/// untargeted ad still shows to everyone, and a viewer with no country set
+/// sees untargeted ads rather than none at all.
+async function pickAd(env, user, { video }) {
+  const viewerCountry = user?.country || "";
+  return env.DB.prepare(`
+    SELECT a.*,
+      (SELECT COUNT(*) FROM ad_likes    WHERE ad_id = a.id) AS like_count,
+      (SELECT COUNT(*) FROM ad_comments WHERE ad_id = a.id) AS comment_count,
+      EXISTS(SELECT 1 FROM ad_likes WHERE ad_id = a.id AND user_id = ?) AS liked,
+      ou.id AS owner_id, ou.username AS owner_username,
+      ou.display_name AS owner_display_name, ou.avatar_key AS owner_avatar_key
+    FROM ads a
+    LEFT JOIN users ou ON ou.id = a.created_by AND a.kind = 'user'
+    WHERE a.status = 'active'
+      AND a.type ${video ? "=" : "!="} 'video'
+      AND (a.kind = 'admin'
+           OR (a.paid = 1 AND (a.reach_target IS NULL OR a.impressions < a.reach_target)))
+      AND (a.countries IS NULL OR a.countries = '[]'
+           OR (? != '' AND instr(a.countries, ?) > 0))
+    ORDER BY RANDOM() LIMIT 1
+  `).bind(user?.id || "", viewerCountry, `"${viewerCountry}"`).first();
+}
 
 const shapePost = (r) => ({
   id: r.id,
@@ -1535,36 +1659,12 @@ async function handle(request, env, ctx) {
       nextCursor = results.length === limit ? String(offset + limit) : null;
     }
 
-    {
-      // The viewer's country, for ad targeting below. Empty string when signed
-      // out or unset — the SQL treats that as "show me untargeted ads".
-      const viewerCountry = user?.country || "";
-      // One ad woven into each batch, a few videos in rather than first thing —
-      // never on the (ad-free) following tab.
-      if (videos.length >= 3) {
-        const ad = await env.DB.prepare(`
-          SELECT a.*,
-            (SELECT COUNT(*) FROM ad_likes    WHERE ad_id = a.id) AS like_count,
-            (SELECT COUNT(*) FROM ad_comments WHERE ad_id = a.id) AS comment_count,
-            EXISTS(SELECT 1 FROM ad_likes WHERE ad_id = a.id AND user_id = ?) AS liked,
-            ou.id AS owner_id, ou.username AS owner_username,
-            ou.display_name AS owner_display_name, ou.avatar_key AS owner_avatar_key
-          FROM ads a
-          LEFT JOIN users ou ON ou.id = a.created_by AND a.kind = 'user'
-          WHERE a.status = 'active'
-            AND (a.kind = 'admin'
-                 OR (a.paid = 1 AND (a.reach_target IS NULL OR a.impressions < a.reach_target)))
-            -- Country targeting. Unlike a video's (a preference), an ad's is a
-            -- real constraint: the advertiser paid to reach a place, and
-            -- spending their reach elsewhere is spending their money wrongly.
-            -- An untargeted ad still shows to everyone, and a viewer with no
-            -- country set sees untargeted ads rather than none at all.
-            AND (a.countries IS NULL OR a.countries = '[]'
-                 OR (? != '' AND instr(a.countries, ?) > 0))
-          ORDER BY RANDOM() LIMIT 1
-        `).bind(user?.id || "", viewerCountry, `"${viewerCountry}"`).first();
-        if (ad) videos.splice(Math.min(4, videos.length), 0, shapeAd(ad));
-      }
+    // One ad woven into each batch, a few videos in rather than first thing —
+    // never on the (ad-free) following tab. Video ads only: the photo ones go
+    // to Public, where a photo belongs.
+    if (videos.length >= 3) {
+      const ad = await pickAd(env, user, { video: true });
+      if (ad) videos.splice(Math.min(4, videos.length), 0, shapeAd(ad));
     }
 
     return json({ videos, nextCursor });
@@ -1632,8 +1732,16 @@ async function handle(request, env, ctx) {
       for (const r of results) r.preview_comments = (byPost.get(r.id) || []).reverse();
     }
 
+    // Public carries the photo and text ads — the ones that read as a post
+    // rather than as a full-screen video. Sent alongside the posts, not inside
+    // them, so a post is only ever a post: the client splices it in a few
+    // cards down, the same way it already splices in videos. Only on the first
+    // page, so scrolling doesn't stack a new ad on every batch.
+    const ad = (!cursor && results.length >= 3) ? await pickAd(env, user, { video: false }) : null;
+
     return json({
       posts: results.map(shapePost),
+      ad: ad ? shapeAd(ad) : null,
       nextCursor: results.length === limit
         ? String(results[results.length - 1].created_at) : null,
     });
@@ -2528,20 +2636,10 @@ async function handle(request, env, ctx) {
 
     await env.MEDIA.delete(v.r2_key);
     if (v.thumb_key) await env.MEDIA.delete(v.thumb_key);
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM likes WHERE video_id = ?").bind(v.id),
-      env.DB.prepare("DELETE FROM comments WHERE video_id = ?").bind(v.id),
-      env.DB.prepare("DELETE FROM shares WHERE video_id = ?").bind(v.id),
-      env.DB.prepare("DELETE FROM videos WHERE id = ?").bind(v.id),
-      ...(orphanedSoundId
-        ? [env.DB.prepare("DELETE FROM sounds WHERE id = ?").bind(orphanedSoundId)]
-        // This video only used the sound, didn't own it — its own reuse
-        // count needs to come back down so the owner's video isn't
-        // permanently stuck once this one's gone.
-        : v.sound_id
-          ? [env.DB.prepare("UPDATE sounds SET uses = MAX(0, uses - 1) WHERE id = ?").bind(v.sound_id)]
-          : []),
-    ]);
+    // Clears gifts, messages, reports and reposts too — this path only knew
+    // about likes, comments and shares, so deleting a video anyone had
+    // reported, gifted or shared into a chat failed on the foreign key.
+    await deleteVideoEverywhere(env, v, { orphanedSoundId });
     return json({ ok: true });
   }
 
@@ -4451,24 +4549,12 @@ async function handle(request, env, ctx) {
           }
         }
 
-        await env.DB.batch([
-          env.DB.prepare("DELETE FROM likes WHERE video_id = ?").bind(v.id),
-          env.DB.prepare("DELETE FROM comments WHERE video_id = ?").bind(v.id),
-          env.DB.prepare("DELETE FROM shares WHERE video_id = ?").bind(v.id),
-          env.DB.prepare("DELETE FROM gifts WHERE video_id = ?").bind(v.id),
-          // Watch history and notifications about a video that no longer
-          // exists would otherwise linger as rows pointing at nothing.
-          env.DB.prepare("DELETE FROM video_exposures WHERE video_id = ?").bind(v.id),
-          env.DB.prepare("DELETE FROM notifications WHERE video_id = ?").bind(v.id),
-          // Detach any video still using the sound before the sound goes.
-          env.DB.prepare("UPDATE videos SET sound_id = NULL WHERE sound_id = ? AND id != ?")
-            .bind(v.sound_id || "", v.id),
-          env.DB.prepare("DELETE FROM videos WHERE repost_of = ?").bind(v.id),
-          env.DB.prepare("DELETE FROM videos WHERE id = ?").bind(v.id),
-          ...(orphanedSoundId
-            ? [env.DB.prepare("DELETE FROM sounds WHERE id = ?").bind(orphanedSoundId)]
-            : []),
-        ]);
+        await deleteVideoEverywhere(env, v, { orphanedSoundId, handledBy: user.id });
+        // Tell the poster, and say what it was reported for. Their video just
+        // vanished from their profile with no explanation anywhere before —
+        // the row is written to `notifications` like any other, so it shows in
+        // the app's list as well as arriving as a push.
+        await notify(env, ctx, v.user_id, user.id, "video_removed", { text: r.reason });
       }
     }
 

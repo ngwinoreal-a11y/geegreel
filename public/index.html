@@ -5534,7 +5534,7 @@ function adminPage() {
             </div>` : ""}
             <div style="display:flex;gap:6px;flex-wrap:wrap">
               <button data-r="${rep.id}" data-a="dismiss" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 0;color:var(--muted);font-size:11px;font-weight:600">Dismiss</button>
-              ${rep.videoId ? `<button data-r="${rep.id}" data-a="remove_video" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 0;color:#FFD166;font-size:11px;font-weight:600">Remove video</button>` : ""}
+              ${rep.videoId ? `<button data-r="${rep.id}" data-a="remove_video" style="flex:1;border:1px solid #5C1F1F;border-radius:8px;padding:8px 0;color:#FF6B6B;font-size:11px;font-weight:600">Delete video</button>` : ""}
               ${rep.commentId ? `<button data-r="${rep.id}" data-a="remove_comment" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 0;color:#FFD166;font-size:11px;font-weight:600">Remove comment</button>` : ""}
               ${rep.reportedUserId ? `<button data-r="${rep.id}" data-a="ban_user" style="flex:1;border:1px solid #5C1F1F;border-radius:8px;padding:8px 0;color:#FF6B6B;font-size:11px;font-weight:600">Ban user</button>` : ""}
             </div>
@@ -5630,17 +5630,25 @@ function adminPage() {
           <div class="field"><input id="adCaption" placeholder="Caption (optional)"></div>
           <div class="field"><input id="adCta" placeholder="Button text" value="Learn more"></div>
           <div class="field"><input id="adLink" placeholder="https://..."></div>
-          <!-- Where the ad runs. Self-serve ads could already be aimed at a
-               country; house ads had no way to say it, so every one of them ran
-               everywhere whether that was wanted or not. Blank = everywhere.
-               A datalist rather than a <select>: the country list is long, and
-               typing beats scrolling it. -->
-          <div class="field">
-            <input id="adCountry" list="adCountryList" placeholder="Country (blank = everywhere)" autocomplete="off">
-            <datalist id="adCountryList">
-              ${COUNTRIES.map(c => `<option value="${esc(c)}"></option>`).join("")}
-            </datalist>
+          <!-- Where the ad runs. Blank = everywhere.
+
+               This was a <datalist>, which Android's WebView does not render —
+               the admin page runs inside the app, so typing "Rwan" showed no
+               suggestions at all and there was no way to pick a country. This
+               is a plain type-ahead built out of the same COUNTRIES list the
+               signup step uses (verified identical, 175 entries either side —
+               the names must match character for character or targeting
+               silently reaches nobody), so it works in any WebView. -->
+          <div style="position:relative">
+            <div class="field" style="margin-bottom:4px">
+              <input id="adCountry" placeholder="Type a country — blank means everywhere" autocapitalize="words" autocomplete="off">
+            </div>
+            <div id="adCountryHits" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:20;
+              background:var(--raised);border:1px solid var(--border);border-radius:10px;overflow:hidden;max-height:220px;overflow-y:auto"></div>
           </div>
+          <!-- Says out loud which of the two states you are in, so "one
+               country" and "everywhere" can never be confused for each other. -->
+          <p id="adCountryState" style="margin:0 0 14px;font-size:12px;color:var(--muted)"></p>
           <div class="field"><input id="adFile" type="file" accept="image/*,video/*"></div>
           <button class="btn-primary" id="adSubmit" style="margin-bottom:22px">Publish ad</button>
           <p class="sect">Running</p>
@@ -5697,6 +5705,69 @@ function adminPage() {
           });
         };
 
+        // --- country type-ahead for the new-ad form ---
+        // adCountry holds the CONFIRMED choice; what's in the box is only a
+        // search until a name is tapped. Typing "Rwan" and submitting must not
+        // save "Rwan" as a country — nothing would ever match it.
+        let adCountry = "";
+        const cInput = body.querySelector("#adCountry");
+        const cHits  = body.querySelector("#adCountryHits");
+        const cState = body.querySelector("#adCountryState");
+
+        const paintCountryState = () => {
+          cState.innerHTML = adCountry
+            ? `Showing in <strong style="color:var(--text)">${esc(adCountry)}</strong> only ·
+               <span id="adCountryClear" style="color:var(--accent);text-decoration:underline;cursor:pointer">show everywhere instead</span>`
+            : "Showing <strong>everywhere</strong> — pick a country to limit it";
+          const clear = cState.querySelector("#adCountryClear");
+          if (clear) clear.onclick = () => { adCountry = ""; cInput.value = ""; cHits.style.display = "none"; paintCountryState(); };
+        };
+
+        const pickCountry = (name) => {
+          adCountry = name;
+          cInput.value = name;
+          cHits.style.display = "none";
+          paintCountryState();
+        };
+
+        cInput.addEventListener("input", () => {
+          const q = cInput.value.trim().toLowerCase();
+          // Editing after choosing means the choice is no longer confirmed.
+          if (adCountry && cInput.value.trim() !== adCountry) { adCountry = ""; paintCountryState(); }
+          if (!q) { cHits.style.display = "none"; return; }
+          // Names that START with what was typed come first — "ken" should put
+          // Kenya at the top, not below everything merely containing "ken".
+          const starts = [], has = [];
+          for (const c of COUNTRIES) {
+            const l = c.toLowerCase();
+            if (l.startsWith(q)) starts.push(c);
+            else if (l.includes(q)) has.push(c);
+          }
+          const hits = [...starts, ...has].slice(0, 8);
+          if (!hits.length) {
+            cHits.innerHTML = `<p style="margin:0;padding:12px 14px;font-size:13px;color:var(--muted)">No country matches "${esc(cInput.value.trim())}"</p>`;
+            cHits.style.display = "block";
+            return;
+          }
+          cHits.innerHTML = hits.map(c =>
+            `<div data-c="${esc(c)}" style="padding:11px 14px;font-size:14px;border-bottom:1px solid var(--border);cursor:pointer">${esc(c)}</div>`
+          ).join("");
+          cHits.style.display = "block";
+          cHits.querySelectorAll("[data-c]").forEach(d => d.onclick = () => pickCountry(d.dataset.c));
+        });
+
+        // Typing the full name and pressing enter/blur counts as choosing it,
+        // but only when it really is a name on the list.
+        const confirmTyped = () => {
+          const typed = cInput.value.trim();
+          if (!typed) { adCountry = ""; paintCountryState(); return; }
+          const exact = COUNTRIES.find(c => c.toLowerCase() === typed.toLowerCase());
+          if (exact) pickCountry(exact);
+        };
+        cInput.addEventListener("change", confirmTyped);
+        cInput.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); confirmTyped(); } });
+        paintCountryState();
+
         let adQuery = "", adT;
         body.querySelector("#adQ").addEventListener("input", e => {
           clearTimeout(adT);
@@ -5719,10 +5790,13 @@ function adminPage() {
           fd.append("caption", body.querySelector("#adCaption").value.trim());
           fd.append("ctaText", body.querySelector("#adCta").value.trim() || "Learn more");
           fd.append("linkUrl", linkUrl);
+          // Half-typed text is not a country. Saving "Rwan" would store a name
+          // nothing matches, so the ad would run nowhere while looking targeted.
+          const typedCountry = cInput.value.trim();
+          if (typedCountry && !adCountry) return toast(`Pick "${typedCountry}" from the list, or clear it to run everywhere`);
           // Sent as a JSON array — the column's shape, so it can hold more than
           // one later without a migration. Omitted entirely when blank, which
           // the server reads as "everywhere".
-          const adCountry = body.querySelector("#adCountry").value.trim();
           if (adCountry) fd.append("countries", JSON.stringify([adCountry]));
 
           ev.currentTarget.disabled = true;
@@ -5733,7 +5807,7 @@ function adminPage() {
             body.querySelector("#adCaption").value = "";
             body.querySelector("#adCta").value = "Learn more";
             body.querySelector("#adLink").value = "";
-            body.querySelector("#adCountry").value = "";
+            cInput.value = ""; adCountry = ""; paintCountryState();
             fileInput.value = "";
             // Clear the search too, or the ad just published is filtered out
             // of the list it was supposed to appear in.
