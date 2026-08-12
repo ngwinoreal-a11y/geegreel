@@ -26,7 +26,6 @@ import '../../features/public_feed/data/post_model.dart';
 import '../../features/search/presentation/search_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/sounds/presentation/sound_screen.dart';
-import '../../features/wallet/presentation/buy_coins_screen.dart';
 import '../../features/wallet/presentation/monetization_screen.dart';
 import '../../features/wallet/presentation/cash_out_screen.dart';
 import '../../features/wallet/presentation/wallet_history_screen.dart';
@@ -103,7 +102,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       _route('/wallet', (context, state) => const WalletScreen()),
       _route('/wallet/history', (context, state) => const WalletHistoryScreen()),
       _route('/wallet/cash-out', (context, state) => const CashOutScreen()),
-      _route('/coins', (context, state) => const BuyCoinsScreen()),
+      // No '/coins' route. Coins are bought on the website: Google Play
+      // requires in-app purchases of digital goods to go through Play Billing
+      // and forbids the app from pointing anywhere else. The screen it opened
+      // is deleted rather than left unrouted — an orphaned file is how the last
+      // one got forgotten about — and git has it for when Play Billing goes in.
       _route('/monetization', (context, state) => const MonetizationScreen()),
       _route('/messages', (context, state) => const InboxScreen()),
       _route('/message-requests', (context, state) => const MessageRequestsScreen()),

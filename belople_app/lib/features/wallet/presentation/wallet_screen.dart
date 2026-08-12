@@ -46,26 +46,29 @@ class WalletScreen extends ConsumerWidget {
                   const SizedBox(height: 6),
                   Text('${wallet.coins}', style: AppTypography.mono(fontSize: 32, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () => context.push('/coins'),
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('Get coins'),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      // Coins arrive from gifts and could be spent but never
-                      // turned back into money — there was no way to ask for
-                      // them in cash at all.
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => context.push('/wallet/cash-out'),
-                          child: const Text('Cash out'),
-                        ),
-                      ),
-                    ],
+                  // There is deliberately no "Get coins" button here.
+                  //
+                  // Google Play requires digital goods bought inside an Android
+                  // app to go through Play Billing, and forbids the app from
+                  // pointing anyone at any other way to pay — a button, a link,
+                  // a price, or even a hint. Coins are bought on the website
+                  // instead, and the app simply shows the balance and spends
+                  // it, which IS allowed (the same "consumption-only" shape
+                  // Netflix and Spotify use). Say nothing here about where more
+                  // coins come from; that silence is the whole point.
+                  //
+                  // When Play Billing is wired in, this button comes back and
+                  // the restriction lifts entirely. See git history for the
+                  // screen it used to open.
+                  //
+                  // Cashing OUT is unaffected: Play's fee applies to money
+                  // coming in, never to paying a creator.
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => context.push('/wallet/cash-out'),
+                      child: const Text('Cash out'),
+                    ),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(

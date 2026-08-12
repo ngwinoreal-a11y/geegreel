@@ -1,7 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_typography.dart';
@@ -45,21 +44,18 @@ class _GiftSheetState extends ConsumerState<_GiftSheet> {
       if (!mounted) return;
       setState(() => _sending = null);
       if (e.response?.statusCode == 402) {
-        // Not enough coins — offer the top-up flow instead of a dead end.
-        Navigator.of(context).pop();
-        _promptBuyCoins(context);
+        // States the fact and stops there. It used to say "top up" and push
+        // straight to the buy screen — both of which Google Play reads as
+        // steering someone to a payment method that isn't Play Billing, which
+        // is the one thing an Android app may not do. "Top up" is enough on its
+        // own: it tells you to go and get some, which is the instruction the
+        // rule is about. Coins are bought on the website; the app must not be
+        // the thing that says so.
+        showTopToast(context, 'Not enough coins for this gift');
       } else {
         showTopToast(context, "Couldn't send gift — try again");
       }
     }
-  }
-
-  void _promptBuyCoins(BuildContext context) {
-    // A bottom SnackBar landed under the nav pill and was often invisible.
-    // Straight to the top-up screen instead — that's what the action button
-    // did anyway, one tap earlier.
-    showTopToast(context, 'Not enough coins — top up to send this gift');
-    context.push('/coins');
   }
 
   @override

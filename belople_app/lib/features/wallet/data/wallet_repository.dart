@@ -57,27 +57,12 @@ class WalletTx {
       );
 }
 
-/// The fixed coin packs the buy-coins sheet offers (COIN_PACKS in index.js).
-/// `cents` is the price in USD cents.
-class CoinPack {
-  const CoinPack(this.coins, this.cents);
-  final int coins;
-  final int cents;
-}
-
-/// Must stay in step with COIN_PACKS in src/index.js — /api/coins/buy rejects
-/// any amount that isn't a known pack, so a pack listed here and not there is
-/// a button that always fails. 1 coin = 1 cent, so cents == coins throughout.
-const List<CoinPack> kCoinPacks = [
-  CoinPack(100, 100),       // $1
-  CoinPack(500, 500),       // $5
-  CoinPack(1000, 1000),     // $10
-  CoinPack(2500, 2500),     // $25
-  CoinPack(5000, 5000),     // $50
-  CoinPack(10000, 10000),   // $100
-  CoinPack(20000, 20000),   // $200
-  CoinPack(50000, 50000),   // $500
-];
+// The coin packs and their prices are deliberately no longer defined here.
+// They live in src/index.js (COIN_PACKS) and are shown on the website, which is
+// where coins are bought — Google Play requires an Android app's digital-goods
+// purchases to go through Play Billing and forbids naming any other route to
+// pay, prices included. Nothing in the app should be able to render a price at
+// all. Git has the list for when Play Billing goes in.
 
 /// `GET /api/wallet`, `GET /api/wallet/history`, `POST /api/coins/buy` — see
 /// src/index.js. A coin purchase is recorded as *pending*; an admin confirms
@@ -114,15 +99,11 @@ class WalletRepository {
         .toList();
   }
 
-  /// Records a pending coin purchase. `method` is how the user says they paid
-  /// (e.g. "MTN MoMo"), `reference` an optional transaction id.
-  Future<void> buyCoins({required int coins, required String method, String? reference}) {
-    return _dio.post('/coins/buy', data: {
-      'coins': coins,
-      'method': method,
-      if (reference != null && reference.isNotEmpty) 'reference': reference,
-    });
-  }
+  // There is no buyCoins() here either. POST /api/coins/buy still exists and
+  // the website calls it — but leaving a binding in the app is how a buy button
+  // gets wired back by accident, and one accident is an account termination
+  // rather than a bug. When Play Billing goes in it won't be this call anyway:
+  // Play verifies the purchase itself and the server credits from that receipt.
 }
 
 final walletRepositoryProvider = Provider<WalletRepository>((ref) {
