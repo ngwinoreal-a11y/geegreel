@@ -151,13 +151,16 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
       autofocus: true,
       onKeyEvent: _onKey,
       child: Scaffold(
-      // Public is a light surface (a deliberate break from the app's dark
-      // theme, like the white Messages inbox) — white page, dark ink.
-      backgroundColor: Colors.white,
+      // Dark, like the rest of the app and like the web's own Public page
+      // (design-public.css: `.public-page { background: var(--bg) }`). It was
+      // white here, which is why Public looked like a different app bolted on
+      // — full-bleed photos on white have nothing to sit against, and every
+      // label needed its own near-black ink that then read as flat.
+      backgroundColor: AppColors.bg,
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        foregroundColor: AppColors.onChrome,
+        backgroundColor: AppColors.bg,
+        surfaceTintColor: AppColors.bg,
+        foregroundColor: AppColors.text,
         elevation: 0,
         centerTitle: true,
         title: const BrandWordmark(),
@@ -168,11 +171,11 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
           itemBuilder: (context, i) => const _PostSkeleton(),
         ),
         error: (e, _) => Center(
-          child: Text("Couldn't load posts", style: AppTypography.sans(color: AppColors.onChromeMuted)),
+          child: Text("Couldn't load posts", style: AppTypography.sans(color: AppColors.muted)),
         ),
         data: (state) {
           if (state.posts.isEmpty) {
-            return Center(child: Text('No posts yet', style: AppTypography.sans(color: AppColors.onChromeMuted)));
+            return Center(child: Text('No posts yet', style: AppTypography.sans(color: AppColors.muted)));
           }
           final items = _interleave(state.posts);
           return BrandRefresh(
@@ -251,7 +254,7 @@ class _PostCard extends ConsumerWidget {
                         Flexible(
                           child: Text(post.user.displayName,
                               overflow: TextOverflow.ellipsis,
-                              style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.onChrome)),
+                              style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.text)),
                         ),
                         // Blue tick only for the official/admin (Belople) account.
                         if (post.user.verified) ...[
@@ -260,7 +263,7 @@ class _PostCard extends ConsumerWidget {
                         ],
                         const SizedBox(width: 8),
                         Text(_timeAgo(post.createdAt),
-                            style: AppTypography.sans(fontSize: 12, color: AppColors.onChromeMuted)),
+                            style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
                       ],
                     ),
                   ),
@@ -282,7 +285,7 @@ class _PostCard extends ConsumerWidget {
                       style: AppTypography.sans(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: post.following ? AppColors.onChromeMuted : AppColors.verified,
+                        color: post.following ? AppColors.muted : AppColors.verified,
                       ),
                     ),
                   ),
@@ -315,8 +318,8 @@ class _PostCard extends ConsumerWidget {
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(color: const Color(0xFFF5F5F6), borderRadius: BorderRadius.circular(14)),
-                child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.onChrome)),
+                decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14)),
+                child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.text)),
               ),
             ),
           Padding(
@@ -337,9 +340,9 @@ class _PostCard extends ConsumerWidget {
                   },
                   child: Row(children: [
                     Icon(post.liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                        color: post.liked ? AppColors.badge : AppColors.onChrome, size: 26),
+                        color: post.liked ? AppColors.badge : AppColors.text, size: 26),
                     const SizedBox(width: 7),
-                    Text('${post.likes}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
+                    Text('${post.likes}', style: AppTypography.mono(fontSize: 15, color: AppColors.text)),
                   ]),
                 ),
                 const SizedBox(width: 20),
@@ -347,9 +350,9 @@ class _PostCard extends ConsumerWidget {
                   behavior: HitTestBehavior.opaque,
                   onTap: () => showPostCommentsSheet(context, postId: post.id),
                   child: Row(children: [
-                    const Icon(Icons.mode_comment_outlined, color: AppColors.onChrome, size: 24),
+                    const Icon(Icons.mode_comment_outlined, color: AppColors.text, size: 24),
                     const SizedBox(width: 7),
-                    Text('${post.comments}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
+                    Text('${post.comments}', style: AppTypography.mono(fontSize: 15, color: AppColors.text)),
                   ]),
                 ),
                 const SizedBox(width: 20),
@@ -362,9 +365,9 @@ class _PostCard extends ConsumerWidget {
                     ref.read(publicFeedControllerProvider.notifier).registerShare(post.id);
                   },
                   child: Row(children: [
-                    const Icon(Icons.send_rounded, color: AppColors.onChrome, size: 23),
+                    const Icon(Icons.send_rounded, color: AppColors.text, size: 23),
                     const SizedBox(width: 7),
-                    Text('${post.shares}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
+                    Text('${post.shares}', style: AppTypography.mono(fontSize: 15, color: AppColors.text)),
                   ]),
                 ),
               ],
@@ -373,7 +376,7 @@ class _PostCard extends ConsumerWidget {
           if (post.imageUrl != null && post.content.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(AppSpacing.publicPostPadding, 10, AppSpacing.publicPostPadding, 0),
-              child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15, color: AppColors.onChrome)),
+              child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15, color: AppColors.text)),
             ),
         ],
       ),
@@ -549,7 +552,7 @@ class _VideoCardState extends State<_VideoCard> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(video.user.displayName,
-                      style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.onChrome)),
+                      style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.text)),
                 ),
               ],
             ),
@@ -644,7 +647,7 @@ class _VideoCardState extends State<_VideoCard> {
           if (video.caption.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(AppSpacing.publicPostPadding, 10, AppSpacing.publicPostPadding, 0),
-              child: Text(video.caption, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppTypography.sans(fontSize: 15, color: AppColors.onChrome)),
+              child: Text(video.caption, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppTypography.sans(fontSize: 15, color: AppColors.text)),
             ),
         ],
       ),

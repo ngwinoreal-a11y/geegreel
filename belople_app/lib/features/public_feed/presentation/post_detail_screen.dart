@@ -52,16 +52,14 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final post = widget.post;
-    // The Public tab is a WHITE photo feed — matching design-public.css. The
-    // scaffold used AppColors.bg (black) before, so the header text (drawn in
-    // AppColors.onChrome, near-black) was black-on-black and effectively
-    // invisible: the post "opened but showed nothing". Mirror the public feed's
-    // white chrome so it reads the same as the list it was opened from.
+    // Dark, matching the Public feed it was opened from and the web's own
+    // Public page. (This screen was briefly white to match a white feed; both
+    // are dark now, which is what design-public.css does.)
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.bg,
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.onChrome,
+        backgroundColor: AppColors.bg,
+        foregroundColor: AppColors.text,
         elevation: 0,
         title: const Text('Post'),
       ),
@@ -87,7 +85,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                       Flexible(
                         child: Text(post.user.displayName,
                             overflow: TextOverflow.ellipsis,
-                            style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.onChrome)),
+                            style: AppTypography.sans(fontWeight: FontWeight.w600, fontSize: 14, color: AppColors.text)),
                       ),
                       if (post.user.verified) ...[
                         const SizedBox(width: 4),
@@ -95,7 +93,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                       ],
                       const SizedBox(width: 8),
                       Text(_timeAgo(post.createdAt),
-                          style: AppTypography.sans(fontSize: 12, color: AppColors.onChromeMuted)),
+                          style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
                     ],
                   ),
                 ),
@@ -117,8 +115,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(color: const Color(0xFFF5F5F6), borderRadius: BorderRadius.circular(14)),
-                child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.onChrome)),
+                decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14)),
+                child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.text)),
               ),
             ),
           Padding(
@@ -130,9 +128,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   onTap: _toggleLike,
                   child: Row(children: [
                     Icon(_liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                        color: _liked ? AppColors.badge : AppColors.onChrome, size: 26),
+                        color: _liked ? AppColors.badge : AppColors.text, size: 26),
                     const SizedBox(width: 7),
-                    Text('$_likes', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
+                    Text('$_likes', style: AppTypography.mono(fontSize: 15, color: AppColors.text)),
                   ]),
                 ),
                 const SizedBox(width: 20),
@@ -140,9 +138,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   behavior: HitTestBehavior.opaque,
                   onTap: () => showPostCommentsSheet(context, postId: post.id),
                   child: Row(children: [
-                    const Icon(Icons.mode_comment_outlined, color: AppColors.onChrome, size: 24),
+                    const Icon(Icons.mode_comment_outlined, color: AppColors.text, size: 24),
                     const SizedBox(width: 7),
-                    Text('${post.comments}', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
+                    Text('${post.comments}', style: AppTypography.mono(fontSize: 15, color: AppColors.text)),
                   ]),
                 ),
                 const SizedBox(width: 20),
@@ -150,9 +148,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   behavior: HitTestBehavior.opaque,
                   onTap: _share,
                   child: Row(children: [
-                    const Icon(Icons.send_rounded, color: AppColors.onChrome, size: 23),
+                    const Icon(Icons.send_rounded, color: AppColors.text, size: 23),
                     const SizedBox(width: 7),
-                    Text('$_shares', style: AppTypography.mono(fontSize: 15, color: AppColors.onChrome)),
+                    Text('$_shares', style: AppTypography.mono(fontSize: 15, color: AppColors.text)),
                   ]),
                 ),
               ],
@@ -163,7 +161,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           if (post.imageUrl != null && post.content.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-              child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15, color: AppColors.onChrome)),
+              child: LinkifiedText(text: post.content, style: AppTypography.sans(fontSize: 15, color: AppColors.text)),
             ),
         ],
       ),
