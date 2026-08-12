@@ -66,6 +66,8 @@ class VideoModel {
     this.song,
     this.soundId,
     this.visibility = 'public',
+    this.category,
+    this.countries = const [],
     required this.videoUrl,
     this.thumbUrl,
     this.width,
@@ -99,6 +101,12 @@ class VideoModel {
   /// 'public' | 'followers' | 'private'. Shown as a badge on the owner's own
   /// grid so they can tell which of their videos aren't public.
   final String visibility;
+
+  /// One of kInterests, or null. Matched against the viewer's signup interests.
+  final String? category;
+
+  /// Target country names (currently at most one). Empty means everywhere.
+  final List<String> countries;
   final String videoUrl;
   final String? thumbUrl;
   final int? width;
@@ -155,6 +163,8 @@ class VideoModel {
       song: song,
       soundId: soundId,
       visibility: visibility,
+      category: category,
+      countries: countries,
       videoUrl: videoUrl,
       thumbUrl: thumbUrl,
       width: width,
@@ -222,6 +232,8 @@ class VideoModel {
       song: json['song'] as String?,
       soundId: json['soundId']?.toString(),
       visibility: json['visibility'] as String? ?? 'public',
+      category: json['category'] as String?,
+      countries: (json['countries'] as List?)?.map((e) => e.toString()).toList() ?? const [],
       videoUrl: json['videoUrl'] as String? ?? '',
       thumbUrl: json['thumbUrl'] as String?,
       width: (json['width'] as num?)?.toInt(),

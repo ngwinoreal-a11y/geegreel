@@ -1511,6 +1511,9 @@ async function handle(request, env, ctx) {
     }
 
     {
+      // The viewer's country, for ad targeting below. Empty string when signed
+      // out or unset — the SQL treats that as "show me untargeted ads".
+      const viewerCountry = user?.country || "";
       // One ad woven into each batch, a few videos in rather than first thing —
       // never on the (ad-free) following tab.
       if (videos.length >= 3) {
@@ -1526,8 +1529,15 @@ async function handle(request, env, ctx) {
           WHERE a.status = 'active'
             AND (a.kind = 'admin'
                  OR (a.paid = 1 AND (a.reach_target IS NULL OR a.impressions < a.reach_target)))
+            -- Country targeting. Unlike a video's (a preference), an ad's is a
+            -- real constraint: the advertiser paid to reach a place, and
+            -- spending their reach elsewhere is spending their money wrongly.
+            -- An untargeted ad still shows to everyone, and a viewer with no
+            -- country set sees untargeted ads rather than none at all.
+            AND (a.countries IS NULL OR a.countries = '[]'
+                 OR (? != '' AND instr(a.countries, ?) > 0))
           ORDER BY RANDOM() LIMIT 1
-        `).bind(user?.id || "").first();
+        `).bind(user?.id || "", viewerCountry, `"${viewerCountry}"`).first();
         if (ad) videos.splice(Math.min(4, videos.length), 0, shapeAd(ad));
       }
     }
@@ -1890,10 +1900,12 @@ async function handle(request, env, ctx) {
     const id = uid();
     await env.DB.prepare(`
       INSERT INTO ads (id, kind, type, media_key, sponsor_name, caption, cta_text, link_url,
-                       status, reach_target, price_cents, paid, impressions, clicks, created_by, created_at)
-      VALUES (?, 'user', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, 0, 0, ?, ?)
+                       status, reach_target, price_cents, paid, impressions, clicks, created_by, created_at, countries)
+      VALUES (?, 'user', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, 0, 0, ?, ?, ?)
     `).bind(id, type, mediaKey, user.display_name || user.username, caption, ctaText,
-            linkUrl || null, reach, priceCents, user.id, now()).run();
+            linkUrl || null, reach, priceCents, user.id, now(),
+            // Where the advertiser wants to be seen. Null = everywhere.
+            normalizeCountries(form.get("countries"))).run();
     return json({ ad: { id } }, 201);
   }
 
@@ -2009,13 +2021,15 @@ async function handle(request, env, ctx) {
     });
 
     await env.DB.prepare(`
-      INSERT INTO ads (id, type, media_key, sponsor_name, caption, cta_text, link_url, status, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+      INSERT INTO ads (id, type, media_key, sponsor_name, caption, cta_text, link_url, status, created_by, created_at, countries)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
     `).bind(
       id, type, key, sponsorName,
       (form.get("caption") || "").trim(),
       (form.get("ctaText") || "Learn more").trim(),
-      linkUrl, user.id, now()
+      linkUrl, user.id, now(),
+      // Admin house ads target the same way self-serve ones do. Null = everywhere.
+      normalizeCountries(form.get("countries"))
     ).run();
 
     await logAdmin(env, user.id, "ad_created", "ad", id, sponsorName);

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -38,6 +39,9 @@ class PromoteRepository {
     String caption = '',
     String ctaText = 'Learn more',
     String? sponsorName,
+    /// One country name, or null for everywhere. An ad's targeting is a real
+    /// constraint, not a preference — the advertiser paid to reach a place.
+    String? country,
   }) async {
     final form = FormData.fromMap({
       'kind': kind,
@@ -47,6 +51,7 @@ class PromoteRepository {
       'ctaText': ctaText,
       if (linkUrl != null && linkUrl.isNotEmpty) 'linkUrl': linkUrl,
       if (sponsorName != null && sponsorName.isNotEmpty) 'sponsorName': sponsorName,
+      if (country != null) 'countries': jsonEncode([country]),
       if (media != null)
         'media': await MultipartFile.fromFile(media.path,
             filename: kind == 'video' ? 'ad.mp4' : 'ad.jpg'),

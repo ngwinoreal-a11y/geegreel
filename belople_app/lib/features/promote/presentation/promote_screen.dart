@@ -8,6 +8,8 @@ import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
+import '../../../core/theme/app_radii.dart';
+import '../../../core/widgets/country_picker.dart';
 import '../data/promote_repository.dart';
 
 /// Self-serve ad creation: pick what to promote (video / image / link), choose
@@ -34,6 +36,18 @@ class _PromoteScreenState extends ConsumerState<PromoteScreen> {
   final _captionController = TextEditingController();
   final _ctaController = TextEditingController(text: 'Learn more');
   AdTier _tier = kAdTiers.first;
+
+  /// Where the ad runs. Null = everywhere. Unlike a video's country (a
+  /// preference), this is a real constraint — the advertiser paid to reach a
+  /// place, so spending their reach elsewhere spends their money wrongly.
+  String? _country;
+
+  Future<void> _pickCountry() async {
+    final picked = await showCountryPicker(context, current: _country);
+    if (picked == null || !mounted) return;
+    setState(() => _country = picked == kEverywhere ? null : picked);
+  }
+
   final _picker = ImagePicker();
   bool _submitting = false;
   String? _error;
@@ -88,6 +102,7 @@ class _PromoteScreenState extends ConsumerState<PromoteScreen> {
         kind: _kind.name,
         reach: _tier.reach,
         priceCents: _tier.priceCents,
+        country: _country,
         media: _kind == _AdKind.link ? null : _media,
         linkUrl: _kind == _AdKind.link ? _linkController.text.trim() : null,
         caption: _captionController.text.trim(),
@@ -283,6 +298,43 @@ class _PromoteScreenState extends ConsumerState<PromoteScreen> {
           _TierRow(tier: t, selected: _tier.reach == t.reach, onTap: () => setState(() => _tier = t)),
           const SizedBox(height: 10),
         ],
+
+        const SizedBox(height: 20),
+        Text('WHERE', style: AppTypography.sectionLabel),
+        const SizedBox(height: 6),
+        Text(
+          _country == null
+              ? 'Everywhere — your reach is spent across all countries'
+              : 'Your whole reach is spent in $_country',
+          style: AppTypography.sans(fontSize: 14, color: AppColors.muted),
+        ),
+        const SizedBox(height: 10),
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _pickCountry,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(AppRadii.md),
+              border: Border.all(color: _country == null ? AppColors.border : AppColors.accent),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.public, size: 20, color: AppColors.muted),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(_country ?? 'Everywhere',
+                      style: AppTypography.sans(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: _country == null ? AppColors.muted : AppColors.text)),
+                ),
+                const Icon(Icons.chevron_right, color: AppColors.muted),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -294,6 +346,7 @@ class _PromoteScreenState extends ConsumerState<PromoteScreen> {
         _reviewRow('Type', _kind.name[0].toUpperCase() + _kind.name.substring(1)),
         _reviewRow('Reach', '~${_tier.reachLabel} people'),
         _reviewRow('Price', '\$${_tier.priceUsd}'),
+        _reviewRow('Where', _country ?? 'Everywhere'),
         if (_captionController.text.trim().isNotEmpty) _reviewRow('Caption', _captionController.text.trim()),
         if (_kind == _AdKind.link) _reviewRow('Link', _linkController.text.trim()),
         const SizedBox(height: 20),

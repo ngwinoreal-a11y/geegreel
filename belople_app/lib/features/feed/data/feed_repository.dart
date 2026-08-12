@@ -105,6 +105,29 @@ class FeedRepository {
   /// `DELETE /api/videos/:id` — removes the caller's own video.
   Future<void> deleteVideo(String videoId) => _dio.delete('/videos/$videoId');
 
+  /// Changes a video already posted. Only the keys passed are touched, so
+  /// editing the audience can't silently clear a category. Deleting used to be
+  /// the only option, which meant losing the video's likes, comments and watch
+  /// history to fix who could see it.
+  Future<VideoModel> editVideo(
+    String videoId, {
+    String? visibility,
+    String? category,
+    bool clearCategory = false,
+    String? country,
+    bool clearCountry = false,
+  }) async {
+    final res = await _dio.patch('/videos/$videoId', data: {
+      if (visibility != null) 'visibility': visibility,
+      // `null` is a meaningful value here (clear it), so a separate flag says
+      // "send null" rather than "omit".
+      if (clearCategory) 'category': null else if (category != null) 'category': category,
+      if (clearCountry) 'countries': <String>[] else if (country != null) 'countries': [country],
+    });
+    return VideoModel.fromJson(
+        (res.data as Map<String, dynamic>)['video'] as Map<String, dynamic>);
+  }
+
   /// `POST /api/videos/:id/view` — records a watch for Belo Flow. Sends how
   /// long/how much of the clip was watched so the recommender learns from real
   /// behaviour, not just likes. Best-effort: never throws into the UI.

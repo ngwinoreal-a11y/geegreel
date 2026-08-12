@@ -19,6 +19,7 @@ import '../../feed/data/feed_repository.dart';
 import '../../feed/data/video_model.dart';
 import '../../profile/data/profile_repository.dart';
 import '../data/video_watermark_service.dart';
+import 'edit_video_sheet.dart';
 
 /// Ports the video "•••" sheet from the reference: quick actions (Save video /
 /// Gift / Delete-or-Report), a Share-with row (Copy link / WhatsApp), Repost,
@@ -194,6 +195,13 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
   final Set<String> _sentTo = {};
   final Set<String> _sendingTo = {};
 
+  Future<void> _edit() async {
+    // Close this sheet first so the editor isn't stacked on top of it — backing
+    // out of the editor should land on the video, not back here.
+    Navigator.of(context).pop();
+    await showEditVideoSheet(context, video);
+  }
+
   Future<void> _sendTo(ThreadPreview t) async {
     final id = t.user.id;
     // A blank id would key every row's state to the same entry — one tap would
@@ -271,6 +279,12 @@ class _MoreSheetState extends ConsumerState<_MoreSheet> {
                           label: '${_fmtSpeed(ref.watch(playbackSpeedProvider))} Speed',
                           onTap: _cycleSpeed,
                         ),
+                        // Edit sits before Delete on purpose: changing who can
+                        // see a video was only possible by deleting it and
+                        // re-uploading, which threw away its likes, comments
+                        // and watch history.
+                        if (isOwn)
+                          _QuickAction(icon: Icons.edit_outlined, label: 'Edit', onTap: _edit),
                         if (isOwn)
                           _QuickAction(icon: Icons.delete_outline, label: 'Delete', danger: true, onTap: _delete)
                         else
