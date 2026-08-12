@@ -4447,6 +4447,128 @@ async function handle(request, env, ctx) {
     return json({ ok: true });
   }
 
+  // ----- cash out your coin balance -----
+  //
+  // Gifts land in coins, and coins could be spent but never withdrawn — the
+  // admin payouts view read `earnings` (what the platform owes a monetized
+  // creator for views), which is a different thing entirely.
+  //
+  // Coins leave the balance when the request is MADE, not when it's paid:
+  // otherwise the same coins could be requested and then spent before anyone
+  // processed it. A rejection puts them back.
+  if (path === "/api/wallet/payout" && method === "POST") {
+    requireUser(user);
+    const { coins, method: payMethod, details } = await request.json().catch(() => ({}));
+    const amount = Math.floor(Number(coins) || 0);
+
+    if (amount <= 0) return err("How many coins do you want to cash out?");
+    if (!["mobile_money", "bank", "paypal"].includes(payMethod)) {
+      return err("Choose how you want to be paid");
+    }
+    if (!details?.trim()) return err("Add the number or account to pay to");
+
+    const cents = amount * COIN_PRICE_CENTS;
+    if (cents < MIN_PAYOUT_CENTS) {
+      return err(`The smallest cash-out is $${(MIN_PAYOUT_CENTS / 100).toFixed(2)}`);
+    }
+    // Re-read the balance rather than trusting anything the client sent.
+    const fresh = await env.DB.prepare("SELECT coin_balance FROM users WHERE id = ?")
+      .bind(user.id).first();
+    if ((fresh?.coin_balance || 0) < amount) return err("You don't have that many coins");
+
+    // One pending request at a time — otherwise a balance can be committed
+    // twice over before either is reviewed.
+    const open = await env.DB.prepare(
+      "SELECT id FROM coin_payouts WHERE user_id = ? AND status = 'pending'"
+    ).bind(user.id).first();
+    if (open) return err("You already have a cash-out being processed", 409);
+
+    const id = uid();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE users SET coin_balance = coin_balance - ? WHERE id = ?")
+        .bind(amount, user.id),
+      env.DB.prepare(`
+        INSERT INTO coin_payouts (id, user_id, coins, amount_cents, method, details, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+      `).bind(id, user.id, amount, cents, payMethod, details.trim(), now()),
+    ]);
+
+    const after = await env.DB.prepare("SELECT coin_balance FROM users WHERE id = ?")
+      .bind(user.id).first();
+    await recordTx(env, user.id, "payout_requested", -amount, 0,
+                   after.coin_balance, after.coin_balance * COIN_PRICE_CENTS, id, "Cash-out requested");
+
+    return json({ ok: true, payout: { id, coins: amount, amountCents: cents, status: "pending" } });
+  }
+
+  // Your own cash-out history, so a request isn't a black hole after sending.
+  if (path === "/api/wallet/payouts" && method === "GET") {
+    requireUser(user);
+    const { results } = await env.DB.prepare(`
+      SELECT id, coins, amount_cents, method, status, note, created_at, reviewed_at
+      FROM coin_payouts WHERE user_id = ? ORDER BY created_at DESC LIMIT 20
+    `).bind(user.id).all();
+    return json({
+      payouts: results.map(r => ({
+        id: r.id, coins: r.coins, amountCents: r.amount_cents, method: r.method,
+        status: r.status, note: r.note, createdAt: r.created_at, reviewedAt: r.reviewed_at,
+      })),
+      minPayoutCents: MIN_PAYOUT_CENTS,
+    });
+  }
+
+  // ----- admin: the coin cash-out queue -----
+  if (path === "/api/admin/coin-payouts" && method === "GET") {
+    requireStaff(user);
+    const status = url.searchParams.get("status") || "pending";
+    const { results } = await env.DB.prepare(`
+      SELECT p.*, u.username, u.display_name, u.coin_balance
+      FROM coin_payouts p JOIN users u ON u.id = p.user_id
+      WHERE p.status = ? ORDER BY p.created_at ASC LIMIT 100
+    `).bind(status).all();
+    return json({
+      payouts: results.map(r => ({
+        id: r.id, coins: r.coins, amountCents: r.amount_cents,
+        method: r.method, details: r.details, status: r.status, note: r.note,
+        username: r.username, displayName: r.display_name,
+        balanceAfter: r.coin_balance, createdAt: r.created_at,
+      })),
+    });
+  }
+
+  const coinPayoutMatch = /^\/api\/admin\/coin-payouts\/([\w-]+)$/.exec(path);
+  if (coinPayoutMatch && method === "POST") {
+    requireStaff(user);
+    const { action, note } = await request.json().catch(() => ({}));
+    if (!["paid", "rejected"].includes(action)) return err("action must be paid or rejected");
+
+    const p = await env.DB.prepare("SELECT * FROM coin_payouts WHERE id = ?")
+      .bind(coinPayoutMatch[1]).first();
+    if (!p) return err("Cash-out not found", 404);
+    if (p.status !== "pending") return err("That cash-out was already handled", 409);
+
+    const ops = [
+      env.DB.prepare(`
+        UPDATE coin_payouts SET status = ?, note = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?
+      `).bind(action, note || null, now(), user.id, p.id),
+    ];
+    // Rejecting hands the coins back — they were taken at request time.
+    if (action === "rejected") {
+      ops.push(env.DB.prepare("UPDATE users SET coin_balance = coin_balance + ? WHERE id = ?")
+        .bind(p.coins, p.user_id));
+    }
+    await env.DB.batch(ops);
+
+    if (action === "rejected") {
+      const after = await env.DB.prepare("SELECT coin_balance FROM users WHERE id = ?")
+        .bind(p.user_id).first();
+      await recordTx(env, p.user_id, "payout_rejected", p.coins, 0,
+                     after.coin_balance, after.coin_balance * COIN_PRICE_CENTS, p.id,
+                     note || "Cash-out rejected");
+    }
+    return json({ ok: true, status: action });
+  }
+
   if (path === "/api/admin/payouts" && method === "GET") {
     requireStaff(user);
     const { results } = await env.DB.prepare(`

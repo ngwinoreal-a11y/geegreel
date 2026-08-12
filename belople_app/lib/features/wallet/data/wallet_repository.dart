@@ -9,6 +9,7 @@ class WalletData {
     required this.lifetimeGiftsCents,
     required this.giftsReceived,
     required this.giftsSent,
+    this.minPayoutCents = 1000,
   });
 
   final int coins;
@@ -17,12 +18,16 @@ class WalletData {
   final int giftsReceived;
   final int giftsSent;
 
+  /// Smallest cash-out the server will accept, in cents (1 coin = 1 cent).
+  final int minPayoutCents;
+
   factory WalletData.fromJson(Map<String, dynamic> json) => WalletData(
         coins: (json['coins'] as num?)?.toInt() ?? 0,
         giftBalanceCents: (json['giftBalanceCents'] as num?)?.toInt() ?? 0,
         lifetimeGiftsCents: (json['lifetimeGiftsCents'] as num?)?.toInt() ?? 0,
         giftsReceived: (json['giftsReceived'] as num?)?.toInt() ?? 0,
         giftsSent: (json['giftsSent'] as num?)?.toInt() ?? 0,
+        minPayoutCents: (json['minPayoutCents'] as num?)?.toInt() ?? 1000,
       );
 }
 
@@ -81,6 +86,20 @@ const List<CoinPack> kCoinPacks = [
 class WalletRepository {
   WalletRepository(this._dio);
   final Dio _dio;
+
+  /// Asks for a coin balance to be paid out. The server deducts the coins
+  /// immediately — so the same coins can't be requested and then spent while
+  /// the payout waits — and returns them if the request is turned down.
+  Future<void> requestPayout({
+    required int coins,
+    required String method,
+    required String details,
+  }) =>
+      _dio.post('/wallet/payout', data: {
+        'coins': coins,
+        'method': method,
+        'details': details,
+      });
 
   Future<WalletData> fetch() async {
     final res = await _dio.get('/wallet');

@@ -56,13 +56,24 @@ class WalletScreen extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(width: 10),
+                      // Coins arrive from gifts and could be spent but never
+                      // turned back into money — there was no way to ask for
+                      // them in cash at all.
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: () => context.push('/wallet/history'),
-                          child: const Text('History'),
+                          onPressed: () => context.push('/wallet/cash-out'),
+                          child: const Text('Cash out'),
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: () => context.push('/wallet/history'),
+                      child: const Text('History'),
+                    ),
                   ),
                 ],
               ),

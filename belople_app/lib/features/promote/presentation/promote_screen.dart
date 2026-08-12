@@ -136,7 +136,9 @@ class _PromoteScreenState extends ConsumerState<PromoteScreen> {
               Text('Sent for review', style: AppTypography.sans(fontSize: 18, fontWeight: FontWeight.w700)),
               const SizedBox(height: 6),
               Text(
-                "An admin will review your ad. Once approved it goes live to ~${_tier.reachLabel} people. You'll get a notification with views and clicks.",
+                // A timeframe, not a role: "an admin will" tells the advertiser
+                // nothing they can plan around.
+                "Your ad is being reviewed — usually within a day. Once approved it goes live to ~${_tier.reachLabel} people, and you'll get a notification with views and clicks.",
                 textAlign: TextAlign.center,
                 style: AppTypography.sans(fontSize: 14, color: AppColors.muted),
               ),
@@ -358,7 +360,7 @@ class _PromoteScreenState extends ConsumerState<PromoteScreen> {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'After payment an admin reviews your ad before it goes live. Payment provider is being set up.',
+                'Your ad is reviewed after payment — usually within a day — before it goes live. Payment provider is being set up.',
                 style: AppTypography.sans(fontSize: 13, color: AppColors.muted),
               ),
             ),

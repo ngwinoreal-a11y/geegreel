@@ -48,7 +48,10 @@ class _BuyCoinsScreenState extends ConsumerState<BuyCoinsScreen> {
           backgroundColor: AppColors.surface,
           title: const Text('Request sent'),
           content: const Text(
-              'An admin will add your coins once the payment is confirmed.'),
+              // Says how long rather than who: naming an internal role tells
+              // the buyer nothing they can act on, while a timeframe does.
+              'Your coins are added once the payment is confirmed — usually '
+              'within a few hours.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),

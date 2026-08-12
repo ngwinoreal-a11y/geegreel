@@ -28,6 +28,7 @@ import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/sounds/presentation/sound_screen.dart';
 import '../../features/wallet/presentation/buy_coins_screen.dart';
 import '../../features/wallet/presentation/monetization_screen.dart';
+import '../../features/wallet/presentation/cash_out_screen.dart';
 import '../../features/wallet/presentation/wallet_history_screen.dart';
 import '../../features/wallet/presentation/wallet_screen.dart';
 
@@ -101,6 +102,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       _route('/settings', (context, state) => const SettingsScreen()),
       _route('/wallet', (context, state) => const WalletScreen()),
       _route('/wallet/history', (context, state) => const WalletHistoryScreen()),
+      _route('/wallet/cash-out', (context, state) => const CashOutScreen()),
       _route('/coins', (context, state) => const BuyCoinsScreen()),
       _route('/monetization', (context, state) => const MonetizationScreen()),
       _route('/messages', (context, state) => const InboxScreen()),
