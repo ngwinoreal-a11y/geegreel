@@ -2913,6 +2913,18 @@ function settingsPage() {
       <p class="lbl" style="margin-top:12px">Email</p>
       <div class="field"><input id="email" value="${u.email}" autocapitalize="none"></div>
 
+      <!-- Country was asked once during signup and never again, so anyone who
+           joined before that step existed — or skipped it — had none, and no
+           video or ad aimed at a place could ever reach them. -->
+      <p class="lbl" style="margin-top:12px">Country</p>
+      <div class="field">
+        <select id="settingsCountry">
+          <option value="">Not set</option>
+          ${COUNTRIES.map(c => `<option value="${esc(c)}" ${u.country === c ? "selected" : ""}>${esc(c)}</option>`).join("")}
+        </select>
+      </div>
+      <p style="margin:-6px 0 14px;font-size:12px;color:var(--muted)">Used to show you videos and ads meant for where you are</p>
+
       <button class="btn-primary" id="saveProfile">Save changes</button>
       <p class="err" id="perr" style="display:none"></p>
 
@@ -3104,6 +3116,7 @@ function settingsPage() {
             displayName: el.querySelector("#displayName").value.trim(),
             bio: el.querySelector("#bio").value.trim(),
             email: el.querySelector("#email").value.trim(),
+            country: el.querySelector("#settingsCountry").value,
           },
         });
         store.user = r.user;
