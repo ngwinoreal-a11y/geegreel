@@ -5631,12 +5631,17 @@ function adminPage() {
           <div class="field"><input id="adFile" type="file" accept="image/*,video/*"></div>
           <button class="btn-primary" id="adSubmit" style="margin-bottom:22px">Publish ad</button>
           <p class="sect">Running</p>
+          <!-- Search the running ads. The users tab has always had one; ads
+               did not, so past a screenful the only way to find an ad was to
+               scroll. Matches sponsor, caption, link, country, status and (for
+               self-serve ads) the advertiser's username. -->
+          <div class="field"><input id="adQ" placeholder="Search ads — sponsor, link, country, status" autocapitalize="none"></div>
           <div id="adList"><div class="spin"></div></div>`;
 
-        const loadAds = async () => {
+        const loadAds = async (q = "") => {
           const list = body.querySelector("#adList");
           list.innerHTML = `<div class="spin"></div>`;
-          const r = await api("/admin/ads");
+          const r = await api(`/admin/ads${q ? `?q=${encodeURIComponent(q)}` : ""}`);
           list.innerHTML = r.ads.length ? r.ads.map(a => `
             <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px;display:flex;gap:12px">
               <div style="width:56px;height:74px;border-radius:8px;overflow:hidden;background:var(--raised);flex-shrink:0">
@@ -5659,22 +5664,32 @@ function adminPage() {
                   <button data-del="${a.id}" style="flex:1;border:1px solid #5C1F1F;border-radius:6px;padding:6px 0;font-size:11px;font-weight:600;color:#FF6B6B">Delete</button>
                 </div>
               </div>
-            </div>`).join("") : `<p class="empty">No ads yet.</p>`;
+            </div>`).join("")
+            : (q ? `<p class="empty">No ads match "${esc(q)}".</p>` : `<p class="empty">No ads yet.</p>`);
 
+          // Pausing or deleting keeps you where you were in the search rather
+          // than dumping you back to the full list.
           list.querySelectorAll("[data-toggle]").forEach(b => b.onclick = async () => {
             try {
               await api(`/admin/ads/${b.dataset.toggle}`, { method: "PATCH", body: { status: b.dataset.next } });
-              loadAds();
+              loadAds(adQuery);
             } catch (e) { toast(e.message); }
           });
           list.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
             if (!confirm("Delete this ad?")) return;
             try {
               await api(`/admin/ads/${b.dataset.del}`, { method: "DELETE" });
-              toast("Deleted"); loadAds();
+              toast("Deleted"); loadAds(adQuery);
             } catch (e) { toast(e.message); }
           });
         };
+
+        let adQuery = "", adT;
+        body.querySelector("#adQ").addEventListener("input", e => {
+          clearTimeout(adT);
+          adQuery = e.target.value.trim();
+          adT = setTimeout(() => loadAds(adQuery), 300);
+        });
 
         body.querySelector("#adSubmit").onclick = async (ev) => {
           const sponsorName = body.querySelector("#adSponsor").value.trim();
@@ -5705,7 +5720,12 @@ function adminPage() {
             body.querySelector("#adCaption").value = "";
             body.querySelector("#adCta").value = "Learn more";
             body.querySelector("#adLink").value = "";
+            body.querySelector("#adCountry").value = "";
             fileInput.value = "";
+            // Clear the search too, or the ad just published is filtered out
+            // of the list it was supposed to appear in.
+            body.querySelector("#adQ").value = "";
+            adQuery = "";
             loadAds();
           } catch (e) {
             toast(e.message);

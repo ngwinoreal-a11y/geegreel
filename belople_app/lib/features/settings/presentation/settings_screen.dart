@@ -5,9 +5,11 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../../core/widgets/country_picker.dart';
 import '../../../core/widgets/seg_control.dart';
 import '../../auth/application/auth_controller.dart';
 import '../data/settings_repository.dart';
@@ -43,6 +45,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late bool _notifyLikes;
   late bool _notifyComments;
   late bool _notifyFollows;
+  String? _country;
+
+  /// Same picker the composer and signup use, so the name saved here is
+  /// character-for-character the one an advertiser targets.
+  Future<void> _pickCountry() async {
+    final picked = await showCountryPicker(
+      context,
+      current: _country,
+      noneLabel: 'Not set',
+      noneSubtitle: "Don't say where I am",
+    );
+    if (picked == null || !mounted) return;
+    final value = picked == kEverywhere ? null : picked;
+    final previous = _country;
+    _patch({'country': value ?? ''}, () => _country = value, () => _country = previous);
+  }
 
   @override
   void initState() {
@@ -58,6 +76,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _notifyLikes = me?.notifyLikes ?? true;
     _notifyComments = me?.notifyComments ?? true;
     _notifyFollows = me?.notifyFollows ?? true;
+    _country = me?.country;
   }
 
   @override
@@ -260,6 +279,41 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 12),
           _label('Email'),
           TextField(controller: _emailController, keyboardType: TextInputType.emailAddress, onChanged: (_) => setState(() => _dirty = true), decoration: const InputDecoration()),
+          const SizedBox(height: 12),
+          // Country was asked once at signup and never again, so anyone who
+          // joined before that step — or skipped it — had no country on their
+          // account and no way to add one. Ads and videos aimed at a place
+          // could never reach them. Saves immediately, like the toggles below.
+          _label('Country'),
+          InkWell(
+            onTap: _pickCountry,
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(AppRadii.md),
+              ),
+              child: Row(children: [
+                Expanded(
+                  child: Text(
+                    _country ?? 'Not set',
+                    style: AppTypography.sans(
+                      fontSize: 15,
+                      // "Not set" is a placeholder, a real country is a value —
+                      // they must not look the same.
+                      color: _country == null ? AppColors.muted : AppColors.text,
+                    ),
+                  ),
+                ),
+                const Icon(Icons.expand_more, size: 20, color: AppColors.muted),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text('Used to show you videos and ads meant for where you are',
+              style: AppTypography.sans(fontSize: 12, color: AppColors.muted)),
           const SizedBox(height: 14),
           if (_dirty)
             SizedBox(

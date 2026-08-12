@@ -17,6 +17,7 @@ class UserModel {
     this.notifyLikes = true,
     this.notifyComments = true,
     this.notifyFollows = true,
+    this.country,
     this.followersCount = 0,
     this.followingCount = 0,
     this.likesCount = 0,
@@ -39,6 +40,12 @@ class UserModel {
   final bool notifyLikes;
   final bool notifyComments;
   final bool notifyFollows;
+
+  /// The country picked at signup, or later in Settings. Ad targeting matches
+  /// it by NAME against the same kCountries list the picker offers, so it must
+  /// stay a name and never become a code.
+  final String? country;
+
   final int followersCount;
   final int followingCount;
   final int likesCount;
@@ -66,6 +73,7 @@ class UserModel {
         notifyLikes: json['notifyLikes'] as bool? ?? true,
         notifyComments: json['notifyComments'] as bool? ?? true,
         notifyFollows: json['notifyFollows'] as bool? ?? true,
+        country: json['country'] as String?,
         following: json['following'] as bool? ?? false,
       );
 
@@ -88,6 +96,7 @@ class UserModel {
         'notifyLikes': notifyLikes,
         'notifyComments': notifyComments,
         'notifyFollows': notifyFollows,
+        'country': country,
         'following': following,
       };
 
@@ -114,6 +123,7 @@ class UserModel {
       notifyLikes: notifyLikes,
       notifyComments: notifyComments,
       notifyFollows: notifyFollows,
+      country: country,
       followersCount: (stats['followers'] as num?)?.toInt() ?? followersCount,
       followingCount: (stats['following'] as num?)?.toInt() ?? followingCount,
       likesCount: (stats['likes'] as num?)?.toInt() ?? likesCount,

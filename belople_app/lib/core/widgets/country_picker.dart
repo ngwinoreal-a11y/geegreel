@@ -8,16 +8,30 @@ import '../../features/auth/data/signup_options.dart';
 /// Picks ONE country from the signup list, with a search field — the list runs
 /// past 170 entries, so scrolling to find one is not a real option.
 ///
-/// Returns the chosen name, or null if the sheet was dismissed. "Everywhere" is
-/// offered as an explicit first row rather than expecting the user to work out
-/// that clearing the field means no targeting.
-Future<String?> showCountryPicker(BuildContext context, {String? current}) {
+/// Returns the chosen name, or null if the sheet was dismissed. The "no
+/// country" choice is an explicit first row rather than expecting the user to
+/// work out that clearing the field means no targeting.
+///
+/// [noneLabel]/[noneSubtitle] name that first row. The defaults are the
+/// targeting wording ("Everywhere"), which is right when you're saying where
+/// something should RUN and wrong when you're saying where you ARE — Settings
+/// passes its own.
+Future<String?> showCountryPicker(
+  BuildContext context, {
+  String? current,
+  String noneLabel = 'Everywhere',
+  String noneSubtitle = 'No country preference',
+}) {
   return showModalBottomSheet<String?>(
     context: context,
     isScrollControlled: true,
     backgroundColor: AppColors.surface,
     shape: const RoundedRectangleBorder(borderRadius: AppRadii.sheetTop),
-    builder: (_) => _CountryPickerSheet(current: current),
+    builder: (_) => _CountryPickerSheet(
+      current: current,
+      noneLabel: noneLabel,
+      noneSubtitle: noneSubtitle,
+    ),
   );
 }
 
@@ -26,8 +40,14 @@ Future<String?> showCountryPicker(BuildContext context, {String? current}) {
 const String kEverywhere = '__everywhere__';
 
 class _CountryPickerSheet extends StatefulWidget {
-  const _CountryPickerSheet({this.current});
+  const _CountryPickerSheet({
+    this.current,
+    required this.noneLabel,
+    required this.noneSubtitle,
+  });
   final String? current;
+  final String noneLabel;
+  final String noneSubtitle;
 
   @override
   State<_CountryPickerSheet> createState() => _CountryPickerSheetState();
@@ -112,10 +132,10 @@ class _CountryPickerSheetState extends State<_CountryPickerSheet> {
                   if (_query.trim().isEmpty && i == 0) {
                     return ListTile(
                       leading: const Icon(Icons.public, color: AppColors.muted),
-                      title: Text('Everywhere',
+                      title: Text(widget.noneLabel,
                           style: AppTypography.sans(
                               fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.text)),
-                      subtitle: Text('No country preference',
+                      subtitle: Text(widget.noneSubtitle,
                           style: AppTypography.sans(fontSize: 14, color: AppColors.muted)),
                       trailing: widget.current == null
                           ? const Icon(Icons.check, color: AppColors.accent)

@@ -1319,6 +1319,17 @@ async function handle(request, env, ctx) {
 
     if (b.language !== undefined) { updates.push("language = ?"); binds.push(String(b.language)); }
 
+    // Country was collected at signup and then never again. Everyone who
+    // joined before that step existed — and everyone who skipped it — was
+    // stuck with no country, which means ad targeting can never reach them
+    // and the "where are my viewers" numbers can never count them. Blank
+    // clears it back to "not set" (= sees untargeted ads, as before).
+    if (b.country !== undefined) {
+      const v = String(b.country || "").trim();
+      if (v.length > 60) return err("That doesn't look like a country");
+      updates.push("country = ?"); binds.push(v || null);
+    }
+
     if (!updates.length) return err("Nothing to update");
 
     binds.push(user.id);
@@ -2005,9 +2016,26 @@ async function handle(request, env, ctx) {
   // ----- admin: ads -----
   if (path === "/api/admin/ads" && method === "GET") {
     requireStaff(user);
-    const { results } = await env.DB.prepare(
-      "SELECT * FROM ads ORDER BY created_at DESC"
-    ).all();
+    // Search over everything the admin list actually shows: sponsor, caption,
+    // destination link, the target country, the status word, and — for
+    // self-serve ads — whose ad it is. Once there are more than a screenful of
+    // ads, finding one meant scrolling; there was no way to ask for it.
+    // instr(lower(), lower()) rather than LIKE so a % or _ typed into the box
+    // is searched for literally instead of behaving as a wildcard.
+    const q = (url.searchParams.get("q") || "").trim();
+    const { results } = q
+      ? await env.DB.prepare(`
+          SELECT a.* FROM ads a
+          LEFT JOIN users u ON u.id = a.created_by
+          WHERE instr(lower(coalesce(a.sponsor_name, '')), lower(?)) > 0
+             OR instr(lower(coalesce(a.caption,      '')), lower(?)) > 0
+             OR instr(lower(coalesce(a.link_url,     '')), lower(?)) > 0
+             OR instr(lower(coalesce(a.countries,    '')), lower(?)) > 0
+             OR instr(lower(coalesce(a.status,       '')), lower(?)) > 0
+             OR instr(lower(coalesce(u.username,     '')), lower(?)) > 0
+          ORDER BY a.created_at DESC
+        `).bind(q, q, q, q, q, q).all()
+      : await env.DB.prepare("SELECT * FROM ads ORDER BY created_at DESC").all();
     return json({ ads: results.map(a => ({ ...shapeAd(a), status: a.status, impressions: a.impressions, clicks: a.clicks, createdAt: a.created_at, countries: (() => { try { return a.countries ? JSON.parse(a.countries) : []; } catch { return []; } })() })) });
   }
 
