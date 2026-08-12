@@ -98,6 +98,11 @@ class FeedRepository {
     return ((res.data as Map<String, dynamic>)['count'] as num?)?.toInt() ?? 0;
   }
 
+  /// `POST /api/ads/:id/view` — one impression. The app never called this, so
+  /// an ad's view count only ever moved when it was seen on the web, and a paid
+  /// ad's reach target could never be reached from a phone.
+  Future<void> recordAdView(String adId) => _dio.post('/ads/$adId/view');
+
   /// `POST /api/ads/:id/click` — records a CTA tap (best-effort).
   Future<void> recordAdClick(String adId) => _dio.post('/ads/$adId/click');
 

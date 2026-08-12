@@ -1,17 +1,35 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../feed/data/feed_repository.dart';
+import '../../feed/data/video_model.dart';
 import '../data/post_model.dart';
 import '../data/public_feed_repository.dart';
 
 class PublicFeedState {
-  const PublicFeedState({this.posts = const [], this.nextCursor, this.isLoadingMore = false});
+  const PublicFeedState({
+    this.posts = const [],
+    this.ad,
+    this.nextCursor,
+    this.isLoadingMore = false,
+  });
   final List<PostModel> posts;
+
+  /// The photo/text ad for this session's feed, spliced in a few cards down by
+  /// the screen. Held here (not per page) so scrolling doesn't stack one ad per
+  /// batch loaded.
+  final VideoModel? ad;
+
   final String? nextCursor;
   final bool isLoadingMore;
 
-  PublicFeedState copyWith({List<PostModel>? posts, String? nextCursor, bool? isLoadingMore}) {
+  PublicFeedState copyWith({
+    List<PostModel>? posts,
+    VideoModel? ad,
+    String? nextCursor,
+    bool? isLoadingMore,
+  }) {
     return PublicFeedState(
       posts: posts ?? this.posts,
+      ad: ad ?? this.ad,
       nextCursor: nextCursor ?? this.nextCursor,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
     );
@@ -24,16 +42,16 @@ class PublicFeedController extends AsyncNotifier<PublicFeedState> {
     final cached = ref.read(publicFeedRepositoryProvider).readCachedPosts();
     if (cached != null) {
       Future.delayed(Duration.zero, _silentRefresh);
-      return PublicFeedState(posts: cached.posts, nextCursor: cached.nextCursor);
+      return PublicFeedState(posts: cached.posts, ad: cached.ad, nextCursor: cached.nextCursor);
     }
     final page = await ref.read(publicFeedRepositoryProvider).fetchPosts();
-    return PublicFeedState(posts: page.posts, nextCursor: page.nextCursor);
+    return PublicFeedState(posts: page.posts, ad: page.ad, nextCursor: page.nextCursor);
   }
 
   Future<void> _silentRefresh() async {
     try {
       final page = await ref.read(publicFeedRepositoryProvider).fetchPosts();
-      state = AsyncData(PublicFeedState(posts: page.posts, nextCursor: page.nextCursor));
+      state = AsyncData(PublicFeedState(posts: page.posts, ad: page.ad, nextCursor: page.nextCursor));
     } catch (_) {
       // Keep showing the cached posts on a transient network failure.
     }

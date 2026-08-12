@@ -2,11 +2,18 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/cache/local_cache.dart';
 import '../../../core/network/api_client.dart';
+import '../../feed/data/video_model.dart';
 import 'post_model.dart';
 
 class PostsPage {
-  const PostsPage({required this.posts, this.nextCursor});
+  const PostsPage({required this.posts, this.ad, this.nextCursor});
   final List<PostModel> posts;
+
+  /// The photo/text ad to weave into this page, or null. Sent beside the posts
+  /// rather than inside them so a PostModel is only ever a real post — it
+  /// reuses VideoModel, which already knows how to be an ad.
+  final VideoModel? ad;
+
   final String? nextCursor;
 }
 
@@ -39,7 +46,12 @@ class PublicFeedRepository {
     final posts = (data['posts'] as List<dynamic>? ?? [])
         .map((p) => PostModel.fromJson(p as Map<String, dynamic>))
         .toList();
-    return PostsPage(posts: posts, nextCursor: data['nextCursor'] as String?);
+    final rawAd = data['ad'] as Map<String, dynamic>?;
+    return PostsPage(
+      posts: posts,
+      ad: rawAd == null ? null : VideoModel.fromJson(rawAd),
+      nextCursor: data['nextCursor'] as String?,
+    );
   }
 
   /// `DELETE /api/posts/:id` — removes the caller's own public post.
