@@ -196,10 +196,24 @@ const MIN_PAYOUT_CENTS = 1000; // $10 — don't queue payouts smaller than the f
 // the same money in a loop.
 
 const COIN_PRICE_CENTS = 1;          // 1 coin costs $0.01 to buy
-const CREATOR_SHARE = 0.5;           // creator keeps 50% of a gift's value
 
-// Nothing below 2 coins: at 50% share, a 1-coin gift floors to zero for the
-// creator — the viewer pays and the creator gets nothing, which is indefensible.
+/// The creator keeps 60% of a gift's value; Belople keeps 40%.
+///
+/// Deliberately generous, and the number to say out loud. On TikTok a creator
+/// nets roughly 20-30% of what the viewer actually paid (the store takes 30%,
+/// then the coin-to-diamond conversion takes about half of the rest) — and the
+/// figure is buried, so creators only discover it when they try to withdraw.
+/// Saying "you keep 60%" plainly, before anyone earns anything, is the whole
+/// difference between a rate and a grievance.
+///
+/// This works because coins are bought on the WEB, where no store fee applies:
+/// $10 in, $6 to the creator, $4 to Belople. If Play Billing is ever added,
+/// a $10 purchase through it nets $8.50, so the same 60% leaves only $2.50 —
+/// thin but positive. Revisit this number then, not before.
+const CREATOR_SHARE = 0.6;
+
+// Nothing below 2 coins: a 1-coin gift floors to zero for the creator — the
+// viewer pays and the creator gets nothing, which is indefensible.
 const GIFTS = [
   { key: "rose",     name: "Rose",        coins: 2,    emoji: "🌹" },
   { key: "heart",     name: "Heart",       coins: 2,      emoji: "❤️" },
