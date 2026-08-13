@@ -146,7 +146,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           initialMode: extra?['mode'] as String?,
         );
       }),
-      _route('/camera', (context, state) => const CameraCaptureScreen()),
+      // ?sound= arrives from a sound page's "Use this sound": the camera names
+      // that sound and plays it while recording, instead of you performing to
+      // a track you can neither see nor hear.
+      _route('/camera', (context, state) =>
+          CameraCaptureScreen(soundId: state.uri.queryParameters['sound'])),
       _route('/promote', (context, state) => const PromoteScreen()),
       _route('/my-ads', (context, state) => const MyAdsScreen()),
       _route('/admin/ads', (context, state) => const AdminAdsScreen()),

@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:just_audio/just_audio.dart';
+import '../../../core/network/api_client.dart';
+import '../../sounds/data/sound_repository.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_typography.dart';
@@ -23,16 +26,25 @@ import 'camera_filters.dart';
 ///   `photo:<path>`  a captured/gallery photo     (Public)
 ///   'text'          switch to a text-only post   (Text)
 ///   'compose'       open the composer with nothing (fallback)
-class CameraCaptureScreen extends StatefulWidget {
-  const CameraCaptureScreen({super.key});
+class CameraCaptureScreen extends ConsumerStatefulWidget {
+  const CameraCaptureScreen({super.key, this.soundId});
+
+  /// Arriving from a sound page's "Use this sound". The camera names the sound
+  /// at the top and plays it while you record, so you can perform to it — you
+  /// used to land here with no sign a sound was attached at all, and record in
+  /// silence to a track you couldn't hear.
+  final String? soundId;
 
   @override
-  State<CameraCaptureScreen> createState() => _CameraCaptureScreenState();
+  ConsumerState<CameraCaptureScreen> createState() => _CameraCaptureScreenState();
 }
 
 enum _CamMode { short, public, text }
 
-class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsBindingObserver {
+class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with WidgetsBindingObserver {
+  /// The sound being recorded to, once fetched. Null when none is attached.
+  SoundModel? _attachedSound;
+  AudioPlayer? _soundPlayer;
   List<CameraDescription> _cameras = const [];
   CameraController? _controller;
   int _cameraIndex = 0;
@@ -61,6 +73,18 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _setup();
+    _loadAttachedSound();
+  }
+
+  /// Best-effort: the camera still works if the sound can't be fetched, it
+  /// just doesn't name it or play it.
+  Future<void> _loadAttachedSound() async {
+    final id = widget.soundId;
+    if (id == null) return;
+    try {
+      final detail = await ref.read(soundRepositoryProvider).fetch(id);
+      if (mounted) setState(() => _attachedSound = detail.sound);
+    } catch (_) {/* no name, no playback — recording is unaffected */}
   }
 
   Future<void> _setup() async {
@@ -133,6 +157,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
     if (controller == null || !controller.value.isInitialized) return;
     if (_recording) {
       _timer?.cancel();
+      unawaited(_soundPlayer?.stop() ?? Future.value());
       try {
         final file = await controller.stopVideoRecording();
         if (mounted) {
@@ -149,6 +174,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
         return;
       }
       setState(() { _recording = true; _elapsed = Duration.zero; });
+      unawaited(_playAttachedSound());
       _timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
         if (!mounted) return;
         setState(() => _elapsed += const Duration(milliseconds: 200));
@@ -196,7 +222,22 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _controller?.dispose();
+    _soundPlayer?.dispose();
     super.dispose();
+  }
+
+  /// Starts the attached sound from the top when recording begins, and stops
+  /// it when recording ends — so what you perform to is what the clip is cut
+  /// against, from the same instant.
+  Future<void> _playAttachedSound() async {
+    final url = _attachedSound?.audioUrl;
+    if (url == null) return;
+    try {
+      final p = _soundPlayer ??= AudioPlayer();
+      await p.setUrl(mediaUrl(url));
+      await p.seek(Duration.zero);
+      await p.play();
+    } catch (_) {/* silence is survivable; a failed record is not */}
   }
 
   @override
@@ -245,6 +286,37 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
                         ),
                       ),
 
+                      // The sound you're recording to, named at the top in the
+                      // black band. Arriving from "Use this sound" gave no sign
+                      // one was attached at all, so you were performing to a
+                      // track you could neither see nor hear.
+                      if (_attachedSound != null)
+                        Positioned(
+                          top: 12, left: 44, right: 44,
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.55),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                const Icon(Icons.music_note, size: 19, color: AppColors.accent),
+                                const SizedBox(width: 7),
+                                Flexible(
+                                  child: Text(
+                                    _attachedSound!.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppTypography.sans(
+                                        fontSize: 17, fontWeight: FontWeight.w700, color: Colors.white),
+                                  ),
+                                ),
+                              ]),
+                            ),
+                          ),
+                        ),
+
                       // Right rail: flash. The filters toggle used to live here
                       // too — the looks are on the shelf above the shutter now,
                       // so there is nothing left to toggle.
@@ -255,17 +327,23 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
                         ]),
                       ),
 
+                      // The elapsed time sits BELOW the sound's name rather
+                      // than at the very top, where the two landed on each
+                      // other and the name covered the clock.
                       if (_recording)
                         Positioned(
-                          top: 12, left: 0, right: 0,
+                          top: _attachedSound != null ? 76 : 14,
+                          left: 0, right: 0,
                           child: Center(
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                               decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
                               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                                Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle)),
-                                const SizedBox(width: 6),
-                                Text(_fmt(_elapsed), style: AppTypography.sans(fontSize: 13, color: Colors.white)),
+                                Container(width: 9, height: 9, decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle)),
+                                const SizedBox(width: 7),
+                                Text(_fmt(_elapsed),
+                                    style: AppTypography.sans(
+                                        fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
                               ]),
                             ),
                           ),

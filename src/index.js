@@ -3138,8 +3138,14 @@ async function handle(request, env, ctx) {
     const sound = await env.DB.prepare(`
       SELECT snd.id, snd.title, snd.uses, snd.created_at, snd.r2_key, snd.source_video_id,
              u.id AS author_id, u.username AS author_username, u.display_name AS author_display_name,
-             u.avatar_key AS author_avatar_key
-      FROM sounds snd JOIN users u ON u.id = snd.author_user_id
+             u.avatar_key AS author_avatar_key,
+             -- Same three the picker needs, for the same reason: the source
+             -- video is where a sound's cover, its length and its only real
+             -- name come from.
+             v.thumb_key AS cover_key, v.duration AS duration, v.caption AS source_caption
+      FROM sounds snd
+      JOIN users u ON u.id = snd.author_user_id
+      LEFT JOIN videos v ON v.id = snd.source_video_id
       WHERE snd.id = ?
     `).bind(soundMatch[1]).first();
     if (!sound) return err("Sound not found", 404);
@@ -3154,6 +3160,9 @@ async function handle(request, env, ctx) {
         title: sound.title,
         uses: sound.uses,
         audioUrl: `/api/media/${sound.r2_key}`,
+        coverUrl: sound.cover_key ? `/api/media/${sound.cover_key}` : null,
+        duration: sound.duration || null,
+        sourceCaption: (sound.source_caption || "").trim() || null,
         author: {
           id: sound.author_id, username: sound.author_username,
           displayName: sound.author_display_name,
