@@ -3089,18 +3089,45 @@ async function handle(request, env, ctx) {
   // would be parsed as an id.
   if (path === "/api/sounds/search" && method === "GET") {
     const q = (url.searchParams.get("q") || "").trim();
-    if (!q) return json({ sounds: [] });
-    const { results } = await env.DB.prepare(`
-      SELECT snd.id, snd.title, snd.uses, snd.r2_key,
-             u.username AS author_username, u.display_name AS author_display_name
-      FROM sounds snd JOIN users u ON u.id = snd.author_user_id
-      WHERE snd.title LIKE ? OR u.username LIKE ?
-      ORDER BY snd.uses DESC LIMIT 30
-    `).bind(`%${q}%`, `%${q}%`).all();
+
+    // Everything a picker row needs, from data we already had and weren't
+    // sending: the source video's thumbnail is the sound's cover art, and its
+    // duration is the sound's length. Its caption is a fallback name — every
+    // sound is titled "Original sound - <username>" (nothing ever asks the
+    // poster for a title), so a search returned four identical rows with no
+    // way to tell them apart.
+    const SELECT = `
+      SELECT snd.id, snd.title, snd.uses, snd.r2_key, snd.created_at,
+             u.username AS author_username, u.display_name AS author_display_name,
+             v.thumb_key AS cover_key, v.duration AS duration, v.caption AS source_caption
+      FROM sounds snd
+      JOIN users u ON u.id = snd.author_user_id
+      LEFT JOIN videos v ON v.id = snd.source_video_id
+    `;
+
+    // An empty box used to return an empty list, so the sheet opened blank and
+    // you had to already know what you were looking for. The most-used sounds
+    // are a better answer to "what's here?" than nothing.
+    const { results } = q
+      ? await env.DB.prepare(`${SELECT}
+          WHERE snd.title LIKE ? OR u.username LIKE ? OR v.caption LIKE ?
+          ORDER BY snd.uses DESC LIMIT 30
+        `).bind(`%${q}%`, `%${q}%`, `%${q}%`).all()
+      : await env.DB.prepare(`${SELECT}
+          ORDER BY snd.uses DESC, snd.created_at DESC LIMIT 30
+        `).all();
+
     return json({
       sounds: results.map(s => ({
-        id: s.id, title: s.title, uses: s.uses,
+        id: s.id,
+        title: s.title,
+        uses: s.uses,
         audioUrl: `/api/media/${s.r2_key}`,
+        coverUrl: s.cover_key ? `/api/media/${s.cover_key}` : null,
+        duration: s.duration || null,
+        // Shown under the title when the sound has no name of its own, so two
+        // clips by the same person read as two different sounds.
+        sourceCaption: (s.source_caption || "").trim() || null,
         author: { username: s.author_username, displayName: s.author_display_name },
       })),
     });
