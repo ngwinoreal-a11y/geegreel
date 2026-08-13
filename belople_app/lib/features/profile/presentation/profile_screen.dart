@@ -109,9 +109,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           const SizedBox(height: 16),
           if (isSelf)
+            // No ring. A full-width outline around a quiet, occasional action,
+            // sitting between the stats and the grid, drew more of the eye than
+            // either of them — the same reason History and Monetization lost
+            // theirs on the wallet.
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton(onPressed: () => context.push('/settings'), child: const Text('Edit profile')),
+              child: TextButton(
+                onPressed: () => context.push('/settings'),
+                style: TextButton.styleFrom(foregroundColor: AppColors.accent),
+                child: const Text('Edit profile'),
+              ),
             )
           else
             Row(

@@ -63,18 +63,32 @@ class WalletScreen extends ConsumerWidget {
                   //
                   // Cashing OUT is unaffected: Play's fee applies to money
                   // coming in, never to paying a creator.
+                  // White, not the brand amber. Full width and amber made a
+                  // slab of yellow the size of the card — the loudest thing on
+                  // a screen that is otherwise about numbers. White carries the
+                  // same weight without the shouting, and reads as the serious
+                  // action it is; the app already uses white for its floating
+                  // chrome, so it isn't a new colour.
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
                       onPressed: () => context.push('/wallet/cash-out'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.chrome,
+                        foregroundColor: AppColors.onChrome,
+                      ),
                       child: const Text('Cash out'),
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 4),
+                  // No outline. A ring around a secondary action drew as much
+                  // of the eye as the primary one above it — the two read as
+                  // equals when they aren't. Plain amber text is enough.
                   SizedBox(
                     width: double.infinity,
-                    child: OutlinedButton(
+                    child: TextButton(
                       onPressed: () => context.push('/wallet/history'),
+                      style: TextButton.styleFrom(foregroundColor: AppColors.accent),
                       child: const Text('History'),
                     ),
                   ),
@@ -97,9 +111,11 @@ class WalletScreen extends ConsumerWidget {
                 Expanded(child: _StatCard(label: 'Gifts sent', value: '${wallet.giftsSent}')),
               ],
             ),
-            const SizedBox(height: 20),
-            OutlinedButton(
+            const SizedBox(height: 12),
+            // Also unringed — see the History button above.
+            TextButton(
               onPressed: () => context.push('/monetization'),
+              style: TextButton.styleFrom(foregroundColor: AppColors.accent),
               child: const Text('Monetization'),
             ),
           ],
