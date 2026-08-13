@@ -670,6 +670,35 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Says what the percentage on the button is counting. Burning a
+            // look in can outlast the upload that follows it, and a bar sitting
+            // at 40% with no word for it reads as a stuck app.
+            //
+            // It goes FIRST, not at the foot of the page: on the audience step
+            // the category chips run well past the bottom of the screen, so a
+            // status line below them is one nobody publishing ever sees. That
+            // is exactly how it shipped on the device the first time.
+            if (_uploading) ...[
+              Row(
+                children: [
+                  Text('$_stage…',
+                      style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: _progress == 0 ? null : _progress,
+                        minHeight: 4,
+                        backgroundColor: AppColors.surface,
+                        valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+            ],
             if (_usingSound)
               Container(
                 margin: const EdgeInsets.only(bottom: 16),
@@ -1024,30 +1053,6 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
             if (_mode != _ComposerMode.video) ...[
               const SizedBox(height: 16),
               _captionField(),
-            ],
-            // Says what the percentage on the button is counting. Burning a
-            // look in can take longer than the upload that follows it, and a
-            // bar sitting at 40% with no word for it reads as a stuck app.
-            if (_uploading) ...[
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Text('$_stage…',
-                      style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(999),
-                      child: LinearProgressIndicator(
-                        value: _progress == 0 ? null : _progress,
-                        minHeight: 4,
-                        backgroundColor: AppColors.surface,
-                        valueColor: const AlwaysStoppedAnimation(AppColors.accent),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
             ],
             if (_error != null) ...[
               const SizedBox(height: 10),
