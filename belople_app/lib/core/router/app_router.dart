@@ -27,6 +27,7 @@ import '../../features/search/presentation/search_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../../features/live/data/live_repository.dart';
 import '../../features/live/presentation/live_broadcast_screen.dart';
+import '../../features/live/presentation/live_watch_screen.dart';
 import '../../features/sounds/presentation/sound_screen.dart';
 import '../../features/wallet/presentation/monetization_screen.dart';
 import '../../features/wallet/presentation/cash_out_screen.dart';
@@ -160,6 +161,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // single-use, and it has no business in a URL.
       _route('/live/broadcast', (context, state) =>
           LiveBroadcastScreen(start: state.extra as LiveStart)),
+      // Watching someone else's. Registered AFTER /live/broadcast so that
+      // literal path wins over the :id pattern.
+      _route('/live/:id', (context, state) =>
+          LiveWatchScreen(sessionId: state.pathParameters['id']!)),
       _route('/promote', (context, state) => const PromoteScreen()),
       _route('/my-ads', (context, state) => const MyAdsScreen()),
       _route('/admin/ads', (context, state) => const AdminAdsScreen()),

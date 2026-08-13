@@ -1,0 +1,258 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:video_player/video_player.dart';
+
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../core/widgets/top_toast.dart';
+import '../../feed/data/feed_repository.dart';
+import '../data/live_repository.dart';
+import 'live_overlay.dart';
+
+/// Watching someone else's live.
+///
+/// There is no seek bar, no replay button and no way back down the timeline —
+/// not because they are hidden, but because there is nothing behind the live
+/// edge to reach. The URL is the live stream's own, whose manifest is a sliding
+/// window; the recording has a different one and is never handed out.
+class LiveWatchScreen extends ConsumerStatefulWidget {
+  const LiveWatchScreen({super.key, required this.sessionId});
+
+  final String sessionId;
+
+  @override
+  ConsumerState<LiveWatchScreen> createState() => _LiveWatchScreenState();
+}
+
+class _LiveWatchScreenState extends ConsumerState<LiveWatchScreen> {
+  VideoPlayerController? _player;
+  LiveSession? _session;
+  String? _error;
+  bool _ended = false;
+  bool _following = false;
+
+  Timer? _poll;
+  Timer? _reactFlush;
+  int _since = 0;
+  int _viewers = 0;
+  int _pendingReacts = 0;
+  final List<LiveComment> _comments = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _open();
+  }
+
+  Future<void> _open() async {
+    try {
+      final repo = ref.read(liveRepositoryProvider);
+      final s = await repo.session(widget.sessionId);
+      if (!mounted) return;
+      setState(() {
+        _session = s;
+        _viewers = s.viewerCount;
+        _following = s.following;
+      });
+
+      if (!s.isLive || s.playbackUrl == null) {
+        setState(() => _ended = true);
+        return;
+      }
+
+      final player = VideoPlayerController.networkUrl(Uri.parse(s.playbackUrl!));
+      await player.initialize();
+      await player.play();
+      if (!mounted) {
+        player.dispose();
+        return;
+      }
+      setState(() => _player = player);
+
+      // Announce yourself once, so the room sees you arrive. Best effort — an
+      // arrival nobody saw is not a reason to fail to watch.
+      unawaited(repo.join(widget.sessionId).catchError((e) {
+        debugPrint('[BLLIVE] join line failed: $e');
+      }));
+
+      _poll = Timer.periodic(const Duration(seconds: 3), (_) => _tick());
+      // Reactions are sent in batches, not per tap. Taps arrive in bursts of
+      // ten and the count is approximate by design; a request each would be
+      // the most expensive thing on the screen.
+      _reactFlush = Timer.periodic(const Duration(seconds: 2), (_) => _flushReacts());
+    } catch (e) {
+      debugPrint('[BLLIVE] opening the live failed: $e');
+      if (mounted) setState(() => _error = "Couldn't open this live — it may have ended");
+    }
+  }
+
+  Future<void> _tick() async {
+    try {
+      final t = await ref.read(liveRepositoryProvider).tick(widget.sessionId, since: _since);
+      if (!mounted) return;
+      setState(() {
+        _viewers = t.viewerCount;
+        _since = t.since;
+        _comments.addAll(t.comments);
+        if (_comments.length > 60) _comments.removeRange(0, _comments.length - 60);
+      });
+      // The creator stopped, or their limit was reached. Either way there is
+      // nothing left to play and nothing to go back to.
+      if (t.ended) _finish();
+    } catch (e) {
+      // The video is a separate connection and is probably still fine, so a
+      // dropped poll stays off the screen — but not out of the log.
+      debugPrint('[BLLIVE] poll failed: $e');
+    }
+  }
+
+  void _finish() {
+    if (_ended) return;
+    _poll?.cancel();
+    _reactFlush?.cancel();
+    _player?.pause();
+    setState(() => _ended = true);
+  }
+
+  Future<void> _flushReacts() async {
+    final n = _pendingReacts;
+    if (n == 0) return;
+    _pendingReacts = 0;
+    try {
+      await ref.read(liveRepositoryProvider).react(widget.sessionId, n);
+    } catch (e) {
+      debugPrint('[BLLIVE] sending $n reactions failed: $e');
+    }
+  }
+
+  Future<void> _send(String text) async {
+    try {
+      await ref.read(liveRepositoryProvider).comment(widget.sessionId, text);
+      // No local echo: the next poll is 3 seconds away at most and brings the
+      // real row back with its id. Echoing meant every comment appeared twice
+      // for one tick.
+    } catch (e) {
+      debugPrint('[BLLIVE] sending a comment failed: $e');
+      if (mounted) showTopToast(context, "Couldn't send that — try again");
+    }
+  }
+
+  Future<void> _follow() async {
+    final creator = _session?.creator;
+    if (creator == null) return;
+    // Optimistic: the button is the whole interaction and it must not wait on
+    // the network to look like it worked.
+    setState(() => _following = true);
+    try {
+      final r = await ref.read(feedRepositoryProvider).setFollowing(creator.id, true);
+      if (!mounted) return;
+      // A private account files a request instead — saying "following" then
+      // would be a lie.
+      if (!r.following && r.requested) {
+        setState(() => _following = false);
+        showTopToast(context, 'Follow request sent');
+      }
+    } catch (e) {
+      debugPrint('[BLLIVE] follow failed: $e');
+      if (mounted) {
+        setState(() => _following = false);
+        showTopToast(context, "Couldn't follow — try again");
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    _reactFlush?.cancel();
+    // Anything the finger already tapped still counts.
+    if (_pendingReacts > 0) unawaited(_flushReacts());
+    _player?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final player = _player;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: _error != null
+          ? _LiveGone(message: _error!, onClose: () => context.pop())
+          : _ended
+              ? _LiveGone(
+                  message: '${_session?.creator.name ?? 'This live'} has ended',
+                  onClose: () => context.pop())
+              : Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (player != null && player.value.isInitialized)
+                      // Letterboxed, not cropped. One of the streams read off
+                      // the reference was a landscape screen-share on black,
+                      // and BoxFit.cover would have thrown most of it away.
+                      Center(
+                        child: AspectRatio(
+                          aspectRatio: player.value.aspectRatio,
+                          child: VideoPlayer(player),
+                        ),
+                      )
+                    else
+                      const Center(child: CircularProgressIndicator(color: Colors.white)),
+
+                    LiveOverlay(
+                      creator: _session?.creator,
+                      title: _session?.title,
+                      viewers: _viewers,
+                      comments: _comments,
+                      connecting: player == null,
+                      following: _following,
+                      onFollow: _follow,
+                      onSend: _send,
+                      // Counted locally and flushed in batches; the heart is
+                      // meant to feel instant, not to be exact.
+                      onReact: () => _pendingReacts++,
+                      onClose: () => context.pop(),
+                    ),
+                  ],
+                ),
+    );
+  }
+}
+
+class _LiveGone extends StatelessWidget {
+  const _LiveGone({required this.message, required this.onClose});
+  final String message;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.podcasts, color: Colors.white38, size: 46),
+              const SizedBox(height: 16),
+              Text(message,
+                  textAlign: TextAlign.center,
+                  style: AppTypography.sans(
+                      fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white)),
+              const SizedBox(height: 8),
+              // Says the rule out loud rather than leaving someone hunting for
+              // a replay button that does not exist.
+              Text('Lives are not saved — you had to be there.',
+                  textAlign: TextAlign.center,
+                  style: AppTypography.sans(fontSize: 13.5, color: Colors.white54)),
+              const SizedBox(height: 20),
+              TextButton(
+                onPressed: onClose,
+                style: TextButton.styleFrom(foregroundColor: AppColors.accent),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        ),
+      );
+}
