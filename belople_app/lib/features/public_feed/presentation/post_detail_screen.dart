@@ -128,7 +128,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   onTap: _toggleLike,
                   child: Row(children: [
                     Icon(_liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                        color: _liked ? AppColors.badge : AppColors.text, size: 26),
+                        color: _liked ? AppColors.like : AppColors.text, size: 26),
                     const SizedBox(width: 7),
                     Text('$_likes', style: AppTypography.mono(fontSize: 15, color: AppColors.text)),
                   ]),

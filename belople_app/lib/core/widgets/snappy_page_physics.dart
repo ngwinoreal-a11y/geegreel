@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart';
 
 /// Page snapping tuned for a full-screen vertical feed: a flick lands on the
 /// next page fast and stops dead.

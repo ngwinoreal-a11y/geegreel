@@ -69,6 +69,16 @@ abstract final class AppColors {
   /// 3.68:1, corrected to 4.97:1)
   static const badge = Color(0xFFD91F42);
 
+  /// A heart that has been tapped — ANYWHERE. The video rail, a Public post,
+  /// either comments sheet, a live.
+  ///
+  /// It exists because there were two reds doing this job: `badge` in most
+  /// places and the darker `danger` in the video comments, so the same action
+  /// was a different colour depending on which sheet you were in. A liked
+  /// heart is one thing and should be one colour, and naming it stops the next
+  /// screen picking whichever red is nearest to hand.
+  static const like = badge;
+
   /// --online: presence dot / online-tag text
   static const online = Color(0xFF3AD35A);
 

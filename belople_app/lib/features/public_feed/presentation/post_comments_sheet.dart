@@ -401,7 +401,7 @@ class _CommentContent extends StatelessWidget {
             child: Column(
               children: [
                 Icon(comment.liked ? Icons.favorite : Icons.favorite_border,
-                    size: 18, color: comment.liked ? AppColors.badge : AppColors.muted),
+                    size: 18, color: comment.liked ? AppColors.like : AppColors.muted),
                 if (comment.likes > 0)
                   Text('${comment.likes}',
                       style: AppTypography.mono(fontSize: 11, color: AppColors.muted)),

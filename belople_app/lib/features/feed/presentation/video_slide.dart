@@ -586,7 +586,7 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                   onTap: widget.onLikeTap,
                   child: _RailButton(
                     icon: Icons.favorite_rounded,
-                    color: widget.video.liked ? AppColors.badge : Colors.white,
+                    color: widget.video.liked ? AppColors.like : Colors.white,
                     count: widget.video.counts.likes,
                     size: 33,
                   ),
@@ -645,7 +645,7 @@ class _ActionRail extends StatelessWidget {
           onTap: onLikeTap,
           child: _RailButton(
             icon: Icons.favorite_rounded,
-            color: video.liked ? AppColors.badge : Colors.white,
+            color: video.liked ? AppColors.like : Colors.white,
             count: video.counts.likes,
             size: 33,
           ),

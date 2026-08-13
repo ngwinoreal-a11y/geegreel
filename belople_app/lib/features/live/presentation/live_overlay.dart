@@ -347,7 +347,7 @@ class LiveOverlay extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           children: [
-            Icon(icon, size: 15, color: isGift ? AppColors.danger : Colors.white70),
+            Icon(icon, size: 15, color: isGift ? AppColors.like : Colors.white70),
             const SizedBox(width: 8),
             Flexible(
               child: Text(
@@ -648,7 +648,7 @@ class _ViewerBarState extends State<_ViewerBar> {
                   color: Colors.white.withValues(alpha: 0.16),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.favorite, color: AppColors.danger, size: 29),
+                child: const Icon(Icons.favorite, color: AppColors.like, size: 29),
               ),
             ),
           ],

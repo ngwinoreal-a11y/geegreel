@@ -498,7 +498,7 @@ class _PostCard extends ConsumerWidget {
             Row(children: [
               _ActionIcon(
                 icon: post.liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                color: post.liked ? AppColors.badge : _ink,
+                color: post.liked ? AppColors.like : _ink,
                 count: post.likes,
                 onTap: () {
                   if (!ref.read(isLoggedInProvider)) {

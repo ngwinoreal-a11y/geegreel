@@ -359,7 +359,7 @@ class _CommentContent extends StatelessWidget {
                   Icon(
                     comment.myReaction == 'like' ? Icons.favorite : Icons.favorite_border,
                     size: 16,
-                    color: comment.myReaction == 'like' ? AppColors.danger : AppColors.onSheetMuted,
+                    color: comment.myReaction == 'like' ? AppColors.like : AppColors.onSheetMuted,
                   ),
                   if (comment.likes > 0) ...[
                     const SizedBox(height: 2),
