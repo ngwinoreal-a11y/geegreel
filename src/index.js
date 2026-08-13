@@ -232,8 +232,13 @@ const CREATOR_SHARE = 0.5;
 
 // Nothing below 2 coins: a 1-coin gift floors to zero for the creator — the
 // viewer pays and the creator gets nothing, which is indefensible.
+// The prices the app shows AND the prices it charges. `giftByKey` takes the
+// first match, so a duplicated key silently decides the price — `rose` was in
+// here twice, at 2 and at 5, and the 2 won. The app showed 5, the server took
+// 2, and the creator was paid on the 2. Five gifts went out that way before
+// anyone could see it, which is why assertUniqueGiftKeys() below now refuses
+// to let a duplicate exist at all.
 const GIFTS = [
-  { key: "rose",     name: "Rose",        coins: 2,    emoji: "🌹" },
   { key: "heart",     name: "Heart",       coins: 2,      emoji: "❤️" },
   { key: "rose",      name: "Rose",        coins: 5,      emoji: "🌹" },
   { key: "star",      name: "Star",        coins: 10,     emoji: "⭐" },
@@ -271,6 +276,30 @@ const COIN_PACKS = [
   { coins: 20000,  cents: 20000 },  // $200
   { coins: 50000,  cents: 50000 },  // $500
 ];
+
+/// Refuses to start with two gifts sharing a key.
+///
+/// This is deliberately loud and deliberately at module load. A duplicate does
+/// not break anything visibly — it just quietly makes one of the two prices
+/// unreachable, and the one that wins is whichever was typed first. That is
+/// how Rose came to be shown at 5 and charged at 2 for weeks. A price the code
+/// can't reach is worse than a crash, because a crash gets noticed.
+function assertUniqueGiftKeys(gifts) {
+  const seen = new Set();
+  const dupes = [];
+  for (const g of gifts) {
+    if (seen.has(g.key)) dupes.push(g.key);
+    seen.add(g.key);
+  }
+  if (dupes.length) {
+    throw new Error(
+      `GIFTS has duplicate keys: ${[...new Set(dupes)].join(", ")}. ` +
+      "giftByKey takes the first match, so the later price would never be charged."
+    );
+  }
+  return gifts;
+}
+assertUniqueGiftKeys(GIFTS);
 
 const giftByKey = k => GIFTS.find(g => g.key === k);
 
