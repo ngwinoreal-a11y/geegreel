@@ -20,10 +20,13 @@ import '../../profile/data/profile_repository.dart';
 import '../../public_feed/application/public_feed_controller.dart';
 import '../../sounds/data/sound_repository.dart';
 import '../../sounds/presentation/sound_picker_sheet.dart';
+import '../data/capture_result.dart';
 import '../../../core/widgets/country_picker.dart';
 import '../../auth/data/signup_options.dart';
 import '../data/audio_mix_service.dart';
 import '../data/upload_repository.dart';
+import '../data/video_edit_service.dart';
+import 'camera_filters.dart';
 import 'posted_sheet.dart';
 import '../../../core/widgets/top_toast.dart';
 
@@ -43,6 +46,7 @@ class ComposerScreen extends ConsumerStatefulWidget {
     this.videoPath,
     this.imagePath,
     this.initialMode,
+    this.filterIndex = 0,
   });
 
   /// When arriving from a sound page's "Use this sound", the picked video is
@@ -58,6 +62,11 @@ class ComposerScreen extends ConsumerStatefulWidget {
 
   /// Which post type the camera chose: 'photo' or 'text' (else video).
   final String? initialMode;
+
+  /// The colour look chosen on the viewfinder, as an index into
+  /// [kCameraFilters]; 0 is Original. The recorded file is raw footage, so the
+  /// look lives here until publish burns it in.
+  final int filterIndex;
 
   @override
   ConsumerState<ComposerScreen> createState() => _ComposerScreenState();
@@ -171,6 +180,17 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   double _progress = 0;
   String? _error;
 
+  /// The look to burn in on publish, and what the preview is tinted with so the
+  /// two are the same thing. Starts as whatever the viewfinder was wearing;
+  /// clearable here, which is also the way out if the render ever fails.
+  late int _filterIndex = widget.filterIndex;
+  CameraFilter get _filter => kCameraFilters[_filterIndex.clamp(0, kCameraFilters.length - 1)];
+
+  /// What the publish button's percentage is counting right now. Burning a look
+  /// in takes real time on a phone, and a bar that silently means two different
+  /// things at two different moments is worse than no bar.
+  String _stage = 'Uploading';
+
   final _picker = ImagePicker();
 
   /// A sound attached from a sound page locks the composer to that sound;
@@ -246,18 +266,27 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   /// Opens the in-app camera (live preview + filters); falls back to nothing
   /// if the user backs out. Returns via the same preview path as gallery.
   Future<void> _recordInApp() async {
-    final result = await context.push<String>('/camera');
+    final result = await context.push<CaptureResult>('/camera');
     if (result == null) return;
-    if (result.startsWith('video:')) {
-      await _loadVideoPreview(File(result.substring(6)));
-    } else if (result.startsWith('photo:') && mounted) {
-      setState(() { _imageFile = File(result.substring(6)); _mode = _ComposerMode.photo; });
+    switch (result.kind) {
+      case CaptureKind.video:
+        // The look comes back with the clip and takes over the preview, so
+        // step 2 shows what will actually be published.
+        if (mounted) setState(() => _filterIndex = result.filterIndex);
+        await _loadVideoPreview(File(result.path));
+      case CaptureKind.photo:
+        if (mounted) {
+          setState(() { _imageFile = File(result.path); _mode = _ComposerMode.photo; });
+        }
     }
   }
 
   Future<void> _pickVideo(ImageSource source) async {
     final picked = await _picker.pickVideo(source: source, maxDuration: const Duration(minutes: 1));
     if (picked == null) return;
+    // A different clip, and one that was never shot through the viewfinder —
+    // it doesn't inherit the previous take's look.
+    if (mounted) setState(() => _filterIndex = 0);
     await _loadVideoPreview(File(picked.path));
   }
 
@@ -339,9 +368,67 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
         quality: 75,
       );
       return path != null ? File(path) : null;
-    } catch (_) {
+    } catch (e) {
+      // The fallback is complete — the post just gets a black cell — but the
+      // reason still goes somewhere it can be read.
+      debugPrint('[BLPUB] thumbnail failed, posting without a poster frame: $e');
       return null;
     }
+  }
+
+  /// Burns the chosen look into the picture, or returns [video] untouched for
+  /// Original.
+  ///
+  /// Runs BEFORE the sound mix on purpose: this pass re-encodes the picture and
+  /// copies the audio, the mix copies the picture and rebuilds the audio, so
+  /// between the two the picture is encoded exactly once.
+  ///
+  /// Throws [VideoEditFailure] — it does not quietly hand back the raw clip.
+  /// Publishing footage that doesn't wear the look the poster picked IS the bug
+  /// being fixed here, and it went unnoticed for weeks precisely because
+  /// nothing said anything.
+  Future<File> _applyFilter(File video) async {
+    final chain = _filter.ffmpegChain;
+    if (chain == null) return video;
+    if (mounted) setState(() { _stage = 'Applying ${_filter.label}'; _progress = 0; });
+    final out = await VideoEditService.applyColourChain(
+      videoPath: video.path,
+      chain: chain,
+      onProgress: (p) { if (mounted) setState(() => _progress = p); },
+    );
+    if (mounted) setState(() { _stage = 'Uploading'; _progress = 0; });
+    return File(out);
+  }
+
+  /// The look failed to render. Asks whether to post the clip without it rather
+  /// than deciding for them: they may have picked the look on purpose, or they
+  /// may just want the video up.
+  Future<bool> _askPublishWithoutLook(String name) async {
+    final answer = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text("Couldn't apply $name",
+            style: AppTypography.sans(fontSize: 17, fontWeight: FontWeight.w700)),
+        content: Text(
+          'Your video is fine — only the $name look failed to render. '
+          'Post it without the look?',
+          style: AppTypography.sans(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.accent),
+            child: const Text('Post without it'),
+          ),
+        ],
+      ),
+    );
+    return answer ?? false;
   }
 
   /// If a sound is attached, download it and mix it into [video] at the chosen
@@ -367,7 +454,12 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
         soundVolume: _soundVolume,
       );
       return File(mixed);
-    } catch (_) {
+    } catch (e) {
+      // The video still posts, with its own audio — but a sound that silently
+      // fails to arrive is the complaint this whole path was written to fix,
+      // so it is said out loud both ways.
+      debugPrint('[BLPUB] sound mix failed, posting with the original audio: $e');
+      if (mounted) showTopToast(context, "Couldn't add the sound — posting with your own audio");
       return video;
     }
   }
@@ -386,9 +478,24 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
       String? uploadedVideoId;
       if (_mode == _ComposerMode.video) {
         if (_videoFile == null) throw Exception('Pick or record a video first');
-        // Mix the chosen sound INTO the video (at the two volumes) before upload.
-        final mixed = await _applySound(_videoFile!);
-        final fileToUpload = mixed;
+        // Burn the look in, then mix the chosen sound INTO the video (at the
+        // two volumes). The thumbnail is taken from the result, so the poster
+        // frame wears the look too.
+        File filtered;
+        try {
+          filtered = await _applyFilter(_videoFile!);
+        } on VideoEditFailure catch (e) {
+          debugPrint('[BLFILTER] ${_filter.label}: $e');
+          if (!mounted) return;
+          if (!await _askPublishWithoutLook(_filter.label)) {
+            // finally still clears _uploading.
+            setState(() => _error = "Couldn't apply the ${_filter.label} look — nothing was posted");
+            return;
+          }
+          filtered = _videoFile!;
+          if (mounted) setState(() { _stage = 'Uploading'; _progress = 0; });
+        }
+        final fileToUpload = await _applySound(filtered);
         final thumb = await _makeThumbnail(fileToUpload);
         final size = _previewController?.value.size;
         final dur = _previewController?.value.duration;
@@ -483,6 +590,39 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
     step != 3 ? _previewController?.play() : _previewController?.pause();
     (step == 2 && _effectiveSoundId != null) ? _soundPreview?.play() : _soundPreview?.pause();
   }
+
+  /// Wraps [child] in the selected look, or returns it untouched for Original.
+  Widget _tinted(Widget child) {
+    final f = _filter.colorFilter;
+    return f == null ? child : ColorFiltered(colorFilter: f, child: child);
+  }
+
+  /// Names the look riding on this clip and offers the one way to take it off.
+  /// It is also the recovery path when the render fails — without it, dropping
+  /// a look would mean re-recording the whole take.
+  Widget _filterChip() => Container(
+        margin: const EdgeInsets.only(bottom: 4),
+        padding: const EdgeInsets.only(left: 14, right: 4, top: 2, bottom: 2),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.auto_awesome, size: 16, color: AppColors.accent),
+            const SizedBox(width: 8),
+            Text(_filter.label,
+                style: AppTypography.sans(fontSize: 13.5, fontWeight: FontWeight.w600)),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.close, size: 17, color: AppColors.muted),
+              tooltip: 'Remove this look',
+              onPressed: _uploading ? null : () => setState(() => _filterIndex = 0),
+            ),
+          ],
+        ),
+      );
 
   Widget _captionField() => TextField(
         controller: _captionController,
@@ -590,7 +730,11 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
                         child: Stack(
                           alignment: Alignment.center,
                           children: [
-                            VideoPlayer(_previewController!),
+                            // Tinted with the very matrix FFmpeg will burn in,
+                            // so this preview is the promise the file keeps —
+                            // the look used to live on the viewfinder only and
+                            // vanish the moment you stopped recording.
+                            _tinted(VideoPlayer(_previewController!)),
                             // Only when stopped: something to press, and a sign
                             // that the silence is a paused clip rather than a
                             // broken one.
@@ -633,8 +777,9 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
                   ),
                 ],
               ),
-              // Step 2: sound + mix levels + caption.
+              // Step 2: look + sound + mix levels + caption.
               if (_videoStep == 2) ...[
+              if (_filterIndex != 0) _filterChip(),
               if (!_usingSound) ...[
                 const SizedBox(height: 6),
                 if (_pickedSound == null)
@@ -739,7 +884,9 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
                             child: SizedBox(
                               width: _previewController!.value.size.width,
                               height: _previewController!.value.size.height,
-                              child: VideoPlayer(_previewController!),
+                              // The audience step's thumbnail wears the look
+                              // too — it is the last thing seen before Publish.
+                              child: _tinted(VideoPlayer(_previewController!)),
                             ),
                           ),
                         ),
@@ -877,6 +1024,30 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
             if (_mode != _ComposerMode.video) ...[
               const SizedBox(height: 16),
               _captionField(),
+            ],
+            // Says what the percentage on the button is counting. Burning a
+            // look in can take longer than the upload that follows it, and a
+            // bar sitting at 40% with no word for it reads as a stuck app.
+            if (_uploading) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Text('$_stage…',
+                      style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: _progress == 0 ? null : _progress,
+                        minHeight: 4,
+                        backgroundColor: AppColors.surface,
+                        valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ],
             if (_error != null) ...[
               const SizedBox(height: 10),

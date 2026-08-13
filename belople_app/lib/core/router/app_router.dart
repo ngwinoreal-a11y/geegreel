@@ -144,6 +144,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           videoPath: extra?['videoPath'] as String?,
           imagePath: extra?['imagePath'] as String?,
           initialMode: extra?['mode'] as String?,
+          // The look chosen on the viewfinder, still to be burnt into the file.
+          filterIndex: extra?['filterIndex'] as int? ?? 0,
         );
       }),
       // ?sound= arrives from a sound page's "Use this sound": the camera names

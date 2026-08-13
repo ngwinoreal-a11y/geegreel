@@ -14,6 +14,7 @@ import '../../../core/widgets/top_toast.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../profile/data/profile_repository.dart';
 import '../../public_feed/application/public_feed_controller.dart';
+import '../data/capture_result.dart';
 import '../data/upload_repository.dart';
 import 'camera_filters.dart';
 
@@ -21,11 +22,9 @@ import 'camera_filters.dart';
 /// Short / Public / Text, a max-duration picker for Short, live colour filters,
 /// flip, flash, and gallery access.
 ///
-/// Pops a result the caller routes into the composer:
-///   `video:<path>`  a recorded/gallery video    (Short)
-///   `photo:<path>`  a captured/gallery photo     (Public)
-///   'text'          switch to a text-only post   (Text)
-///   'compose'       open the composer with nothing (fallback)
+/// Pops a [CaptureResult] the caller routes into the composer. A recorded clip
+/// carries the chosen filter's index with it — the file itself is raw footage,
+/// so the look is burnt in on publish and the composer needs to know which.
 class CameraCaptureScreen extends ConsumerStatefulWidget {
   const CameraCaptureScreen({super.key, this.soundId});
 
@@ -148,8 +147,13 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
     if (controller == null || !controller.value.isInitialized) return;
     try {
       final file = await controller.takePicture();
-      if (mounted) context.pop('photo:${file.path}');
-    } catch (_) {}
+      if (mounted) context.pop(CaptureResult.photo(file.path));
+    } catch (e) {
+      // A photo that never arrives with no explanation is the same silent
+      // failure the recorder used to have.
+      debugPrint('[BLREC] takePicture failed: $e');
+      if (mounted) showTopToast(context, "Couldn't take that photo — try again");
+    }
   }
 
   Future<void> _toggleRecording() async {
@@ -166,7 +170,8 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
         final file = await controller.stopVideoRecording();
         if (mounted) {
           setState(() => _recording = false);
-          context.pop('video:${file.path}');
+          // The filter goes with it: the file on disk is untouched footage.
+          context.pop(CaptureResult.video(file.path, filterIndex: _filterIndex));
         }
       } catch (e) {
         // NEVER silently. This used to swallow the error whole: the take
@@ -199,10 +204,14 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
   Future<void> _pickFromGallery() async {
     if (_mode == _CamMode.short) {
       final v = await _picker.pickVideo(source: ImageSource.gallery, maxDuration: Duration(seconds: _maxSeconds));
-      if (v != null && mounted) context.pop('video:${v.path}');
+      // Deliberately no filterIndex: whatever look is selected here was only
+      // ever seen on the viewfinder, over the live camera. Burning it into a
+      // clip from the gallery would be applying a look to footage the poster
+      // never saw wearing it.
+      if (v != null && mounted) context.pop(CaptureResult.video(v.path));
     } else {
       final p = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 90);
-      if (p != null && mounted) context.pop('photo:${p.path}');
+      if (p != null && mounted) context.pop(CaptureResult.photo(p.path));
     }
   }
 
@@ -579,7 +588,8 @@ class _TextComposePromptState extends ConsumerState<_TextComposePrompt> {
       // Leaves the camera entirely: the post is made, there is nothing else to
       // do here.
       context.pop();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[BLREC] text post failed: $e');
       if (mounted) {
         setState(() => _publishing = false);
         showTopToast(context, "Couldn't post — check your connection and try again");

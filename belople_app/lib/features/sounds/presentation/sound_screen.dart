@@ -8,6 +8,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../auth/application/auth_controller.dart';
+import '../../camera/data/capture_result.dart';
 import '../data/sound_repository.dart';
 
 /// Ports design-5.css section E (sound page): cover, title/author/use-count, a
@@ -233,11 +234,13 @@ class _SoundScreenState extends ConsumerState<SoundScreen> {
                       // with this sound already attached. The camera is told
                       // which sound too, so it can name it and play it while
                       // you record.
-                      final result = await context.push<String>('/camera?sound=${widget.soundId}');
+                      final result = await context.push<CaptureResult>('/camera?sound=${widget.soundId}');
                       if (!context.mounted || result == null) return;
-                      if (result.startsWith('video:')) {
-                        context.push('/compose?sound=${widget.soundId}',
-                            extra: {'videoPath': result.substring(6)});
+                      if (result.kind == CaptureKind.video) {
+                        context.push('/compose?sound=${widget.soundId}', extra: {
+                          'videoPath': result.path,
+                          'filterIndex': result.filterIndex,
+                        });
                       } else {
                         context.push('/compose?sound=${widget.soundId}');
                       }

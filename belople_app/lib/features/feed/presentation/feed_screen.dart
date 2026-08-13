@@ -15,6 +15,7 @@ import '../../../core/widgets/top_toast.dart';
 import '../../../core/widgets/seg_control.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../../auth/application/auth_controller.dart';
+import '../../camera/data/capture_result.dart';
 import '../../profile/data/profile_repository.dart';
 import '../../overlays/presentation/ad_comments_sheet.dart';
 import '../../overlays/presentation/comments_sheet.dart';
@@ -187,20 +188,20 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
   }
 
   /// The "+" flow: open the camera first (the user asked for + to go
-  /// straight to the camera). A recorded take hands its path to the composer;
-  /// the camera's gallery/photo shortcut returns 'compose' to open the
-  /// composer directly for a photo/text post or a gallery pick.
+  /// straight to the camera). A recorded take hands its path — and the colour
+  /// look chosen on the viewfinder, which still has to be burnt into the file —
+  /// to the composer. Backing out of the camera pops null and does nothing.
   Future<void> _openCreate() async {
-    final result = await context.push<String>('/camera');
+    final result = await context.push<CaptureResult>('/camera');
     if (!mounted || result == null) return;
-    if (result == 'text') {
-      context.push('/compose', extra: {'mode': 'text'});
-    } else if (result.startsWith('video:')) {
-      context.push('/compose', extra: {'videoPath': result.substring(6)});
-    } else if (result.startsWith('photo:')) {
-      context.push('/compose', extra: {'imagePath': result.substring(6), 'mode': 'photo'});
-    } else {
-      context.push('/compose');
+    switch (result.kind) {
+      case CaptureKind.video:
+        context.push('/compose', extra: {
+          'videoPath': result.path,
+          'filterIndex': result.filterIndex,
+        });
+      case CaptureKind.photo:
+        context.push('/compose', extra: {'imagePath': result.path, 'mode': 'photo'});
     }
   }
 
