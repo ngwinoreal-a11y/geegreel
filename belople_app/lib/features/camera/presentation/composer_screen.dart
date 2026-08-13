@@ -94,6 +94,41 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   // the "Your audio" slider is hidden — there is nothing for it to raise.
   bool? _clipHasAudio;
 
+  /// The poster deliberately paused the preview. Only a tap sets this — it
+  /// exists so [_ensurePreviewPlaying] can restart a clip that stopped on its
+  /// own without overriding someone who asked for quiet.
+  bool _previewPaused = false;
+
+  /// Keeps the clip running on the steps that show it.
+  ///
+  /// The mix sliders are useless against a still frame: the video's own audio
+  /// only exists while the video is playing, so a stopped preview meant the
+  /// "Your audio" slider had nothing to raise and only the picked sound could
+  /// ever be heard — which is exactly what was reported. Nothing was holding
+  /// the preview open; it was started once and never restarted, so anything
+  /// that stopped it (a sheet, a rebuild, the end of a clip that didn't loop)
+  /// left it stopped for good, with no control to start it again.
+  void _ensurePreviewPlaying() {
+    final c = _previewController;
+    if (c == null || !c.value.isInitialized) return;
+    if (_previewPaused || _videoStep == 3) return;
+    if (!c.value.isPlaying) c.play();
+  }
+
+  /// Tap the preview to stop and start it.
+  void _togglePreview() {
+    final c = _previewController;
+    if (c == null || !c.value.isInitialized) return;
+    setState(() => _previewPaused = c.value.isPlaying);
+    if (c.value.isPlaying) {
+      c.pause();
+      _soundPreview?.pause();
+    } else {
+      c.play();
+      if (_videoStep == 2 && _effectiveSoundId != null) _soundPreview?.play();
+    }
+  }
+
   /// video_player and just_audio both cap at 1.0, so a 160% mic can't be
   /// previewed literally. Preview the RATIO instead — scale both down by the
   /// louder one — which is what the ear judges, and is the same balance
@@ -101,8 +136,16 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   void _applyPreviewVolumes() {
     final peak = _micVolume > _soundVolume ? _micVolume : _soundVolume;
     final scale = peak > 1.0 ? 1.0 / peak : 1.0;
-    _previewController?.setVolume((_micVolume * scale).clamp(0.0, 1.0));
-    _soundPreview?.setVolume((_soundVolume * scale).clamp(0.0, 1.0));
+    final vidVol = (_micVolume * scale).clamp(0.0, 1.0);
+    final sndVol = (_soundVolume * scale).clamp(0.0, 1.0);
+    _previewController?.setVolume(vidVol);
+    _soundPreview?.setVolume(sndVol);
+    // DEBUG
+    debugPrint('[BLVOL] hasAudio=$_clipHasAudio mic=$_micVolume snd=$_soundVolume '
+        '-> vidVol=$vidVol sndVol=$sndVol '
+        'vidPlaying=${_previewController?.value.isPlaying} '
+        'vidInit=${_previewController?.value.isInitialized} '
+        'sndPlaying=${_soundPreview?.playing}');
   }
   // Video is a 3-step wizard: 1 pick/record → 2 edit (sound/volume/caption) →
   // 3 audience + Publish. Photo/Text stay single-step.
@@ -207,6 +250,11 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
     final controller = VideoPlayerController.file(file);
     await controller.initialize();
     await controller.setLooping(true);
+    // Redraws the play badge the moment the clip stops or starts, so the
+    // overlay always tells the truth about what the preview is doing.
+    controller.addListener(() {
+      if (mounted) setState(() {});
+    });
     // The video's own audio plays at the "Your audio" level so the mic slider
     // is audible live; the chosen sound is layered on top via _soundPreview.
     await controller.setVolume(_micVolume);
@@ -406,7 +454,9 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   /// video plays on steps 1–2, the sound only on step 2; step 3 (audience) is
   /// silent so nothing keeps playing behind the picker.
   void _goToStep(int step) {
-    setState(() => _videoStep = step);
+    // Moving between steps is a fresh start — a pause asked for on one step
+    // shouldn't follow you to the next.
+    setState(() { _videoStep = step; _previewPaused = false; });
     step != 3 ? _previewController?.play() : _previewController?.pause();
     (step == 2 && _effectiveSoundId != null) ? _soundPreview?.play() : _soundPreview?.pause();
   }
@@ -432,11 +482,23 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
         title: Text(_stepTitle()),
         actions: [
           if (label != null)
-            TextButton(
-              onPressed: (_primaryEnabled() && !_uploading) ? _onPrimary : null,
-              child: _uploading
-                  ? Text('${(_progress * 100).toStringAsFixed(0)}%')
-                  : Text(label),
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: TextButton(
+                onPressed: (_primaryEnabled() && !_uploading) ? _onPrimary : null,
+                // Amber on the bar's black, big, and with no outline. This is
+                // the one way forward on the screen and it was reading as
+                // ordinary grey chrome next to the title.
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.accent,
+                  disabledForegroundColor: AppColors.faint,
+                  textStyle: AppTypography.sans(fontSize: 19, fontWeight: FontWeight.w800),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                ),
+                child: _uploading
+                    ? Text('${(_progress * 100).toStringAsFixed(0)}%')
+                    : Text(label),
+              ),
             ),
         ],
       ),
@@ -493,10 +555,36 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
               // The clip preview shows on the pick step and the edit step.
               if (_videoStep != 3) ...[
                 if (_previewController != null && _previewController!.value.isInitialized)
-                  AspectRatio(
-                    aspectRatio: _previewController!.value.aspectRatio,
-                    child: VideoPlayer(_previewController!),
-                  )
+                  // Re-asserted every time this step is drawn, so the clip is
+                  // running while the sliders are on screen — they can only be
+                  // judged against audio that is actually playing.
+                  Builder(builder: (context) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) => _ensurePreviewPlaying());
+                    return GestureDetector(
+                      onTap: _togglePreview,
+                      child: AspectRatio(
+                        aspectRatio: _previewController!.value.aspectRatio,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            VideoPlayer(_previewController!),
+                            // Only when stopped: something to press, and a sign
+                            // that the silence is a paused clip rather than a
+                            // broken one.
+                            if (_previewPaused || !_previewController!.value.isPlaying)
+                              Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.5),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 38),
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  })
                 else
                   _PickerBox(icon: Icons.videocam_outlined, label: 'No video selected'),
                 const SizedBox(height: 12),
