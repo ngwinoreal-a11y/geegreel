@@ -262,32 +262,9 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
                           ),
                         ),
 
-                      // The looks, on a shelf just above the shutter and always
-                      // there. They used to be text chips behind a toggle on
-                      // the right rail, which meant you had to know they
-                      // existed and then read a word — "Vivid" — to guess what
-                      // it would do. Each circle is the LIVE viewfinder with
-                      // that look applied, so you pick by looking, not reading.
-                      if (!_recording && ready)
-                        Positioned(
-                          left: 0, right: 0, bottom: 178,
-                          child: SizedBox(
-                            height: 76,
-                            child: ListView.separated(
-                              scrollDirection: Axis.horizontal,
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
-                              itemCount: kCameraFilters.length,
-                              separatorBuilder: (_, _) => const SizedBox(width: 12),
-                              itemBuilder: (context, i) => _FilterThumb(
-                                filter: kCameraFilters[i],
-                                selected: i == _filterIndex,
-                                onTap: () => setState(() => _filterIndex = i),
-                              ),
-                            ),
-                          ),
-                        ),
-
-                      // Bottom controls: duration pills, record, mode tabs, gallery.
+                      // Bottom controls: duration pills, the record row with the
+                      // looks either side of the shutter, then the mode tabs
+                      // with the gallery beside them.
                       Positioned(
                         left: 0, right: 0, bottom: 20,
                         child: Column(
@@ -322,51 +299,96 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
                                     ),
                                 ],
                               ),
-                            const SizedBox(height: 16),
-                            // Record row: gallery, big button, spacer.
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: _pickFromGallery,
-                                  child: Container(
-                                    width: 44, height: 44,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white24,
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: Colors.white54),
+                            const SizedBox(height: 14),
+                            // The record row. The looks run straight through it
+                            // — two either side of the shutter, which is what
+                            // the width allows at this size — and scroll left
+                            // and right for the rest. Above the shutter they
+                            // were a separate shelf and read as a menu; in line
+                            // with it they read as part of taking the shot.
+                            SizedBox(
+                              height: 92,
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  // Four at a time — two either side of a gap
+                                  // the shutter sits in — and swipe for the
+                                  // next four. A plain scrolling strip put one
+                                  // look permanently underneath the shutter,
+                                  // where it could be neither seen nor tapped;
+                                  // paging keeps the middle empty on purpose.
+                                  if (!_recording && ready)
+                                    PageView.builder(
+                                      itemCount: (kCameraFilters.length / 4).ceil(),
+                                      itemBuilder: (context, page) {
+                                        Widget slot(int j) {
+                                          final i = page * 4 + j;
+                                          if (i >= kCameraFilters.length) {
+                                            // Keeps the last page's spacing
+                                            // identical to a full one.
+                                            return const SizedBox(width: 68);
+                                          }
+                                          return _FilterThumb(
+                                            filter: kCameraFilters[i],
+                                            selected: i == _filterIndex,
+                                            onTap: () => setState(() => _filterIndex = i),
+                                          );
+                                        }
+
+                                        return Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                          children: [
+                                            slot(0),
+                                            slot(1),
+                                            const SizedBox(width: 84), // the shutter's seat
+                                            slot(2),
+                                            slot(3),
+                                          ],
+                                        );
+                                      },
                                     ),
-                                    child: const Icon(Icons.photo_library_outlined, color: Colors.white, size: 22),
-                                  ),
-                                ),
-                                GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: _onCapture,
-                                  child: Container(
-                                    width: 78, height: 78,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      border: Border.all(color: Colors.white, width: 4),
-                                    ),
-                                    child: Center(
-                                      child: AnimatedContainer(
-                                        duration: const Duration(milliseconds: 200),
-                                        width: _recording ? 30 : 62,
-                                        height: _recording ? 30 : 62,
-                                        decoration: BoxDecoration(
-                                          color: _mode == _CamMode.public ? Colors.white : AppColors.danger,
-                                          borderRadius: BorderRadius.circular(_recording ? 8 : 40),
+                                  // The shutter sits ON the strip, not in it, so
+                                  // it stays put while the looks slide past.
+                                  GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: _onCapture,
+                                    child: Container(
+                                      width: 84, height: 84,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: Colors.black.withValues(alpha: 0.35),
+                                        border: Border.all(color: Colors.white, width: 4),
+                                      ),
+                                      child: Center(
+                                        child: AnimatedContainer(
+                                          duration: const Duration(milliseconds: 200),
+                                          width: _recording ? 30 : 64,
+                                          height: _recording ? 30 : 64,
+                                          decoration: BoxDecoration(
+                                            color: _mode == _CamMode.public ? Colors.white : AppColors.danger,
+                                            borderRadius: BorderRadius.circular(_recording ? 8 : 40),
+                                          ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 44),
-                              ],
+                                ],
+                              ),
                             ),
-                            const SizedBox(height: 16),
-                            _modeTabs(),
+                            const SizedBox(height: 12),
+                            // Mode tabs centred, gallery pinned to the left of
+                            // them — the shape every camera uses, and it frees
+                            // the record row entirely for the looks.
+                            SizedBox(
+                              height: 52,
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  _modeTabs(),
+                                  Positioned(left: 18, child: _GalleryButton(onTap: _pickFromGallery)),
+                                ],
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -384,10 +406,13 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Text(label,
                 style: AppTypography.sans(
-                  fontSize: 13,
-                  fontWeight: _mode == m ? FontWeight.w800 : FontWeight.w500,
+                  // These are the one control you use on every single visit —
+                  // which kind of thing am I making — so they get the size to
+                  // match, and are hit at a glance rather than aimed at.
+                  fontSize: _mode == m ? 19 : 17,
+                  fontWeight: _mode == m ? FontWeight.w800 : FontWeight.w600,
                   color: _mode == m ? AppColors.accent : Colors.white70,
-                )),
+                ).copyWith(shadows: const [Shadow(color: Colors.black87, blurRadius: 6)])),
           ),
         );
     return Row(
@@ -578,17 +603,20 @@ class _FilterThumb extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 54,
-            height: 54,
-            padding: const EdgeInsets.all(2.5),
+            // Sized to the shutter it sits beside, which is also what limits
+            // the row to two either side — the number asked for.
+            width: 68,
+            height: 68,
+            padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               // The selected look wears the brand ring; the rest a hairline
               // that keeps them visible against a bright viewfinder.
               border: Border.all(
                 color: selected ? AppColors.accent : Colors.white54,
-                width: selected ? 2.5 : 1,
+                width: selected ? 3 : 1.2,
               ),
+              boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 8)],
             ),
             child: ClipOval(
               child: filter.colorFilter == null
@@ -596,14 +624,44 @@ class _FilterThumb extends StatelessWidget {
                   : ColorFiltered(colorFilter: filter.colorFilter!, child: face),
             ),
           ),
-          const SizedBox(height: 5),
+          const SizedBox(height: 4),
           Text(filter.label,
               style: AppTypography.sans(
-                fontSize: 10.5,
+                fontSize: 11.5,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 color: selected ? AppColors.accent : Colors.white,
               ).copyWith(shadows: const [Shadow(color: Colors.black87, blurRadius: 5)])),
         ],
+      ),
+    );
+  }
+}
+
+/// The way back to your own footage. Pink, and wearing the brand gradient
+/// rather than the grey outlined square it was — it is the only control on
+/// this screen that leaves the camera, so it should not look like a setting.
+class _GalleryButton extends StatelessWidget {
+  const _GalleryButton({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        width: 46,
+        height: 46,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFFFE2C55), Color(0xFFEE2A7B), Color(0xFF6228D7)],
+          ),
+          boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 3))],
+        ),
+        child: const Icon(Icons.perm_media_rounded, color: Colors.white, size: 24),
       ),
     );
   }
