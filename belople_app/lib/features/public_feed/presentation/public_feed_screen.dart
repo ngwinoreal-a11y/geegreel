@@ -14,6 +14,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../live/presentation/live_avatar.dart';
 import '../../../core/widgets/brand_refresh.dart';
 import '../../../core/widgets/brand_wordmark.dart';
 import '../../../core/widgets/linkified_text.dart';
@@ -255,6 +256,7 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
 class _MediaHeader extends StatelessWidget {
   const _MediaHeader({
     required this.displayName,
+    this.userId,
     this.avatarUrl,
     this.subtitle,
     this.verified = false,
@@ -263,6 +265,10 @@ class _MediaHeader extends StatelessWidget {
   });
 
   final String displayName;
+
+  /// Whose photo this is, so it can show a LIVE ring when they are on air.
+  /// Null for a house ad, which has no person behind it.
+  final String? userId;
   final String? avatarUrl;
 
   /// The small line after the name — a timestamp, or "Sponsored".
@@ -294,10 +300,20 @@ class _MediaHeader extends StatelessWidget {
           ),
           child: Row(
             children: [
-              GestureDetector(
-                onTap: onTapAuthor,
-                child: AppAvatar(size: 32, ring: true, imageUrl: avatarUrl, displayName: displayName),
-              ),
+              if (userId != null)
+                LiveAwareAvatar(
+                  userId: userId!,
+                  size: 32,
+                  imageUrl: avatarUrl,
+                  displayName: displayName,
+                  onTap: onTapAuthor,
+                )
+              else
+                GestureDetector(
+                  onTap: onTapAuthor,
+                  child: AppAvatar(
+                      size: 32, ring: true, imageUrl: avatarUrl, displayName: displayName),
+                ),
               const SizedBox(width: 9),
               Expanded(
                 child: GestureDetector(
@@ -458,6 +474,7 @@ class _PostCard extends ConsumerWidget {
                       ),
                 _MediaHeader(
                   displayName: post.user.displayName,
+                  userId: post.user.id,
                   avatarUrl: post.user.avatarUrl != null ? mediaUrl(post.user.avatarUrl!) : null,
                   subtitle: _timeAgo(post.createdAt),
                   verified: post.user.verified,
@@ -546,14 +563,12 @@ class _TextPostBody extends StatelessWidget {
               AppSpacing.publicPostPadding, 6, AppSpacing.publicPostPadding, 10),
           child: Row(
             children: [
-              GestureDetector(
+              LiveAwareAvatar(
+                userId: post.user.id,
+                size: 32,
+                imageUrl: post.user.avatarUrl != null ? mediaUrl(post.user.avatarUrl!) : null,
+                displayName: post.user.displayName,
                 onTap: onTapAuthor,
-                child: AppAvatar(
-                  size: 32,
-                  ring: true,
-                  imageUrl: post.user.avatarUrl != null ? mediaUrl(post.user.avatarUrl!) : null,
-                  displayName: post.user.displayName,
-                ),
               ),
               const SizedBox(width: 9),
               Expanded(
@@ -926,6 +941,7 @@ class _VideoCardState extends State<_VideoCard> {
 
                     _MediaHeader(
                       displayName: video.user.displayName,
+                      userId: video.user.id,
                       avatarUrl: video.user.avatarUrl != null ? mediaUrl(video.user.avatarUrl!) : null,
                       subtitle: _timeAgo(video.createdAt),
                       onTapAuthor: () => context.push('/profile/${video.user.username}'),

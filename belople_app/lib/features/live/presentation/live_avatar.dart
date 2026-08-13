@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../application/active_lives_controller.dart';
 
 /// Someone's face with "on air" on it.
 ///
@@ -86,6 +89,68 @@ class LiveAvatar extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// A person's photo that knows whether they are on air.
+///
+/// Drops into any list of authors — the video feed, Public, anywhere a face
+/// appears next to a name. If that person is broadcasting it wears the ring and
+/// goes to the live; otherwise it is an ordinary avatar and does whatever the
+/// screen normally does with a tap.
+///
+/// Owning the lookup here is the point: every caller would otherwise repeat the
+/// same watch-and-search, and the ones that forgot would silently be the only
+/// places in the app where a live creator looked offline.
+class LiveAwareAvatar extends ConsumerWidget {
+  const LiveAwareAvatar({
+    super.key,
+    required this.userId,
+    required this.size,
+    required this.displayName,
+    this.imageUrl,
+    this.onTap,
+    this.ringWhenOffline = true,
+  });
+
+  final String userId;
+  final double size;
+  final String? displayName;
+  final String? imageUrl;
+
+  /// What a tap does when this person is NOT live — usually opening their
+  /// profile. Ignored when they are: the live is the more interesting thing and
+  /// the profile is one tap further in.
+  final VoidCallback? onTap;
+
+  /// Public draws its avatars with the app's own ring; the video feed uses a
+  /// plain white edge. Only affects the offline state.
+  final bool ringWhenOffline;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final live = ref
+        .watch(activeLivesProvider)
+        .valueOrNull
+        ?.where((s) => s.creator.id == userId)
+        .firstOrNull;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: live != null ? () => context.push('/live/${live.id}') : onTap,
+      child: Padding(
+        // Room for the badge that hangs below the ring, so it lands on nothing.
+        padding: EdgeInsets.only(bottom: live != null ? LiveAvatar.overhangFor(size) + 2 : 0),
+        child: live != null
+            ? LiveAvatar(size: size, imageUrl: imageUrl, displayName: displayName)
+            : AppAvatar(
+                size: size,
+                ring: ringWhenOffline,
+                imageUrl: imageUrl,
+                displayName: displayName,
+              ),
+      ),
     );
   }
 }
