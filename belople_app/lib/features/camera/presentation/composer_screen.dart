@@ -198,11 +198,20 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
     if (route is PageRoute) routeObserver.subscribe(this, route);
   }
 
+  /// True only while the sound picker is open. That sheet is the one place
+  /// where the clip must keep running underneath: you are choosing a sound to
+  /// go WITH this video, and you cannot judge that against a frozen frame.
+  bool _sheetKeepsClipPlaying = false;
+
   // Another screen opened on top — silence the preview so no audio bleeds
   // through from behind it. Resume when we come back.
   @override
   void didPushNext() {
-    _previewController?.pause();
+    // The picker plays its own preview, so the clip's sound and the sound
+    // being auditioned play together — which is exactly the pair you are
+    // trying to hear. The composer's own sound preview does stop, so it is
+    // two tracks and not three.
+    if (!_sheetKeepsClipPlaying) _previewController?.pause();
     _soundPreview?.pause();
   }
 
@@ -213,10 +222,15 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   }
 
   Future<void> _pickSound() async {
-    final sound = await showSoundPickerSheet(context);
-    if (sound != null) {
-      setState(() => _pickedSound = sound);
-      _setupSoundPreview();
+    _sheetKeepsClipPlaying = true;
+    try {
+      final sound = await showSoundPickerSheet(context);
+      if (sound != null) {
+        setState(() => _pickedSound = sound);
+        _setupSoundPreview();
+      }
+    } finally {
+      _sheetKeepsClipPlaying = false;
     }
   }
 

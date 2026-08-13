@@ -207,14 +207,15 @@ class _SoundRow extends StatelessWidget {
       if (sound.durationLabel != null) sound.durationLabel!,
     ];
 
+    // Tapping the row LISTENS. It used to choose the sound and close the
+    // sheet, so browsing was impossible: one stray tap and you were committed
+    // to something you had never heard. Only Use commits.
     return InkWell(
-      onTap: onPick,
+      onTap: onPreview,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
         child: Row(
           children: [
-            // Cover art with the play control ON it, the way every music list
-            // does it — one tap to hear, one tap anywhere else to choose.
             GestureDetector(
               onTap: onPreview,
               child: ClipRRect(
@@ -264,15 +265,23 @@ class _SoundRow extends StatelessWidget {
                 ],
               ),
             ),
-            // Says what tapping the row does. Without it the only affordance
-            // on the row was the play button, so "use this one" was invisible.
-            TextButton(
-              onPressed: onPick,
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.sheetInk,
-                textStyle: AppTypography.sans(fontSize: 14, fontWeight: FontWeight.w700),
+            // The only thing on the row that commits, so it is the only thing
+            // wearing the brand colour — and big enough to be aimed at without
+            // looking. Everything else here just plays.
+            Padding(
+              padding: const EdgeInsets.only(left: 4, right: 6),
+              child: ElevatedButton(
+                onPressed: onPick,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.accent,
+                  foregroundColor: AppColors.onAccent,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  textStyle: AppTypography.sans(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+                child: const Text('Use'),
               ),
-              child: const Text('Use'),
             ),
           ],
         ),
