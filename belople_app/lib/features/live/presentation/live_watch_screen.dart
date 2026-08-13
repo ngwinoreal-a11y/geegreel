@@ -9,19 +9,27 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/top_toast.dart';
 import '../../feed/data/feed_repository.dart';
+import '../../../core/widgets/snappy_page_physics.dart';
+import '../application/active_lives_controller.dart';
 import '../data/live_repository.dart';
 import 'live_gift_sheet.dart';
 import 'live_overlay.dart';
 
-/// Watching someone else's live.
+/// Watching lives.
 ///
-/// There is no seek bar, no replay button and no way back down the timeline —
-/// not because they are hidden, but because there is nothing behind the live
-/// edge to reach. The URL is the live stream's own, whose manifest is a sliding
-/// window; the recording has a different one and is never handed out.
+/// Once you are in, swiping moves you between LIVES — not back into the videos
+/// you came from. That is the owner's rule: you tapped into Live, so you are
+/// in Live until you leave it, and the way out is the ✕ or back, not a swipe.
+/// The list is the same one discovery serves, already ordered three-from-home
+/// to one-from-away, so scrolling here is scrolling that order.
+///
+/// Only the page you are on holds a player. Every minute of a live is billed
+/// per viewer, so pre-warming the next one would be paying its broadcaster for
+/// an audience that has not arrived.
 class LiveWatchScreen extends ConsumerStatefulWidget {
   const LiveWatchScreen({super.key, required this.sessionId});
 
+  /// Where the swipe starts. The rest of the run comes from the active list.
   final String sessionId;
 
   @override
@@ -29,6 +37,84 @@ class LiveWatchScreen extends ConsumerStatefulWidget {
 }
 
 class _LiveWatchScreenState extends ConsumerState<LiveWatchScreen> {
+  PageController? _pager;
+  int _page = 0;
+
+  /// Frozen at the moment of entry. The rail refreshes every 20 seconds, and a
+  /// list that reorders under a finger mid-swipe would land you on a different
+  /// live than the one you were swiping towards.
+  List<LiveSession>? _run;
+
+  @override
+  Widget build(BuildContext context) {
+    final run = _run ??= _initialRun();
+    if (run.isEmpty) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: _LiveGone(message: 'That live has ended', onClose: () => context.pop()),
+      );
+    }
+    _pager ??= PageController(initialPage: _page);
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: PageView.builder(
+        controller: _pager,
+        scrollDirection: Axis.vertical,
+        // The same feel as the feed, from the same class — swiping between
+        // lives and swiping between videos are one gesture and must not differ.
+        physics: const SnappyPageScrollPhysics(),
+        onPageChanged: (i) => setState(() => _page = i),
+        itemCount: run.length,
+        itemBuilder: (context, i) => _LivePage(
+          key: ValueKey(run[i].id),
+          sessionId: run[i].id,
+          isActive: i == _page,
+        ),
+      ),
+    );
+  }
+
+  /// The live that was tapped, then everything after it, then everything
+  /// before — so a swipe down always continues rather than dead-ending on the
+  /// one you happened to open.
+  List<LiveSession> _initialRun() {
+    final all = ref.read(activeLivesProvider).valueOrNull ?? const <LiveSession>[];
+    final at = all.indexWhere((s) => s.id == widget.sessionId);
+    if (at < 0) {
+      // Opened from somewhere the rail hasn't caught up with (a link, a
+      // notification). One live is still a run of one.
+      return [
+        LiveSession(
+          id: widget.sessionId,
+          status: 'live',
+          creator: const LiveCreator(id: '', username: ''),
+        ),
+      ];
+    }
+    _page = at;
+    return all;
+  }
+
+  @override
+  void dispose() {
+    _pager?.dispose();
+    super.dispose();
+  }
+}
+
+/// One live inside the pager: the picture, and everything over it.
+class _LivePage extends ConsumerStatefulWidget {
+  const _LivePage({super.key, required this.sessionId, required this.isActive});
+
+  final String sessionId;
+  final bool isActive;
+
+  @override
+  ConsumerState<_LivePage> createState() => _LivePageState();
+}
+
+class _LivePageState extends ConsumerState<_LivePage> {
   VideoPlayerController? _player;
   LiveSession? _session;
   String? _error;
@@ -45,7 +131,29 @@ class _LiveWatchScreenState extends ConsumerState<LiveWatchScreen> {
   @override
   void initState() {
     super.initState();
-    _open();
+    if (widget.isActive) _open();
+  }
+
+  @override
+  void didUpdateWidget(_LivePage old) {
+    super.didUpdateWidget(old);
+    // Swiped onto: start. Swiped away from: stop everything, including the
+    // stream. A live left running behind another one is a viewer its
+    // broadcaster is paying for and nobody is watching.
+    if (widget.isActive && !old.isActive) _open();
+    if (!widget.isActive && old.isActive) _close();
+  }
+
+  /// Tears down without ending anything: the session belongs to its creator,
+  /// and swiping past it only means this phone stopped watching.
+  void _close() {
+    _poll?.cancel();
+    _reactFlush?.cancel();
+    if (_pendingReacts > 0) unawaited(_flushReacts());
+    final p = _player;
+    _player = null;
+    p?.dispose();
+    if (mounted) setState(() {});
   }
 
   Future<void> _open() async {

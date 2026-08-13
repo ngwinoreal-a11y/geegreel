@@ -22,7 +22,17 @@ class ActiveLivesController extends AsyncNotifier<List<LiveSession>> {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 20), (_) => _refresh());
     ref.onDispose(() => _timer?.cancel());
-    return _load();
+    try {
+      return await _load();
+    } catch (e, s) {
+      // An AsyncError here reads as "nobody is live" everywhere it is used —
+      // valueOrNull is null and the rail simply doesn't draw. That is the right
+      // thing to SHOW and the wrong thing to say nothing about: a parse error
+      // and an empty schedule look identical from the outside, and the first
+      // one hid live cards from the feed until this line was added.
+      debugPrint('[BLLIVE] loading active lives failed: $e\n$s');
+      rethrow;
+    }
   }
 
   Future<List<LiveSession>> _load() => ref.read(liveRepositoryProvider).active();

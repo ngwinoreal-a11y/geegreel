@@ -14,6 +14,7 @@ import '../../../core/widgets/brand_refresh.dart';
 import '../../../core/widgets/top_toast.dart';
 import '../../../core/widgets/seg_control.dart';
 import '../../../core/widgets/skeleton.dart';
+import '../../../core/widgets/snappy_page_physics.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../camera/data/capture_result.dart';
 import '../../live/application/active_lives_controller.dart';
@@ -314,7 +315,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                 scrollDirection: Axis.vertical,
                 // Snappy TikTok-style paging: a stiff spring so a swipe flicks
                 // to the next video almost instantly instead of drifting.
-                physics: const _SnappyPageScrollPhysics(),
+                physics: const SnappyPageScrollPhysics(),
                 // Keeps the neighbouring pages built so the next video's
                 // controller starts buffering before you swipe to it — the
                 // swipe lands on a ready frame instead of a black loading one.
@@ -585,30 +586,6 @@ class _FeedError extends StatelessWidget {
 /// for a much stiffer one so a swipe flicks to the next video almost instantly
 /// instead of drifting up slowly. Higher stiffness + lower mass = a fast snap;
 /// damping ~1 keeps it clean with no bounce/overshoot.
-class _SnappyPageScrollPhysics extends PageScrollPhysics {
-  const _SnappyPageScrollPhysics({super.parent});
-
-  @override
-  _SnappyPageScrollPhysics applyTo(ScrollPhysics? ancestor) =>
-      _SnappyPageScrollPhysics(parent: buildParent(ancestor));
-
-  // withDampingRatio, NOT a raw damping coefficient: ratio 1.0 is critically
-  // damped — the fastest snap that DOESN'T overshoot. (The old raw damping of
-  // 1.0 was far below critical for this mass/stiffness, so the page sprang up
-  // then bounced/vibrated several times before settling.) High stiffness keeps
-  // the flick fast; ratio 1.0 makes it land once and stop dead.
-  @override
-  SpringDescription get spring => SpringDescription.withDampingRatio(
-        // Much stiffer + lighter than before so the page snaps up fast and the
-        // spring's settle tail is over almost instantly — that long, slow
-        // final approach was the "catch"/drag felt at the end. ratio 1.0 keeps
-        // it critically damped (fast, firm, no overshoot or bounce).
-        mass: 0.3,
-        stiffness: 560,
-        ratio: 1.0,
-      );
-}
-
 /// One page of the feed. A page is either a video, identified by its position
 /// in the feed's own list, or a live. Keeping them in one list is what lets the
 /// PageView, the preload window and the load-more check all count the same

@@ -5052,7 +5052,12 @@ async function handle(request, env, ctx) {
       FROM live_sessions l
       JOIN users u ON u.id = l.creator_id
       WHERE l.status = 'live' AND u.status = 'active'
-      ORDER BY l.viewer_count DESC, l.started_at DESC
+      -- Newest first, NOT by audience. viewer_count is recomputed every ten
+      -- seconds from who is actually watching, so ordering by it reshuffles
+      -- the list under a finger mid-scroll: the live at position 1 when you
+      -- tapped is at position 3 by the time the screen opens, and swiping
+      -- "down" walks you backwards. started_at never moves.
+      ORDER BY l.started_at DESC, l.id
       LIMIT 50
     `).all();
 
