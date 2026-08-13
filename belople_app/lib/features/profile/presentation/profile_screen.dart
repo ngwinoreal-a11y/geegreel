@@ -129,11 +129,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 // shouted at you to do a thing you'd already done. Filled for
                 // the action, quiet outline once it's done.
                 Expanded(
-                  child: profile.following
+                  child: profile.following || profile.requested
                       ? OutlinedButton(
                           onPressed: () async {
                             if (me == null) { context.push('/login'); return; }
                             try {
+                              // Cancels a pending request as well as an
+                              // accepted follow — both are the same row.
                               await ref.read(feedRepositoryProvider).setFollowing(profile.user.id, false);
                               ref.invalidate(profileProvider(widget.handle));
                             } catch (_) {}
@@ -142,7 +144,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             foregroundColor: AppColors.muted,
                             side: const BorderSide(color: AppColors.border),
                           ),
-                          child: const Text('Following'),
+                          // A private account has to approve you first. Saying
+                          // "Requested" is the whole point: pressing Follow
+                          // used to leave the button reading "Follow", so it
+                          // looked like the tap had been swallowed.
+                          child: Text(profile.following ? 'Following' : 'Requested'),
                         )
                       : ElevatedButton(
                           onPressed: () async {

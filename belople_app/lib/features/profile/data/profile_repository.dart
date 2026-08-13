@@ -10,6 +10,7 @@ class ProfileData {
   const ProfileData({
     required this.user,
     required this.following,
+    required this.requested,
     required this.videos,
     required this.posts,
     required this.locked,
@@ -17,6 +18,11 @@ class ProfileData {
 
   final UserModel user;
   final bool following;
+
+  /// A follow request sent to a private account and not yet approved. Without
+  /// this the button fell back to 'Follow' the moment the screen reloaded, so
+  /// asking to follow looked like it had done nothing at all.
+  final bool requested;
 
   /// All rows the profile endpoint returns for this user (originals AND
   /// reposts); split into the Videos / Reposts tabs by [VideoModel.isRepost].
@@ -64,6 +70,7 @@ class ProfileRepository {
       following: data['following'] as bool? ?? false,
       videos: videos,
       posts: posts,
+      requested: data['requested'] as bool? ?? false,
       locked: data['locked'] as bool? ?? false,
     );
   }

@@ -1702,8 +1702,15 @@ async function handle(request, env, ctx) {
                        AND f.status = 'accepted')                       AS following
       FROM posts p JOIN users u ON u.id = p.user_id
       WHERE u.status != 'banned'
+        -- A private account's posts are for its accepted followers, exactly
+        -- like its videos. This feed had no privacy gate at all, so marking an
+        -- account private hid its Shorts and left every photo and written post
+        -- of theirs in front of the whole world.
+        AND (u.is_private = 0 OR u.id = ? OR EXISTS(
+              SELECT 1 FROM follows f
+              WHERE f.follower_id = ? AND f.followee_id = u.id AND f.status = 'accepted'))
     `;
-    const binds = [viewerId, viewerId];
+    const binds = [viewerId, viewerId, viewerId, viewerId];
     if (cursor) { sql += " AND p.created_at < ?"; binds.push(parseInt(cursor)); }
     sql += " ORDER BY p.created_at DESC LIMIT ?";
     binds.push(limit);
@@ -3406,10 +3413,15 @@ async function handle(request, env, ctx) {
           .bind(viewerId, viewerId, u.id, viewerId, viewerId).all()
       : { results: [] };
 
-    // Public posts have no privacy gate of their own — the whole point of the
-    // Public tab is that it's public — so these show on the profile
-    // regardless of canSeeVideos/is_private, same as they do in the Public feed.
-    const { results: postResults } = await env.DB.prepare(`
+    // Public posts are gated by the SAME rule as videos.
+    //
+    // They used to be exempt, on the reasoning that "the Public tab is
+    // public" — but that is a statement about the tab, not about the person.
+    // Marking an account private hid its videos and left every photo and
+    // written post of theirs readable by anyone, which is not what anyone
+    // means by private. Verified against the live API: a signed-out request
+    // for a private profile returned locked=true, videos 0 — and 7 posts.
+    const { results: postResults } = !canSeeVideos ? { results: [] } : await env.DB.prepare(`
       SELECT p.id, p.content, p.media_key, p.media_type, p.width, p.height, p.created_at,
              u.id AS user_id, u.username, u.display_name, u.avatar_key, u.role,
              (SELECT COUNT(*) FROM post_likes    WHERE post_id = p.id) AS like_count,
@@ -3424,10 +3436,20 @@ async function handle(request, env, ctx) {
       ORDER BY p.created_at DESC LIMIT 60
     `).bind(user?.id || "", user?.id || "", u.id).all();
 
+    // Has this viewer already asked to follow a private account? Without it
+    // the button had no way to know, so after sending a request it fell
+    // straight back to "Follow" and nothing looked like it had happened.
+    const pending = (user && !isOwner)
+      ? await env.DB.prepare(
+          "SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ? AND status = 'pending'"
+        ).bind(user.id, u.id).first()
+      : null;
+
     return json({
       user: publicUser(u),
       // Top-level so the profile's Follow button doesn't have to dig for it.
       following: !!stats.is_following,
+      requested: !!pending,
       stats: {
         followers: stats.followers,
         following: stats.following,

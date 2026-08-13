@@ -62,12 +62,20 @@ class FeedRepository {
   }
 
   /// `POST/DELETE /api/users/:id/follow`.
-  Future<bool> setFollowing(String userId, bool following) async {
+  /// Returns what actually happened, which is not always what was asked for:
+  /// following a PRIVATE account files a request instead, and the server
+  /// answers `{following: false, requested: true}`. Reading only `following`
+  /// made that look like a failure — the button snapped back to "Follow" and
+  /// the request it had just sent was invisible.
+  Future<({bool following, bool requested})> setFollowing(String userId, bool following) async {
     final res = following
         ? await _dio.post('/users/$userId/follow')
         : await _dio.delete('/users/$userId/follow');
     final data = res.data as Map<String, dynamic>;
-    return data['following'] as bool? ?? following;
+    return (
+      following: data['following'] as bool? ?? following,
+      requested: data['requested'] as bool? ?? false,
+    );
   }
 
   /// `POST /api/reports` — `videoId`/`commentId`/`reportedUserId` are all

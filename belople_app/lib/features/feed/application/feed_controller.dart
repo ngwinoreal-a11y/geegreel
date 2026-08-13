@@ -234,12 +234,15 @@ class FeedController extends FamilyAsyncNotifier<FeedState, FeedTab> {
     ];
     state = AsyncData(current.copyWith(videos: updated));
     try {
-      final following = await ref.read(feedRepositoryProvider).setFollowing(userId, nextFollowing);
+      final result = await ref.read(feedRepositoryProvider).setFollowing(userId, nextFollowing);
       final latest = state.valueOrNull;
       if (latest == null) return;
       state = AsyncData(latest.copyWith(videos: [
         for (final v in latest.videos)
-          if (v.user.id == userId) v.copyWith(following: following) else v,
+          // A request to a private account is NOT a follow, so the rail's
+          // button must not claim it is — it stays un-followed until the
+          // account approves. "Requested" is spelled out on the profile.
+          if (v.user.id == userId) v.copyWith(following: result.following) else v,
       ]));
     } catch (_) {
       final latest = state.valueOrNull;
