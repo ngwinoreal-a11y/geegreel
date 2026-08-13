@@ -1,10 +1,17 @@
 import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_typography.dart';
+import '../../../core/widgets/top_toast.dart';
+import '../../auth/application/auth_controller.dart';
+import '../../profile/data/profile_repository.dart';
+import '../../public_feed/application/public_feed_controller.dart';
+import '../data/upload_repository.dart';
 import 'camera_filters.dart';
 
 /// In-app camera modelled on the reference (Instagram/TikTok style): mode tabs
@@ -204,7 +211,9 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
         child: _error != null
             ? _CameraError(message: _error!, onClose: () => context.pop())
             : _mode == _CamMode.text
-                ? _TextComposePrompt(onContinue: () => context.pop('text'), onClose: () => context.pop(), tabs: _modeTabs())
+                // Publishes on its own and pops when it's done — nothing to
+                // hand back to the composer.
+                ? _TextComposePrompt(onClose: () => context.pop(), tabs: _modeTabs())
                 : _mode == _CamMode.public
                     // Public posts are photos — no camera, just the phone's
                     // gallery (opens straight away, matching the reference).
@@ -428,46 +437,243 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
   }
 }
 
-/// The Text mode surface: a big prompt to write a public text post; Continue
-/// hands off to the composer's text mode.
-class _TextComposePrompt extends StatelessWidget {
-  const _TextComposePrompt({required this.onContinue, required this.onClose, required this.tabs});
-  final VoidCallback onContinue;
+/// The Text mode surface. You write at the top and watch the post build itself
+/// underneath, exactly as it will look on Public.
+///
+/// It used to be an icon, two lines of copy and a Continue button that took
+/// you to ANOTHER screen to actually write — so arriving here told you nothing
+/// about what a text post is or where the words end up, and cost a step to
+/// find out. A text post is only words: everything it needs is on this one
+/// screen, so it publishes from here and there is no second page.
+class _TextComposePrompt extends ConsumerStatefulWidget {
+  const _TextComposePrompt({required this.onClose, required this.tabs});
+
   final VoidCallback onClose;
   final Widget tabs;
 
   @override
+  ConsumerState<_TextComposePrompt> createState() => _TextComposePromptState();
+}
+
+class _TextComposePromptState extends ConsumerState<_TextComposePrompt> {
+  final _controller = TextEditingController();
+  bool _publishing = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _publish() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty || _publishing) return;
+    setState(() => _publishing = true);
+    try {
+      await ref.read(uploadRepositoryProvider).uploadPost(content: text);
+      if (!mounted) return;
+      // Show up on Public and on your own profile straight away, without a
+      // manual refresh — the same invalidations the composer does.
+      final me = ref.read(authControllerProvider).valueOrNull;
+      ref.invalidate(publicFeedControllerProvider);
+      if (me != null) ref.invalidate(profileProvider(me.username));
+      showTopToast(context, 'Posted!');
+      // Leaves the camera entirely: the post is made, there is nothing else to
+      // do here.
+      context.pop();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _publishing = false);
+        showTopToast(context, "Couldn't post — check your connection and try again");
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        Positioned(
-          top: 8, left: 8,
-          child: _RoundIcon(icon: Icons.close, onTap: onClose),
-        ),
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.article_outlined, color: Colors.white38, size: 60),
-                const SizedBox(height: 16),
-                Text('Write a public post', style: AppTypography.display(fontSize: 20, color: Colors.white)),
-                const SizedBox(height: 8),
-                Text('Share a thought or story — no photo needed.',
-                    textAlign: TextAlign.center,
-                    style: AppTypography.sans(fontSize: 14, color: Colors.white54)),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(onPressed: onContinue, child: const Text('Continue')),
+    final typed = _controller.text.trim();
+
+    return Container(
+      // The app's near-black, not the pure #000 this screen sat on. On an OLED
+      // phone #000 reads as a hole rather than a surface and everything on it
+      // floats; a few points of lift gives the card below something to sit on.
+      color: AppColors.bg,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                child: _RoundIcon(icon: Icons.close, onTap: widget.onClose),
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Write a post',
+                        style: AppTypography.display(
+                            fontSize: 34, fontWeight: FontWeight.w800, color: AppColors.text)),
+                    const SizedBox(height: 6),
+                    Text('A thought, a story, an announcement. No photo needed.',
+                        style: AppTypography.sans(fontSize: 15, color: AppColors.muted)),
+                    const SizedBox(height: 20),
+
+                    // Where you write. Big type, because what goes in here is
+                    // the whole post — it should feel like the page, not like a
+                    // form field.
+                    Container(
+                      constraints: const BoxConstraints(minHeight: 150),
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(AppRadii.lg),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: TextField(
+                        controller: _controller,
+                        autofocus: true,
+                        maxLines: null,
+                        maxLength: 2000,
+                        onChanged: (_) => setState(() {}),
+                        style: AppTypography.sans(
+                            fontSize: 21, height: 1.35, fontWeight: FontWeight.w600, color: AppColors.text),
+                        cursorColor: AppColors.accent,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          border: InputBorder.none,
+                          counterText: '',
+                          hintText: "What's on your mind?",
+                          hintStyle: AppTypography.sans(
+                              fontSize: 21, fontWeight: FontWeight.w600, color: AppColors.faint),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 26),
+                    Row(children: [
+                      Text('HOW IT WILL LOOK', style: AppTypography.sectionLabel),
+                      const SizedBox(width: 8),
+                      Expanded(child: Container(height: 1, color: AppColors.border)),
+                    ]),
+                    const SizedBox(height: 12),
+
+                    // The simulation: the same white card, the same grey text
+                    // block, the same action row your post will actually get on
+                    // Public — so you can see where the words land before you
+                    // commit to them.
+                    _PublicPostPreview(text: typed),
+
+                    const SizedBox(height: 26),
+                    // Publish, not Continue. This screen holds the whole post,
+                    // so sending you to another one to press a second button
+                    // was a step that asked for nothing.
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: (typed.isEmpty || _publishing) ? null : _publish,
+                        // White, not the brand amber. A full-width amber slab
+                        // was the only colour on the screen and pulled the eye
+                        // off the thing being written.
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.chrome,
+                          foregroundColor: AppColors.onChrome,
+                          disabledBackgroundColor: AppColors.raised,
+                          disabledForegroundColor: AppColors.faint,
+                        ),
+                        child: _publishing
+                            ? const SizedBox(
+                                height: 20, width: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.onChrome),
+                              )
+                            : const Text('Publish'),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
+            ),
+            Padding(padding: const EdgeInsets.only(bottom: 12), child: widget.tabs),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A miniature of the Public feed's text post, drawn from the same parts the
+/// real one uses: white page, near-black ink, the words in a light rounded
+/// block, and the action row beneath.
+class _PublicPostPreview extends StatelessWidget {
+  const _PublicPostPreview({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final empty = text.isEmpty;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 30, height: 30,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(colors: [Color(0xFFF9CE34), Color(0xFFEE2A7B)]),
+              ),
+            ),
+            const SizedBox(width: 9),
+            Text('You',
+                style: AppTypography.sans(
+                    fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.onChrome)),
+            const SizedBox(width: 8),
+            Text('now', style: AppTypography.sans(fontSize: 12, color: AppColors.onSheetMuted)),
+          ]),
+          const SizedBox(height: 11),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.sheetFill,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Text(
+              empty ? 'Your words will appear here.' : text,
+              maxLines: 6,
+              overflow: TextOverflow.ellipsis,
+              style: AppTypography.sans(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                // The placeholder must not pass for real content.
+                color: empty ? AppColors.onSheetMuted : AppColors.onChrome,
+              ),
             ),
           ),
-        ),
-        Positioned(left: 0, right: 0, bottom: 20, child: tabs),
-      ],
+          const SizedBox(height: 11),
+          Row(children: [
+            for (final icon in [
+              Icons.favorite_border_rounded,
+              Icons.mode_comment_outlined,
+              Icons.send_rounded,
+            ]) ...[
+              Icon(icon, size: 21, color: AppColors.onChrome),
+              const SizedBox(width: 6),
+              Text('0', style: AppTypography.mono(fontSize: 13, color: AppColors.onChrome)),
+              const SizedBox(width: 18),
+            ],
+          ]),
+        ],
+      ),
     );
   }
 }

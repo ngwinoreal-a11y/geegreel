@@ -37,7 +37,13 @@ enum _ComposerMode { video, photo, text }
 /// via the OS camera UI, caption, upload with progress, land in the feed)
 /// end to end against the real backend.
 class ComposerScreen extends ConsumerStatefulWidget {
-  const ComposerScreen({super.key, this.soundId, this.videoPath, this.imagePath, this.initialMode});
+  const ComposerScreen({
+    super.key,
+    this.soundId,
+    this.videoPath,
+    this.imagePath,
+    this.initialMode,
+  });
 
   /// When arriving from a sound page's "Use this sound", the picked video is
   /// attached to this sound on publish. Locks the composer to video mode.
