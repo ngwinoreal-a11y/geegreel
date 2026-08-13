@@ -242,7 +242,28 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
     super.dispose();
   }
 
+  /// Opens the advertiser's link. The whole ad is the button.
+  void _openAdLink() {
+    final url = widget.video.linkUrl;
+    if (url == null) return;
+    widget.onAdClick?.call();
+    try {
+      launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (e) {
+      // Never silently: someone paid for this tap to go somewhere.
+      debugPrint('[BLAD] could not open $url: $e');
+    }
+  }
+
   void _togglePlayPause() {
+    // An ad does not pause. Tapping it goes where the advertiser paid for it
+    // to go — the tap is the ad's whole purpose, and spending it on a pause
+    // glyph wastes the one thing they bought. Someone who wants it gone swipes,
+    // which is what they were going to do anyway.
+    if (widget.video.isAd) {
+      if (widget.video.linkUrl != null) _openAdLink();
+      return;
+    }
     if (_controller == null || !_initialized) return;
     setState(() {
       // Playing now → this tap pauses it, and that's the user's choice to keep.
@@ -524,10 +545,7 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                 if (widget.video.isAd && widget.video.linkUrl != null) ...[
                   const SizedBox(height: 10),
                   GestureDetector(
-                    onTap: () {
-                      widget.onAdClick?.call();
-                      launchUrl(Uri.parse(widget.video.linkUrl!), mode: LaunchMode.externalApplication);
-                    },
+                    onTap: _openAdLink,
                     child: Container(
                       width: 260,
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

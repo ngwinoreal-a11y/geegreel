@@ -206,8 +206,20 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
             final items = _interleave(state.posts, state.ad);
             return BrandRefresh(
               onRefresh: () async {
+                // The spliced-in videos are pooled in this screen's own State,
+                // so invalidating the posts alone left every one of them
+                // exactly where it was — half the feed visibly unchanged after
+                // a pull, which is most of why the refresh read as fake.
+                setState(() {
+                  _videoPool.clear();
+                  _videoCursor = null;
+                  _videoDone = false;
+                });
                 ref.invalidate(publicFeedControllerProvider);
-                await ref.read(publicFeedControllerProvider.future);
+                await Future.wait([
+                  ref.read(publicFeedControllerProvider.future),
+                  _loadVideos(),
+                ]);
               },
               // No rule between posts: the media is the card, the gap is the
               // separator. A hairline across a white feed reads as clutter.

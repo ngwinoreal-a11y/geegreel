@@ -1737,9 +1737,22 @@ async function handle(request, env, ctx) {
     const cursor = url.searchParams.get("cursor");
     const viewerId = user?.id || "";
 
-    let sql = `
+    // Public shows what you have NOT seen before anything you have.
+    //
+    // It used to be plain `ORDER BY created_at DESC` with a timestamp cursor,
+    // which meant pulling to refresh asked the server a real question and got
+    // the same fifteen posts back every single time. The refresh was never
+    // broken — the answer just never changed, which from the outside is
+    // indistinguishable from broken.
+    //
+    // Signed out there is nobody to have seen anything, so that case keeps the
+    // simple newest-first paging it always had.
+    const personalised = viewerId !== "";
+
+    const sql = `
       SELECT p.id, p.content, p.media_key, p.media_type, p.width, p.height, p.created_at,
              u.id AS user_id, u.username, u.display_name, u.avatar_key, u.role,
+             ${personalised ? "e.seen_at AS seen_at," : "NULL AS seen_at,"}
              (SELECT COUNT(*) FROM post_likes    WHERE post_id = p.id) AS like_count,
              (SELECT COUNT(*) FROM post_comments WHERE post_id = p.id) AS comment_count,
              (SELECT COUNT(*) FROM post_shares   WHERE post_id = p.id) AS share_count,
@@ -1747,7 +1760,9 @@ async function handle(request, env, ctx) {
              EXISTS(SELECT 1 FROM follows f
                      WHERE f.follower_id = ? AND f.followee_id = u.id
                        AND f.status = 'accepted')                       AS following
-      FROM posts p JOIN users u ON u.id = p.user_id
+      FROM posts p
+      JOIN users u ON u.id = p.user_id
+      ${personalised ? "LEFT JOIN post_exposures e ON e.post_id = p.id AND e.user_id = ?" : ""}
       WHERE u.status != 'banned'
         -- A private account's posts are for its accepted followers, exactly
         -- like its videos. This feed had no privacy gate at all, so marking an
@@ -1756,13 +1771,64 @@ async function handle(request, env, ctx) {
         AND (u.is_private = 0 OR u.id = ? OR EXISTS(
               SELECT 1 FROM follows f
               WHERE f.follower_id = ? AND f.followee_id = u.id AND f.status = 'accepted'))
+        ${!personalised && cursor ? "AND p.created_at < ?" : ""}
+      ${personalised
+        // NULLs first IS the ordering: never-seen posts, newest of those first,
+        // then everything else oldest-seen first — so what comes back round is
+        // whatever you saw longest ago, never what you just scrolled past.
+        ? "ORDER BY seen_at IS NOT NULL, seen_at ASC, p.created_at DESC"
+        : "ORDER BY p.created_at DESC"}
+      LIMIT ?
     `;
-    const binds = [viewerId, viewerId, viewerId, viewerId];
-    if (cursor) { sql += " AND p.created_at < ?"; binds.push(parseInt(cursor)); }
-    sql += " ORDER BY p.created_at DESC LIMIT ?";
+
+    // Bind order follows the statement, not the logic: the two EXISTS in the
+    // SELECT, then the exposure join, then the privacy clause, then the cursor.
+    const binds = [viewerId, viewerId];
+    if (personalised) binds.push(viewerId);
+    binds.push(viewerId, viewerId);
+    if (!personalised && cursor) binds.push(parseInt(cursor));
     binds.push(limit);
 
     const { results } = await env.DB.prepare(sql).bind(...binds).all();
+
+    // Remember what was just handed over, so the next pull brings something
+    // else. After the response is on its way: a feed must not wait on its own
+    // bookkeeping.
+    //
+    // Recorded on SERVE rather than on view, the same way video exposures are.
+    // It means a post scrolled straight past still counts as seen, which is the
+    // honest trade — the alternative is a report from the client for every card
+    // that crosses the screen.
+    if (personalised && results.length) {
+      const t = now();
+      ctx.waitUntil(
+        env.DB.batch(
+          results.map(r =>
+            env.DB.prepare(
+              "INSERT INTO post_exposures (user_id, post_id, seen_at) VALUES (?, ?, ?) " +
+              "ON CONFLICT(user_id, post_id) DO UPDATE SET seen_at = excluded.seen_at"
+            ).bind(viewerId, r.id, t)
+          )
+        ).catch(e => console.error("[PUBLIC] recording exposures failed", e))
+      );
+    }
+
+    // Remember what was just handed over, so the next pull brings something
+    // else. Written after the response is on its way — a feed must not wait on
+    // its own bookkeeping.
+    if (viewerId && results.length) {
+      const t = now();
+      ctx.waitUntil(
+        env.DB.batch(
+          results.map(r =>
+            env.DB.prepare(
+              "INSERT INTO post_exposures (user_id, post_id, seen_at) VALUES (?, ?, ?) " +
+              "ON CONFLICT(user_id, post_id) DO UPDATE SET seen_at = excluded.seen_at"
+            ).bind(viewerId, r.id, t)
+          )
+        ).catch(e => console.error("[PUBLIC] recording exposures failed", e))
+      );
+    }
 
     // Attach the two most recent comments per post in ONE query rather than one
     // per post. With 15 posts that's the difference between 2 queries and 16 —
@@ -1810,8 +1876,16 @@ async function handle(request, env, ctx) {
     return json({
       posts: results.map(shapePost),
       ad: ad ? shapeAd(ad) : null,
+      // Signed in, the cursor is just "there was a full page, ask again" —
+      // recording the exposures above is what moves the window, so the next
+      // request naturally returns the next unseen batch. A timestamp cursor
+      // would fight that: it would skip past unseen older posts to honour an
+      // ordering the query no longer uses.
       nextCursor: results.length === limit
-        ? String(results[results.length - 1].created_at) : null,
+        ? (personalised
+            ? String((parseInt(cursor || "0") || 0) + 1)
+            : String(results[results.length - 1].created_at))
+        : null,
     });
   }
 
