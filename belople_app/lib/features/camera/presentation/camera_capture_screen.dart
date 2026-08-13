@@ -37,7 +37,6 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
   Timer? _timer;
   FlashMode _flashMode = FlashMode.off;
   int _filterIndex = 0;
-  bool _showFilters = false;
 
   _CamMode _mode = _CamMode.short;
   int _maxSeconds = 60;
@@ -237,17 +236,13 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
                         ),
                       ),
 
-                      // Right rail: flash, filters toggle.
+                      // Right rail: flash. The filters toggle used to live here
+                      // too — the looks are on the shelf above the shutter now,
+                      // so there is nothing left to toggle.
                       Positioned(
                         top: 64, right: 8,
                         child: Column(children: [
                           _RoundIcon(icon: _flashIcon, onTap: _cycleFlash),
-                          const SizedBox(height: 16),
-                          _RoundIcon(
-                            icon: Icons.auto_awesome,
-                            active: _showFilters,
-                            onTap: () => setState(() => _showFilters = !_showFilters),
-                          ),
                         ]),
                       ),
 
@@ -267,19 +262,24 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
                           ),
                         ),
 
-                      // Filter strip.
-                      if (_showFilters)
+                      // The looks, on a shelf just above the shutter and always
+                      // there. They used to be text chips behind a toggle on
+                      // the right rail, which meant you had to know they
+                      // existed and then read a word — "Vivid" — to guess what
+                      // it would do. Each circle is the LIVE viewfinder with
+                      // that look applied, so you pick by looking, not reading.
+                      if (!_recording && ready)
                         Positioned(
-                          left: 0, right: 0, bottom: 190,
+                          left: 0, right: 0, bottom: 178,
                           child: SizedBox(
-                            height: 60,
+                            height: 76,
                             child: ListView.separated(
                               scrollDirection: Axis.horizontal,
                               padding: const EdgeInsets.symmetric(horizontal: 16),
                               itemCount: kCameraFilters.length,
-                              separatorBuilder: (_, _) => const SizedBox(width: 10),
-                              itemBuilder: (context, i) => _FilterChip(
-                                label: kCameraFilters[i].label,
+                              separatorBuilder: (_, _) => const SizedBox(width: 12),
+                              itemBuilder: (context, i) => _FilterThumb(
+                                filter: kCameraFilters[i],
                                 selected: i == _filterIndex,
                                 onTap: () => setState(() => _filterIndex = i),
                               ),
@@ -304,11 +304,13 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
                                         onTap: () => setState(() => _maxSeconds = s),
                                         child: Text(_durationLabel(s),
                                             style: AppTypography.sans(
-                                              // Read at arm's length while
-                                              // framing a shot — the old
-                                              // 13/15px was hard to pick out
-                                              // against a bright viewfinder.
-                                              fontSize: _maxSeconds == s ? 20 : 17,
+                                              // Legible at arm's length, but no
+                                              // bigger: at 20px these read as
+                                              // the loudest thing on a screen
+                                              // whose whole job is the picture
+                                              // behind them. The shadow does
+                                              // the work of standing out.
+                                              fontSize: _maxSeconds == s ? 15 : 13.5,
                                               fontWeight: _maxSeconds == s ? FontWeight.w800 : FontWeight.w600,
                                               color: _maxSeconds == s ? AppColors.accent : Colors.white70,
                                             ).copyWith(
@@ -382,7 +384,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> with WidgetsB
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Text(label,
                 style: AppTypography.sans(
-                  fontSize: 14,
+                  fontSize: 13,
                   fontWeight: _mode == m ? FontWeight.w800 : FontWeight.w500,
                   color: _mode == m ? AppColors.accent : Colors.white70,
                 )),
@@ -537,37 +539,80 @@ class _GalleryPromptState extends State<_GalleryPrompt> {
   }
 }
 
-class _FilterChip extends StatelessWidget {
-  const _FilterChip({required this.label, required this.selected, required this.onTap});
-  final String label;
+/// One look on the shelf: a round swatch showing what that look does to skin
+/// and to the light behind it, so the choice is made by looking rather than by
+/// reading a word and guessing what "Vivid" will do.
+///
+/// A swatch, and NOT a live thumbnail of the viewfinder. Drawing the camera
+/// texture eight times over and putting a different ColorFilter on each one
+/// bled through to the main preview — the whole viewfinder came out greyscale,
+/// wearing the last filter in the list. One camera surface can only really be
+/// composited once, so the strip paints its own colours instead.
+class _FilterThumb extends StatelessWidget {
+  const _FilterThumb({
+    required this.filter,
+    required this.selected,
+    required this.onTap,
+  });
+  final CameraFilter filter;
   final bool selected;
   final VoidCallback onTap;
 
+  /// Light, mid and shadow off a face — the three tones a look actually has to
+  /// answer for. A flat square of colour tells you far less.
+  static const _swatch = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFF6E3CC), Color(0xFFC98A55), Color(0xFF4A3325)],
+    stops: [0.0, 0.55, 1.0],
+  );
+
   @override
   Widget build(BuildContext context) {
+    const face = DecoratedBox(decoration: BoxDecoration(gradient: _swatch));
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      child: Container(
-        alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: selected ? Colors.white : Colors.black45,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white54),
-        ),
-        child: Text(label,
-            style: TextStyle(color: selected ? Colors.black : Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 54,
+            height: 54,
+            padding: const EdgeInsets.all(2.5),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              // The selected look wears the brand ring; the rest a hairline
+              // that keeps them visible against a bright viewfinder.
+              border: Border.all(
+                color: selected ? AppColors.accent : Colors.white54,
+                width: selected ? 2.5 : 1,
+              ),
+            ),
+            child: ClipOval(
+              child: filter.colorFilter == null
+                  ? face
+                  : ColorFiltered(colorFilter: filter.colorFilter!, child: face),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(filter.label,
+              style: AppTypography.sans(
+                fontSize: 10.5,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? AppColors.accent : Colors.white,
+              ).copyWith(shadows: const [Shadow(color: Colors.black87, blurRadius: 5)])),
+        ],
       ),
     );
   }
 }
 
 class _RoundIcon extends StatelessWidget {
-  const _RoundIcon({required this.icon, required this.onTap, this.active = false});
+  const _RoundIcon({required this.icon, required this.onTap});
   final IconData icon;
   final VoidCallback onTap;
-  final bool active;
 
   @override
   Widget build(BuildContext context) {
@@ -576,8 +621,8 @@ class _RoundIcon extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(color: active ? AppColors.accent : Colors.black45, shape: BoxShape.circle),
-        child: Icon(icon, color: active ? AppColors.onAccent : Colors.white, size: 24),
+        decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
+        child: Icon(icon, color: Colors.white, size: 24),
       ),
     );
   }
