@@ -69,6 +69,11 @@ class _LiveWatchScreenState extends ConsumerState<LiveWatchScreen> {
         itemBuilder: (context, i) => _LivePage(
           key: ValueKey(run[i].id),
           sessionId: run[i].id,
+          // The name and the face are already known — discovery handed them
+          // over with the card that was tapped. Drawing them straight away is
+          // the difference between opening a live and watching an anonymous
+          // grey placeholder turn into a person a second later.
+          seed: run[i],
           isActive: i == _page,
         ),
       ),
@@ -105,10 +110,20 @@ class _LiveWatchScreenState extends ConsumerState<LiveWatchScreen> {
 
 /// One live inside the pager: the picture, and everything over it.
 class _LivePage extends ConsumerStatefulWidget {
-  const _LivePage({super.key, required this.sessionId, required this.isActive});
+  const _LivePage({
+    super.key,
+    required this.sessionId,
+    required this.isActive,
+    this.seed,
+  });
 
   final String sessionId;
   final bool isActive;
+
+  /// What discovery already knew: the creator, the title, the headcount. Used
+  /// to paint the screen on the first frame; the fetch that follows only fills
+  /// in what discovery does not carry (the playback URL, whether you follow).
+  final LiveSession? seed;
 
   @override
   ConsumerState<_LivePage> createState() => _LivePageState();
@@ -116,7 +131,7 @@ class _LivePage extends ConsumerStatefulWidget {
 
 class _LivePageState extends ConsumerState<_LivePage> {
   VideoPlayerController? _player;
-  LiveSession? _session;
+  late LiveSession? _session = widget.seed;
   String? _error;
   bool _ended = false;
   bool _following = false;
@@ -124,7 +139,7 @@ class _LivePageState extends ConsumerState<_LivePage> {
   Timer? _poll;
   Timer? _reactFlush;
   int _since = 0;
-  int _viewers = 0;
+  late int _viewers = widget.seed?.viewerCount ?? 0;
   int _pendingReacts = 0;
   final List<LiveComment> _comments = [];
 
@@ -323,6 +338,10 @@ class _LivePageState extends ConsumerState<_LivePage> {
                       // meant to feel instant, not to be exact.
                       onReact: () => _pendingReacts++,
                       onGift: () => showLiveGiftSheet(context, sessionId: widget.sessionId),
+                      onViewProfile: () {
+                        final u = _session?.creator.username;
+                        if (u != null && u.isNotEmpty) context.push('/profile/$u');
+                      },
                       onClose: () => context.pop(),
                     ),
                   ],

@@ -35,6 +35,7 @@ class LiveOverlay extends StatelessWidget {
     this.onSend,
     this.onReact,
     this.onGift,
+    this.onViewProfile,
   });
 
   final int viewers;
@@ -57,6 +58,9 @@ class LiveOverlay extends StatelessWidget {
   /// the app never offers a way to buy them, which is the rule Play enforces
   /// and the reason the wallet's own top-up lives on the website.
   final VoidCallback? onGift;
+
+  /// Opens the creator's profile, from the sheet behind their face.
+  final VoidCallback? onViewProfile;
 
   @override
   Widget build(BuildContext context) {
@@ -130,6 +134,63 @@ class LiveOverlay extends StatelessWidget {
 
   Widget _creatorPill(BuildContext context) {
     final c = creator;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      // Tapping the person opens the two things you might want from them — see
+      // who they are, or give them something. It does not navigate away on its
+      // own: leaving a live by accident, mid-sentence, is not recoverable.
+      onTap: c == null ? null : () => _showCreatorSheet(context, c),
+      child: _pillBody(context, c),
+    );
+  }
+
+  Future<void> _showCreatorSheet(BuildContext context, LiveCreator c) {
+    return showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 14),
+            AppAvatar(
+              size: 62,
+              imageUrl: c.avatarUrl == null ? null : mediaUrl(c.avatarUrl!),
+              displayName: c.name,
+            ),
+            const SizedBox(height: 10),
+            Text(c.name,
+                style: AppTypography.sans(fontSize: 17, fontWeight: FontWeight.w700)),
+            Text('@${c.username}',
+                style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: const Icon(Icons.person_outline),
+              title: Text('View profile', style: AppTypography.sans(fontSize: 15)),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                onViewProfile?.call();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.card_giftcard, color: AppColors.accent),
+              title: Text('Send a gift', style: AppTypography.sans(fontSize: 15)),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                onGift?.call();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _pillBody(BuildContext context, LiveCreator? c) {
     return Container(
       padding: const EdgeInsets.fromLTRB(4, 4, 12, 4),
       decoration: BoxDecoration(
@@ -251,6 +312,13 @@ class LiveOverlay extends StatelessWidget {
           // Newest at the bottom, and the list sits at the bottom by default —
           // which is where a live chat is always read from.
           reverse: true,
+          // NOT scrollable, and that is the point. This strip covers the lower
+          // fifth of the screen — exactly where a thumb swipes — and as a
+          // scrollable it swallowed every drag before the live pager could see
+          // it. Swiping to the next live simply did nothing wherever the chat
+          // happened to be. Nothing is lost by fixing it: the stream only ever
+          // rises and there is no scrolling back through it anyway.
+          physics: const NeverScrollableScrollPhysics(),
           itemCount: comments.length,
           itemBuilder: (context, i) => _line(comments[comments.length - 1 - i]),
         ),
@@ -519,53 +587,68 @@ class _ViewerBarState extends State<_ViewerBar> {
         child: Row(
           children: [
             Expanded(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: TextField(
-                  controller: _controller,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _send(),
-                  style: AppTypography.sans(fontSize: 14.5, color: Colors.white),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 13),
-                    hintText: 'Type…',
-                    hintStyle: AppTypography.sans(fontSize: 14.5, color: Colors.white54),
+              // ClipRRect, not just a rounded decoration. The TextField paints
+              // its own dense background into the box's corners, so the pill
+              // rendered as a hard-cornered grey slab no matter what radius the
+              // Container carried. Clipping the whole thing is what actually
+              // rounds it — the same soft edge the nav pill has.
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(999),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  // A light scrim, not a black one. Black-on-black made the
+                  // pill vanish completely whenever the picture behind it was
+                  // dark — which is most of the time on a live that hasn't
+                  // connected yet — leaving the hint text floating on nothing.
+                  // White at low alpha reads as a pill over anything.
+                  color: Colors.white.withValues(alpha: 0.16),
+                  child: TextField(
+                    controller: _controller,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _send(),
+                    style: AppTypography.sans(fontSize: 14.5, color: Colors.white),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      filled: false,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 15),
+                      hintText: 'Type…',
+                      hintStyle: AppTypography.sans(fontSize: 14.5, color: Colors.white54),
+                    ),
                   ),
                 ),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
+            // Gift is the one that earns the creator anything, so it is the
+            // biggest and the only coloured one on the bar.
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: widget.onGift,
               child: Container(
-                width: 46, height: 46,
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.45),
+                width: 58, height: 58,
+                decoration: const BoxDecoration(
+                  color: AppColors.accent,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.card_giftcard, color: Colors.white, size: 22),
+                child: const Icon(Icons.card_giftcard, color: AppColors.onAccent, size: 29),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               // No await, no spinner, no confirmation: the tap is the whole
               // interaction and the count is approximate anyway.
               onTap: widget.onReact,
               child: Container(
-                width: 46, height: 46,
+                width: 58, height: 58,
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.45),
+                  color: Colors.white.withValues(alpha: 0.16),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.favorite, color: AppColors.danger, size: 22),
+                child: const Icon(Icons.favorite, color: AppColors.danger, size: 29),
               ),
             ),
           ],

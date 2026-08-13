@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../../../core/network/api_client.dart';
@@ -9,6 +10,7 @@ import '../../auth/application/auth_controller.dart';
 import '../application/playback_speed.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
+import '../../live/application/active_lives_controller.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/brand_refresh.dart';
 import '../data/video_model.dart';
@@ -391,18 +393,57 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                 if (!widget.video.isAd || widget.video.isUserAd)
                 Row(
                   children: [
-                    GestureDetector(
-                      onTap: widget.onAuthorTap,
-                      child: AppAvatar(
+                    // If this person is on air right now, their face says so
+                    // and goes there instead of to their profile. Someone
+                    // watching a creator's video is the likeliest person in the
+                    // app to want their live, and until now there was nothing
+                    // on the screen to tell them it existed.
+                    Builder(builder: (context) {
+                      final author = widget.video.repostOf ?? widget.video.user;
+                      final live = ref
+                          .watch(activeLivesProvider)
+                          .valueOrNull
+                          ?.where((s) => s.creator.id == author.id)
+                          .firstOrNull;
+                      final avatar = AppAvatar(
                         size: 44,
-                        imageUrl: (widget.video.repostOf ?? widget.video.user).avatarUrl != null
-                            ? mediaUrl((widget.video.repostOf ?? widget.video.user).avatarUrl!)
-                            : null,
-                        displayName: (widget.video.repostOf ?? widget.video.user).displayName,
-                        borderColor: Colors.white,
-                        borderWidth: 2,
-                      ),
-                    ),
+                        imageUrl: author.avatarUrl != null ? mediaUrl(author.avatarUrl!) : null,
+                        displayName: author.displayName,
+                        borderColor: live != null ? AppColors.danger : Colors.white,
+                        borderWidth: live != null ? 3 : 2,
+                      );
+                      return GestureDetector(
+                        onTap: live != null
+                            ? () => context.push('/live/${live.id}')
+                            : widget.onAuthorTap,
+                        child: live == null
+                            ? avatar
+                            : Stack(
+                                alignment: Alignment.bottomCenter,
+                                clipBehavior: Clip.none,
+                                children: [
+                                  avatar,
+                                  Positioned(
+                                    bottom: -6,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 1),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.danger,
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: Colors.black, width: 1.2),
+                                      ),
+                                      child: Text('LIVE',
+                                          style: AppTypography.sans(
+                                              fontSize: 8.5,
+                                              fontWeight: FontWeight.w900,
+                                              color: Colors.white)),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      );
+                    }),
                     const SizedBox(width: 8),
                     Flexible(
                       child: GestureDetector(

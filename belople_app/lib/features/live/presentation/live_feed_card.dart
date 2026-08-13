@@ -16,9 +16,10 @@ import '../data/live_repository.dart';
 /// "Tap to watch live" across the middle, and the creator, title and headcount
 /// along the bottom. You do not go to a Live section — you scroll into one.
 ///
-/// The preview is **muted**. It plays because a still frame of a live is
-/// indistinguishable from a still frame of anything else, and it is silent
-/// because you have not chosen to listen yet.
+/// The preview plays **with sound**, like every other page of this feed. A
+/// silent live looks like a photograph of one: you cannot tell whether anything
+/// is happening, and half of what makes a live worth opening is hearing that
+/// someone is mid-sentence. It stops the moment you swipe past.
 class LiveFeedCard extends ConsumerStatefulWidget {
   const LiveFeedCard({super.key, required this.session, required this.isActive});
 
@@ -55,7 +56,6 @@ class _LiveFeedCardState extends ConsumerState<LiveFeedCard> {
     try {
       final p = VideoPlayerController.networkUrl(Uri.parse(url));
       await p.initialize();
-      await p.setVolume(0);
       await p.play();
       if (!mounted) {
         p.dispose();
