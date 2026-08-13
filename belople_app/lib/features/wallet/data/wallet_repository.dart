@@ -10,6 +10,7 @@ class WalletData {
     required this.giftsReceived,
     required this.giftsSent,
     this.minPayoutCents = 1000,
+    this.withdrawableCoins = 0,
   });
 
   final int coins;
@@ -21,6 +22,12 @@ class WalletData {
   /// Smallest cash-out the server will accept, in cents (1 coin = 1 cent).
   final int minPayoutCents;
 
+  /// How many coins can actually leave as money: what you have been GIFTED,
+  /// less anything already taken out. Coins you bought are spendable on gifts
+  /// like any other — they just can't be turned back into cash, which is the
+  /// line that keeps this a gift economy rather than a money service.
+  final int withdrawableCoins;
+
   factory WalletData.fromJson(Map<String, dynamic> json) => WalletData(
         coins: (json['coins'] as num?)?.toInt() ?? 0,
         giftBalanceCents: (json['giftBalanceCents'] as num?)?.toInt() ?? 0,
@@ -28,6 +35,7 @@ class WalletData {
         giftsReceived: (json['giftsReceived'] as num?)?.toInt() ?? 0,
         giftsSent: (json['giftsSent'] as num?)?.toInt() ?? 0,
         minPayoutCents: (json['minPayoutCents'] as num?)?.toInt() ?? 1000,
+        withdrawableCoins: (json['withdrawableCoins'] as num?)?.toInt() ?? 0,
       );
 }
 

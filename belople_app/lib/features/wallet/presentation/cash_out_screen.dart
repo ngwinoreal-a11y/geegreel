@@ -61,7 +61,9 @@ class _CashOutScreenState extends ConsumerState<CashOutScreen> {
       return;
     }
     if (coins > available) {
-      setState(() => _error = "You only have $available coins");
+      setState(() => _error = available <= 0
+          ? "You haven't been gifted any coins yet — only gifted coins can be cashed out"
+          : "You can cash out $available coins");
       return;
     }
     if (_detailsController.text.trim().isEmpty) {
@@ -104,7 +106,13 @@ class _CashOutScreenState extends ConsumerState<CashOutScreen> {
               style: AppTypography.sans(color: AppColors.muted)),
         ),
         data: (w) {
-          final available = w.coins;
+          // What can leave as MONEY — coins you were gifted, less anything
+          // already taken out. Not the whole balance: coins you bought are
+          // yours to spend on gifts but never turn back into cash. Showing the
+          // full balance here would have promised money that the server was
+          // always going to refuse at the last step.
+          final available = w.withdrawableCoins;
+          final bought = w.coins - available;
           final minCoins = w.minPayoutCents; // 1 coin = 1 cent
           return ListView(
             padding: const EdgeInsets.all(AppSpacing.pageHorizontal),
@@ -118,12 +126,25 @@ class _CashOutScreenState extends ConsumerState<CashOutScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('AVAILABLE', style: AppTypography.sectionLabel),
+                    Text('YOU CAN CASH OUT', style: AppTypography.sectionLabel),
                     const SizedBox(height: 6),
                     Text('$available coins',
                         style: AppTypography.mono(fontSize: 28, fontWeight: FontWeight.w700)),
                     Text('= \$${(available / 100).toStringAsFixed(2)}',
                         style: AppTypography.sans(fontSize: 15, color: AppColors.muted)),
+                    // Says where the rest of the balance went, so the smaller
+                    // number here doesn't read as coins having gone missing.
+                    if (bought > 0) ...[
+                      const SizedBox(height: 10),
+                      Container(height: 1, color: AppColors.border),
+                      const SizedBox(height: 10),
+                      Text('You also have $bought coins you bought',
+                          style: AppTypography.sans(
+                              fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.text)),
+                      const SizedBox(height: 2),
+                      Text('Those are for sending gifts. Only coins people gift YOU turn back into money.',
+                          style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+                    ],
                   ],
                 ),
               ),

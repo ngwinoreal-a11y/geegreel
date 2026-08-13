@@ -187,6 +187,12 @@ const MONETIZE_RULES = {
 const CENTS_PER_1K_VIEWS = 2;
 const MIN_PAYOUT_CENTS = 1000; // $10 — don't queue payouts smaller than the fee
 
+/// Nothing is taken off a cash-out. Belople's share is already taken once, at
+/// the gift — 40% of it — and charging again on the way out would be charging
+/// twice for the same money. Left as a named constant so the decision is
+/// visible rather than absent.
+const PAYOUT_FEE_PERCENT = 0;
+
 // ---------- gifts and coins ----------
 //
 // Two currencies, deliberately:
@@ -3961,8 +3967,13 @@ async function handle(request, env, ctx) {
     const totals = await env.DB.prepare(`
       SELECT
         (SELECT COUNT(*) FROM gifts WHERE recipient_id = ?) AS gifts_received,
-        (SELECT COUNT(*) FROM gifts WHERE sender_id = ?)    AS gifts_sent
-    `).bind(user.id, user.id).first();
+        (SELECT COUNT(*) FROM gifts WHERE sender_id = ?)    AS gifts_sent,
+        -- Earned, minus everything already requested or paid. Only this can
+        -- become money; see the payout handler for why.
+        COALESCE((SELECT lifetime_gifts_cents FROM users WHERE id = ?), 0)
+          - COALESCE((SELECT SUM(coins) FROM coin_payouts
+                      WHERE user_id = ? AND status != 'rejected'), 0)     AS withdrawable
+    `).bind(user.id, user.id, user.id, user.id).first();
 
     return json({
       // One available balance, in coins. Kept as `coins` AND mirrored into
@@ -3977,6 +3988,11 @@ async function handle(request, env, ctx) {
       giftsSent: totals.gifts_sent,
       coinPacks: COIN_PACKS,
       minPayoutCents: MIN_PAYOUT_CENTS,
+      // What can actually leave as money, and what it costs to send. The
+      // cash-out screen shows the whole balance otherwise, and only finds out
+      // at the last step that most of it was bought and can't be withdrawn.
+      withdrawableCoins: Math.max(0, totals.withdrawable || 0),
+      payoutFeePercent: PAYOUT_FEE_PERCENT,
     });
   }
 
@@ -4722,12 +4738,44 @@ async function handle(request, env, ctx) {
       .bind(user.id).first();
     if ((fresh?.coin_balance || 0) < amount) return err("You don't have that many coins");
 
+    // ONLY coins that were EARNED can leave as money.
+    //
+    // Cash-out used to pay out any coin in the balance, so a person could buy
+    // 1000 coins for $10 and immediately withdraw the same $10 — the app would
+    // take money in and hand it straight back. That is not a gift economy, it
+    // is storing value redeemable for cash, which is e-money and needs a BNR
+    // licence; and it is a laundering channel besides. Bought coins can be
+    // SPENT — that is what they are for — but only gift income turns back into
+    // money, which is the same line YouTube and TikTok draw.
+    //
+    // lifetime_gifts_cents is the earnings record and is never spent from, so
+    // it minus everything already taken out is what is genuinely withdrawable.
+    const earned = await env.DB.prepare(`
+      SELECT COALESCE(u.lifetime_gifts_cents, 0) AS lifetime,
+             COALESCE((SELECT SUM(coins) FROM coin_payouts
+                       WHERE user_id = ? AND status != 'rejected'), 0) AS taken
+      FROM users u WHERE u.id = ?
+    `).bind(user.id, user.id).first();
+    const withdrawable = (earned?.lifetime || 0) - (earned?.taken || 0);
+    if (amount > withdrawable) {
+      return err(withdrawable <= 0
+        ? "Only coins people gift you can be cashed out. Coins you bought are for sending gifts."
+        : `You can cash out ${withdrawable} coins — the rest were bought, and bought coins are for sending gifts.`);
+    }
+
     // One pending request at a time — otherwise a balance can be committed
     // twice over before either is reviewed.
     const open = await env.DB.prepare(
       "SELECT id FROM coin_payouts WHERE user_id = ? AND status = 'pending'"
     ).bind(user.id).first();
     if (open) return err("You already have a cash-out being processed", 409);
+
+    // Currently zero (see PAYOUT_FEE_PERCENT). Stored as the NET regardless,
+    // so the admin queue always shows the figure to pay rather than a number
+    // to do arithmetic on — and so turning a fee on later changes one constant
+    // and nothing else.
+    const feeCents = Math.ceil(cents * PAYOUT_FEE_PERCENT / 100);
+    const netCents = cents - feeCents;
 
     const id = uid();
     await env.DB.batch([
@@ -4736,7 +4784,7 @@ async function handle(request, env, ctx) {
       env.DB.prepare(`
         INSERT INTO coin_payouts (id, user_id, coins, amount_cents, method, details, status, created_at)
         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
-      `).bind(id, user.id, amount, cents, payMethod, details.trim(), now()),
+      `).bind(id, user.id, amount, netCents, payMethod, details.trim(), now()),
     ]);
 
     const after = await env.DB.prepare("SELECT coin_balance FROM users WHERE id = ?")
@@ -4744,7 +4792,14 @@ async function handle(request, env, ctx) {
     await recordTx(env, user.id, "payout_requested", -amount, 0,
                    after.coin_balance, after.coin_balance * COIN_PRICE_CENTS, id, "Cash-out requested");
 
-    return json({ ok: true, payout: { id, coins: amount, amountCents: cents, status: "pending" } });
+    return json({
+      ok: true,
+      payout: {
+        id, coins: amount,
+        grossCents: cents, feeCents, amountCents: netCents,
+        status: "pending",
+      },
+    });
   }
 
   // Your own cash-out history, so a request isn't a black hole after sending.
