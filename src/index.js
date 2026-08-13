@@ -7,6 +7,14 @@ import {
   markExposureSignal, markCreatorFollowed,
 } from "./belo_flow.js";
 
+// Live video. src/mux.js is the ONLY file that knows the provider's name — if
+// Mux is ever replaced, that file is what gets rewritten and comments, likes,
+// follows, notifications and discovery are untouched.
+import {
+  createLiveStream, completeLiveStream, deleteLiveStream, deleteAsset,
+  verifyWebhook, playbackUrl, maxLiveSeconds,
+} from "./mux.js";
+
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 const json = (data, status = 200, extra = {}) =>
@@ -4940,7 +4948,440 @@ async function handle(request, env, ctx) {
     return json({ ok: true, role: "admin" });
   }
 
+  // ============================ LIVE ============================
+  //
+  // Belople owns the session; Mux is only the video pipe (src/mux.js is the
+  // only file that knows it exists). Nothing here hands the app a Mux
+  // credential: the creator gets an ingest URL and a stream key for their own
+  // broadcast, viewers get a playback id, and neither reaches the account.
+
+  // Go Live: create the Mux stream, open the session, hand back where to push.
+  if (path === "/api/live/start" && method === "POST") {
+    requireUser(user);
+
+    // One at a time. Without this a crashed app that reopens starts a second
+    // paid encode while the first is still running.
+    const open = await env.DB.prepare(
+      "SELECT id FROM live_sessions WHERE creator_id = ? AND status IN ('starting','live','ending')"
+    ).bind(user.id).first();
+    if (open) return err("You already have a live going", 409);
+
+    // The gate the plan asks for. 0 means everyone, which is where it sits
+    // until the owner picks a number — every stream costs encoding minutes
+    // from the first second whether or not anyone watches.
+    const minFollowers = parseInt(env.LIVE_MIN_FOLLOWERS || "0", 10) || 0;
+    if (minFollowers > 0) {
+      const f = await env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM follows WHERE followee_id = ? AND status = 'accepted'"
+      ).bind(user.id).first();
+      if (f.n < minFollowers) {
+        return err(`You need ${minFollowers} followers to go live`, 403);
+      }
+    }
+
+    const { title } = await request.json().catch(() => ({}));
+    const stream = await createLiveStream(env);
+    const id = uid();
+    const t = now();
+
+    await env.DB.prepare(`
+      INSERT INTO live_sessions
+        (id, creator_id, title, status, mux_live_stream_id, mux_playback_id, created_at, updated_at)
+      VALUES (?, ?, ?, 'starting', ?, ?, ?, ?)
+    `).bind(
+      id, user.id, (title || "").trim().slice(0, 120) || null,
+      stream.liveStreamId, stream.playbackId, t, t
+    ).run();
+
+    return json({
+      sessionId: id,
+      ingestUrl: stream.ingestUrl,
+      streamKey: stream.streamKey,
+      // The app runs its own countdown from this and stops itself; Mux's
+      // max_continuous_duration is the backstop underneath, for when the app
+      // is not there to.
+      maxSeconds: maxLiveSeconds(env),
+    });
+  }
+
+  // Discovery: what is on right now. Also the cheapest place to sweep, since
+  // it is hit constantly and a stale session must not sit in this list.
+  if (path === "/api/live/active" && method === "GET") {
+    ctx.waitUntil(sweepAbandonedLives(env));
+    const { results } = await env.DB.prepare(`
+      SELECT l.id, l.title, l.viewer_count, l.started_at,
+             u.id AS creator_id, u.username, u.display_name, u.avatar_key
+      FROM live_sessions l
+      JOIN users u ON u.id = l.creator_id
+      WHERE l.status = 'live' AND u.status = 'active'
+      ORDER BY l.viewer_count DESC, l.started_at DESC
+      LIMIT 50
+    `).all();
+
+    return json({
+      lives: results.map(r => ({
+        id: r.id,
+        title: r.title,
+        viewerCount: r.viewer_count,
+        startedAt: r.started_at,
+        creator: {
+          id: r.creator_id,
+          username: r.username,
+          displayName: r.display_name,
+          avatarUrl: r.avatar_key ? `/api/media/${r.avatar_key}` : null,
+        },
+      })),
+    });
+  }
+
+  // Mux calling back. Verified before it is believed: this endpoint can end
+  // anyone's broadcast.
+  if (path === "/api/live/webhook" && method === "POST") {
+    // Two different refusals, and they must not look alike in the log. No
+    // secret means WE are not set up and cannot check anyone; a bad signature
+    // means someone who is not Mux is trying to end a broadcast. Both are
+    // rejected, but a 500 for the first would have read as a crash.
+    if (!env.MUX_WEBHOOK_SECRET) {
+      console.error("[LIVE] webhook rejected: MUX_WEBHOOK_SECRET is not set");
+      return err("Live webhooks are not configured", 503);
+    }
+    const raw = await request.text();
+    const ok = await verifyWebhook(env, raw, request.headers.get("Mux-Signature"));
+    if (!ok) {
+      console.error("[LIVE] webhook rejected: signature did not verify");
+      return err("Bad signature", 401);
+    }
+
+    let event;
+    try { event = JSON.parse(raw); } catch { return err("Bad body", 400); }
+    const type = event?.type;
+    const data = event?.data || {};
+
+    // A live stream id identifies the session for every event we care about;
+    // asset events carry it as data.live_stream_id.
+    const liveStreamId = type?.startsWith("video.asset") ? data.live_stream_id : data.id;
+    if (!liveStreamId) return json({ ok: true, ignored: type });
+
+    const session = await env.DB.prepare(
+      "SELECT * FROM live_sessions WHERE mux_live_stream_id = ?"
+    ).bind(liveStreamId).first();
+    // Not ours, or already deleted. Acknowledge — retrying helps nobody.
+    if (!session) return json({ ok: true, unknown: liveStreamId });
+
+    switch (type) {
+      case "video.live_stream.active":
+        // The encoder connected: the moment it becomes watchable, and the
+        // moment the meter starts.
+        if (session.status === "starting" || session.status === "live") {
+          await env.DB.prepare(
+            "UPDATE live_sessions SET status = 'live', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?"
+          ).bind(now(), now(), session.id).run();
+          if (session.status === "starting") ctx.waitUntil(notifyFollowersLive(env, session));
+        }
+        break;
+
+      case "video.live_stream.disconnected":
+        // NOT the end. Mux holds the reconnect window open and the creator may
+        // walk back into signal; tearing the session down here is what would
+        // make a lift ride end someone's broadcast.
+        await env.DB.prepare(
+          "UPDATE live_sessions SET updated_at = ? WHERE id = ?"
+        ).bind(now(), session.id).run();
+        break;
+
+      case "video.live_stream.idle":
+        // The reconnect window expired. Now it is over.
+        await endLiveSession(env, session, session.end_reason || "creator");
+        break;
+
+      case "video.asset.live_stream_completed":
+        // The recording Mux makes whether we want it or not. Remember which it
+        // is, then delete it — storage bills from the moment it exists.
+        await env.DB.prepare(
+          "UPDATE live_sessions SET mux_asset_id = COALESCE(mux_asset_id, ?), updated_at = ? WHERE id = ?"
+        ).bind(data.id, now(), session.id).run();
+        ctx.waitUntil(cleanupLiveSession(env, session.id));
+        break;
+    }
+
+    return json({ ok: true });
+  }
+
+  // Everything below is /api/live/<id>/<action>.
+  const liveMatch = path.match(/^\/api\/live\/([^/]+)(?:\/([^/]+))?$/);
+  if (liveMatch && !["start", "active", "webhook"].includes(liveMatch[1])) {
+    const action = liveMatch[2] || "";
+    const session = await env.DB.prepare(
+      "SELECT * FROM live_sessions WHERE id = ?"
+    ).bind(liveMatch[1]).first();
+    if (!session) return err("That live has ended", 404);
+
+    const isOwner = user && user.id === session.creator_id;
+    const watchable = session.status === "live";
+
+    // The creator ending it themselves.
+    if (action === "end" && method === "POST") {
+      requireUser(user);
+      if (!isOwner) throw new HttpError("That isn't your live", 403);
+      // Tell Mux rather than waiting out the reconnect window, then mark it.
+      // This is not trusted on its own — the webhook confirms — because an app
+      // can be killed between the tap and the request.
+      try { await completeLiveStream(env, session.mux_live_stream_id); }
+      catch (e) { console.error("[LIVE] complete failed", session.id, e); }
+      await endLiveSession(env, session, "creator");
+      return json({ ok: true });
+    }
+
+    // Watching: the payload the live screen opens with.
+    if (action === "" && method === "GET") {
+      if (!watchable && !isOwner) return err("That live has ended", 410);
+      const creator = await env.DB.prepare(
+        "SELECT id, username, display_name, avatar_key FROM users WHERE id = ?"
+      ).bind(session.creator_id).first();
+
+      let following = false;
+      if (user) {
+        const f = await env.DB.prepare(
+          "SELECT status FROM follows WHERE follower_id = ? AND followee_id = ?"
+        ).bind(user.id, session.creator_id).first();
+        following = f?.status === "accepted";
+      }
+
+      return json({
+        id: session.id,
+        title: session.title,
+        status: session.status,
+        // The LIVE stream's playback id, never the recorded asset's. The
+        // asset's is the DVR one and would let a viewer scrub back to the
+        // beginning — the replay Belople does not have.
+        playbackUrl: session.mux_playback_id ? playbackUrl(session.mux_playback_id) : null,
+        startedAt: session.started_at,
+        viewerCount: session.viewer_count,
+        isOwner,
+        following,
+        creator: {
+          id: creator.id,
+          username: creator.username,
+          displayName: creator.display_name,
+          avatarUrl: creator.avatar_key ? `/api/media/${creator.avatar_key}` : null,
+        },
+      });
+    }
+
+    // The one call the live screen repeats: new comments since `since`, the
+    // audience size, and whether it is still on. Presence rides on it, so
+    // watching costs one request rather than two.
+    if (action === "stream" && method === "GET") {
+      const since = parseInt(url.searchParams.get("since") || "0", 10) || 0;
+      const t = now();
+
+      if (user && watchable) {
+        // Written at most every LIVE_PRESENCE_WRITE_MS per viewer, not every
+        // poll — a row per person per 3s is exactly what the plan rules out.
+        const seen = await env.DB.prepare(
+          "SELECT last_seen FROM live_viewers WHERE live_session_id = ? AND user_id = ?"
+        ).bind(session.id, user.id).first();
+        if (!seen || t - seen.last_seen > LIVE_PRESENCE_WRITE_MS) {
+          await env.DB.prepare(
+            "INSERT OR REPLACE INTO live_viewers (live_session_id, user_id, last_seen) VALUES (?, ?, ?)"
+          ).bind(session.id, user.id, t).run();
+        }
+      }
+
+      // And the count is recomputed at most every LIVE_COUNT_CACHE_MS for the
+      // whole room, not once per viewer per poll.
+      let viewerCount = session.viewer_count;
+      if (watchable && t - session.updated_at > LIVE_COUNT_CACHE_MS) {
+        const c = await env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM live_viewers WHERE live_session_id = ? AND last_seen > ?"
+        ).bind(session.id, t - LIVE_PRESENCE_TTL_MS).first();
+        viewerCount = c.n;
+        await env.DB.prepare(`
+          UPDATE live_sessions
+             SET viewer_count = ?, peak_viewer_count = MAX(peak_viewer_count, ?), updated_at = ?
+           WHERE id = ?
+        `).bind(viewerCount, viewerCount, t, session.id).run();
+      }
+
+      const { results } = await env.DB.prepare(`
+        SELECT c.id, c.body, c.kind, c.created_at,
+               u.id AS user_id, u.username, u.display_name, u.avatar_key
+        FROM live_comments c
+        JOIN users u ON u.id = c.user_id
+        WHERE c.live_session_id = ? AND c.created_at > ?
+        ORDER BY c.created_at ASC
+        LIMIT 100
+      `).bind(session.id, since).all();
+
+      return json({
+        status: session.status,
+        viewerCount,
+        // Rising lines only. There is no cursor backwards, on purpose: the
+        // comment stream is not scrollable, matching the video that carries it.
+        comments: results.map(r => ({
+          id: r.id,
+          kind: r.kind,
+          body: r.body,
+          createdAt: r.created_at,
+          user: {
+            id: r.user_id,
+            username: r.username,
+            displayName: r.display_name,
+            avatarUrl: r.avatar_key ? `/api/media/${r.avatar_key}` : null,
+          },
+        })),
+        since: results.length ? results[results.length - 1].created_at : since,
+      });
+    }
+
+    // Saying something.
+    if (action === "comments" && method === "POST") {
+      requireUser(user);
+      if (!watchable) return err("That live has ended", 410);
+      const { body } = await request.json().catch(() => ({}));
+      const text = (body || "").trim();
+      if (!text) return err("Say something first", 400);
+      await env.DB.prepare(
+        "INSERT INTO live_comments (id, live_session_id, user_id, body, kind, created_at) VALUES (?, ?, ?, ?, 'comment', ?)"
+      ).bind(uid(), session.id, user.id, text.slice(0, 300), now()).run();
+      return json({ ok: true });
+    }
+
+    // Reactions. The tap is instant in the UI and the count is approximate by
+    // design — a row per tap would be the most expensive thing on the screen,
+    // so a burst arrives as one number and lands as one row.
+    if (action === "like" && method === "POST") {
+      requireUser(user);
+      if (!watchable) return json({ ok: true });
+      const { count } = await request.json().catch(() => ({}));
+      const n = Math.min(Math.max(parseInt(count, 10) || 1, 1), 50);
+      await env.DB.prepare(
+        "INSERT INTO live_comments (id, live_session_id, user_id, body, kind, created_at) VALUES (?, ?, ?, ?, 'like', ?)"
+      ).bind(uid(), session.id, user.id, String(n), now()).run();
+      return json({ ok: true });
+    }
+
+    // Announcing yourself, so the creator sees the room fill up. Once per
+    // person — a viewer whose signal drops shouldn't "join" again and again.
+    if (action === "join" && method === "POST") {
+      requireUser(user);
+      if (!watchable) return json({ ok: true });
+      const already = await env.DB.prepare(
+        "SELECT 1 AS x FROM live_comments WHERE live_session_id = ? AND user_id = ? AND kind = 'join'"
+      ).bind(session.id, user.id).first();
+      if (!already) {
+        await env.DB.prepare(
+          "INSERT INTO live_comments (id, live_session_id, user_id, body, kind, created_at) VALUES (?, ?, ?, '', 'join', ?)"
+        ).bind(uid(), session.id, user.id, now()).run();
+      }
+      return json({ ok: true });
+    }
+  }
+
   return err("Not found", 404);
+}
+
+// ---------- live: presence tuning ----------
+//
+// How long a viewer counts as present after their last poll, how rarely that
+// presence is actually written, and how rarely the room is recounted. Viewers
+// poll every ~3s; writing on every poll would be a database write per person
+// per 3s, which is exactly what the plan rules out.
+const LIVE_PRESENCE_TTL_MS = 30_000;
+const LIVE_PRESENCE_WRITE_MS = 15_000;
+const LIVE_COUNT_CACHE_MS = 10_000;
+
+// ---------- live: ending, cleanup, and the sweeper ----------
+
+/// Closes a session and starts cleanup. Safe to call twice: a session that has
+/// already ended is left alone, which matters because the creator's tap and
+/// Mux's webhook both arrive and either may be first.
+async function endLiveSession(env, session, reason) {
+  if (session.status === "ended") return;
+  const t = now();
+  await env.DB.prepare(`
+    UPDATE live_sessions
+       SET status = 'ended', ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, ?), updated_at = ?
+     WHERE id = ? AND status != 'ended'
+  `).bind(t, reason, t, session.id).run();
+
+  // Presence rows have nothing left to describe.
+  await env.DB.prepare("DELETE FROM live_viewers WHERE live_session_id = ?").bind(session.id).run();
+
+  await cleanupLiveSession(env, session.id);
+}
+
+/// Deletes what Mux made. This is the one that costs money if it is skipped:
+/// every RTMP session creates a recorded asset, there is no way to turn that
+/// off, and storage bills from the moment it exists until it is deleted.
+///
+/// Idempotent in both directions — `cleaned_at` stops a second pass, and
+/// src/mux.js treats a 404 from Mux as success.
+async function cleanupLiveSession(env, sessionId) {
+  const s = await env.DB.prepare("SELECT * FROM live_sessions WHERE id = ?").bind(sessionId).first();
+  if (!s || s.cleaned_at) return;
+
+  try {
+    await deleteAsset(env, s.mux_asset_id);
+    await deleteLiveStream(env, s.mux_live_stream_id);
+    await env.DB.prepare(
+      "UPDATE live_sessions SET mux_asset_id = NULL, cleaned_at = ?, updated_at = ? WHERE id = ?"
+    ).bind(now(), now(), sessionId).run();
+  } catch (e) {
+    // Deliberately NOT swallowed, and deliberately not marked clean: an asset
+    // we failed to delete is a bill that keeps running, so it stays on the
+    // books for the sweeper to retry.
+    console.error("[LIVE] cleanup failed for", sessionId, e);
+  }
+}
+
+/// The safety net. Ends sessions nobody closed — a creator whose phone died,
+/// an app killed mid-broadcast — and retries cleanups that failed. Mux's own
+/// max_continuous_duration sits underneath as the last backstop; this exists
+/// so the bill stops at OUR limit rather than at Mux's.
+async function sweepAbandonedLives(env) {
+  const t = now();
+  const maxMs = maxLiveSeconds(env) * 1000;
+
+  // Live past its allowed length, or never got an encoder at all.
+  const { results: stale } = await env.DB.prepare(`
+    SELECT * FROM live_sessions
+     WHERE status IN ('starting','live','ending')
+       AND ((started_at IS NOT NULL AND started_at < ?) OR (started_at IS NULL AND created_at < ?))
+     LIMIT 20
+  `).bind(t - maxMs, t - 10 * 60 * 1000).all();
+
+  for (const s of stale) {
+    try { await completeLiveStream(env, s.mux_live_stream_id); }
+    catch (e) { console.error("[LIVE] sweeper complete failed", s.id, e); }
+    await endLiveSession(env, s, s.started_at ? "max_duration" : "abandoned");
+  }
+
+  // Cleanups that failed earlier still owe Mux a delete.
+  const { results: dirty } = await env.DB.prepare(`
+    SELECT id FROM live_sessions
+     WHERE cleaned_at IS NULL AND status = 'ended' AND ended_at < ?
+     LIMIT 20
+  `).bind(t - 60_000).all();
+  for (const d of dirty) await cleanupLiveSession(env, d.id);
+}
+
+/// Tells the creator's followers they are on. Capped and run after the
+/// response — on a growing account this is the one part of going live whose
+/// cost scales with the audience rather than with the broadcast.
+async function notifyFollowersLive(env, session) {
+  try {
+    const { results } = await env.DB.prepare(`
+      SELECT follower_id FROM follows
+       WHERE followee_id = ? AND status = 'accepted'
+       ORDER BY created_at DESC LIMIT 500
+    `).bind(session.creator_id).all();
+    for (const f of results) {
+      await notify(env, null, f.follower_id, session.creator_id, "live", {});
+    }
+  } catch (e) {
+    console.error("[LIVE] notifying followers failed", session.id, e);
+  }
 }
 
 export default {
@@ -4972,5 +5413,13 @@ export default {
       console.error(e);
       return err("Something went wrong on our end", 500);
     }
+  },
+
+  // A live that nobody closes still bills. /api/live/active sweeps too, but
+  // that only runs while somebody is looking — and the worst case is precisely
+  // the quiet one: a forgotten broadcast at 3am with no viewers, no app, and
+  // an encoder still running. This runs whether anyone is there or not.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(sweepAbandonedLives(env));
   },
 };

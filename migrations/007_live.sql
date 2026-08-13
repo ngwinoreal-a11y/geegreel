@@ -74,3 +74,28 @@ CREATE TABLE IF NOT EXISTS live_comments (
 -- The only read: everything in this session newer than what I already have.
 CREATE INDEX IF NOT EXISTS idx_live_comments_poll
   ON live_comments (live_session_id, created_at);
+
+-- Who is watching right now. One row per viewer per session, REPLACEd rather
+-- than appended, so the table stays the size of the audience and not the size
+-- of the broadcast.
+--
+-- The spec says not to write to the database on every heartbeat. This is the
+-- compromise it asks for instead: viewers already poll for comments every few
+-- seconds, and presence rides on that poll but is only WRITTEN every 15s
+-- (LIVE_PRESENCE_WRITE_MS), so a 300-person audience costs about 20 small
+-- upserts a second rather than one per poll per person. The count itself is
+-- never computed per request either — it is cached onto
+-- live_sessions.viewer_count at most once every 10s.
+--
+-- If this ever becomes the bottleneck the upgrade is KV or a Durable Object;
+-- neither is worth adding before there is an audience to need it.
+CREATE TABLE IF NOT EXISTS live_viewers (
+  live_session_id TEXT NOT NULL REFERENCES live_sessions(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  last_seen INTEGER NOT NULL,
+  PRIMARY KEY (live_session_id, user_id)
+);
+
+-- Counting the audience: everyone in this session seen recently.
+CREATE INDEX IF NOT EXISTS idx_live_viewers_recent
+  ON live_viewers (live_session_id, last_seen);
