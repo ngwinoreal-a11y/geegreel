@@ -157,20 +157,33 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
     if (controller == null || !controller.value.isInitialized) return;
     if (_recording) {
       _timer?.cancel();
-      unawaited(_soundPlayer?.stop() ?? Future.value());
+      // Stop the sound BEFORE the recorder, and wait for it. Android's
+      // MediaRecorder and a playing track share the audio hardware; tearing
+      // the recorder down while something else is still on it is what makes
+      // stopVideoRecording throw on some devices.
+      try { await _soundPlayer?.stop(); } catch (_) {}
       try {
         final file = await controller.stopVideoRecording();
         if (mounted) {
           setState(() => _recording = false);
           context.pop('video:${file.path}');
         }
-      } catch (_) {
-        if (mounted) setState(() => _recording = false);
+      } catch (e) {
+        // NEVER silently. This used to swallow the error whole: the take
+        // vanished, no message appeared, and there was no way — for the
+        // person recording or for anyone reading a log — to find out why.
+        debugPrint('[BLREC] stopVideoRecording failed: $e');
+        if (mounted) {
+          setState(() => _recording = false);
+          showTopToast(context, "Couldn't save that take — try recording again");
+        }
       }
     } else {
       try {
         await controller.startVideoRecording();
-      } catch (_) {
+      } catch (e) {
+        debugPrint('[BLREC] startVideoRecording failed: $e');
+        if (mounted) showTopToast(context, "Couldn't start recording — close other apps using the camera");
         return;
       }
       setState(() { _recording = true; _elapsed = Duration.zero; });
@@ -234,10 +247,17 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
     if (url == null) return;
     try {
       final p = _soundPlayer ??= AudioPlayer();
-      await p.setUrl(mediaUrl(url));
+      // Fetched once and kept, so pressing record doesn't wait on the network
+      // before the track starts — it has to begin with the video, not a second
+      // later, or nothing you perform lines up.
+      if (p.audioSource == null) await p.setUrl(mediaUrl(url));
       await p.seek(Duration.zero);
       await p.play();
-    } catch (_) {/* silence is survivable; a failed record is not */}
+    } catch (e) {
+      // Silence is survivable — a lost take is not — but it still gets said
+      // out loud rather than disappearing.
+      debugPrint('[BLREC] sound playback failed: $e');
+    }
   }
 
   @override
