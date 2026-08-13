@@ -191,6 +191,12 @@ class LiveRepository {
 
   Future<void> join(String id) => _dio.post('/live/$id/join');
 
+  /// One request for a whole combo. Holding the gift button is [count] taps,
+  /// and they are charged together — a burst that half-succeeded would leave
+  /// someone paying for gifts the room never saw.
+  Future<void> gift(String id, String giftKey, int count) =>
+      _dio.post('/live/$id/gift', data: {'giftKey': giftKey, 'count': count});
+
   /// What is on right now. Ended sessions are never in here and cannot be
   /// opened — there is no replay.
   Future<List<LiveSession>> active() async {

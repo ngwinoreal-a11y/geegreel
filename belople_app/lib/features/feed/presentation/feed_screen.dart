@@ -208,17 +208,43 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
     }
   }
 
-  /// The lives currently riding at the front of the feed's scroll. Read in one
-  /// place so the page index and the video index cannot drift apart mid-build.
-  List<LiveSession> _lives = const [];
+  /// One page of the feed: either a video (by its index in the feed list) or a
+  /// live. Built once per build so itemCount, itemBuilder and _onPageChanged
+  /// cannot disagree about what page 12 is.
+  List<_FeedSlot> _slots = const [];
+
+  /// Lays the lives into the video run: the first after [_kFirstLiveAfter]
+  /// videos, then one every [_kLiveEvery] after that.
+  ///
+  /// Each live appears exactly once. When they run out the feed simply carries
+  /// on with videos — nothing repeats, because seeing the same broadcast three
+  /// times is worse than seeing it once.
+  static const int _kFirstLiveAfter = 5;
+  static const int _kLiveEvery = 10;
+
+  List<_FeedSlot> _buildSlots(int videoCount, List<LiveSession> lives) {
+    final slots = <_FeedSlot>[];
+    var next = 0;
+    for (var v = 0; v < videoCount; v++) {
+      slots.add(_FeedSlot.video(v));
+      final shown = v + 1;
+      final due = shown >= _kFirstLiveAfter && (shown - _kFirstLiveAfter) % _kLiveEvery == 0;
+      if (due && next < lives.length) slots.add(_FeedSlot.live(lives[next++]));
+    }
+    return slots;
+  }
 
   void _onPageChanged(int index) {
     setState(() => _activeIndex = index);
     final state = ref.read(feedControllerProvider(_tab)).valueOrNull;
-    // Counted against the VIDEOS, not the pages: the live cards sit in front
-    // of them, and measuring "three from the end" against the page index would
-    // ask for the next batch that many swipes early.
-    final videoIndex = index - _lives.length;
+    // Counted against the VIDEOS, not the pages: live cards sit between them,
+    // and measuring "three from the end" against the page index would ask for
+    // the next batch that many swipes early.
+    final slot = index < _slots.length ? _slots[index] : null;
+    final videoIndex = slot?.videoIndex ??
+        // On a live card, the nearest video behind it is close enough to
+        // decide whether more are needed.
+        _slots.take(index).where((s) => s.videoIndex != null).length;
     if (state != null &&
         videoIndex >= state.videos.length - 3 &&
         state.nextCursor != null &&
@@ -231,9 +257,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
   Widget build(BuildContext context) {
     final feedAsync = ref.watch(feedControllerProvider(_tab));
     // Read once per build and held on the State, so itemCount, itemBuilder and
-    // _onPageChanged all agree about how many pages sit in front of the videos
-    // even if the list changes between them.
-    _lives = ref.watch(activeLivesProvider).valueOrNull ?? const [];
+    // _onPageChanged all agree about what each page is even if the lists
+    // change between them.
+    final lives = ref.watch(activeLivesProvider).valueOrNull ?? const <LiveSession>[];
+    _slots = _buildSlots(feedAsync.valueOrNull?.videos.length ?? 0, lives);
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -293,21 +320,22 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                 // swipe lands on a ready frame instead of a black loading one.
                 allowImplicitScrolling: true,
                 onPageChanged: _onPageChanged,
-                // Lives ride at the front of the same scroll. There is no Live
-                // section to go to: you swipe down the feed you were already
-                // swiping and arrive on one, the way the owner asked for it.
-                // They are first because a live is only worth showing while it
-                // is happening — behind fifty videos it would be over.
-                itemCount: _lives.length + state.videos.length,
+                // Lives ride in the same scroll as the videos: no Live section
+                // to go to, you swipe down the feed you were already swiping
+                // and arrive on one. The first lands after five videos and
+                // then one every ten — often enough to find, rare enough that
+                // the feed is still a feed.
+                itemCount: _slots.length,
                 itemBuilder: (context, index) {
-                  if (index < _lives.length) {
+                  final slot = _slots[index];
+                  if (slot.live != null) {
                     return LiveFeedCard(
-                      key: ValueKey('live-${_lives[index].id}'),
-                      session: _lives[index],
+                      key: ValueKey('live-${slot.live!.id}'),
+                      session: slot.live!,
                       isActive: index == _activeIndex && _routeVisible,
                     );
                   }
-                  final videoIndex = index - _lives.length;
+                  final videoIndex = slot.videoIndex!;
                   // Preload ring: only mount the controller for the active
                   // slide +/-1 — matches warmNeighbours()'s windowed
                   // preload rather than keeping every loaded slide alive.
@@ -579,4 +607,17 @@ class _SnappyPageScrollPhysics extends PageScrollPhysics {
         stiffness: 560,
         ratio: 1.0,
       );
+}
+
+/// One page of the feed. A page is either a video, identified by its position
+/// in the feed's own list, or a live. Keeping them in one list is what lets the
+/// PageView, the preload window and the load-more check all count the same
+/// pages — the alternative was arithmetic on an offset in three places, and it
+/// was already wrong once.
+class _FeedSlot {
+  const _FeedSlot.video(this.videoIndex) : live = null;
+  const _FeedSlot.live(LiveSession this.live) : videoIndex = null;
+
+  final int? videoIndex;
+  final LiveSession? live;
 }

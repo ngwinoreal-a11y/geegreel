@@ -5017,15 +5017,25 @@ async function handle(request, env, ctx) {
   // it is hit constantly and a stale session must not sit in this list.
   if (path === "/api/live/active" && method === "GET") {
     ctx.waitUntil(sweepAbandonedLives(env));
-    const { results } = await env.DB.prepare(`
+    const { results: all } = await env.DB.prepare(`
       SELECT l.id, l.title, l.viewer_count, l.started_at,
-             u.id AS creator_id, u.username, u.display_name, u.avatar_key
+             u.id AS creator_id, u.username, u.display_name, u.avatar_key, u.country
       FROM live_sessions l
       JOIN users u ON u.id = l.creator_id
       WHERE l.status = 'live' AND u.status = 'active'
       ORDER BY l.viewer_count DESC, l.started_at DESC
       LIMIT 50
     `).all();
+
+    // Three from home, then one from anywhere, then three from home again.
+    //
+    // A viewer with no country of their own — plenty never set one — sees the
+    // list unchanged rather than an arbitrary "foreign" half, and when one
+    // side runs out the other simply continues. Every live still appears
+    // exactly once: this orders the list, it does not pad it, so scrolling
+    // past the last one reaches the end instead of meeting the same faces
+    // again.
+    const results = interleaveByCountry(all, user?.country);
 
     return json({
       lives: results.map(r => ({
@@ -5270,6 +5280,69 @@ async function handle(request, env, ctx) {
       return json({ ok: true });
     }
 
+    // A gift, sent live. The money rules are NOT re-implemented here: same
+    // creator share, same atomic balance check in the WHERE clause, same
+    // earnings record and same ledger as /api/gifts. Only the target differs —
+    // a session instead of a video.
+    //
+    // [count] is the combo: tapping the gift repeatedly sends ONE request with
+    // the number of taps rather than one request per tap. The whole combo is
+    // charged in a single UPDATE, so a burst can never half-succeed and leave
+    // someone charged for gifts nobody saw.
+    if (action === "gift" && method === "POST") {
+      requireUser(user);
+      if (!watchable) return err("That live has ended", 410);
+      if (session.creator_id === user.id) return err("You can't gift your own live");
+
+      const { giftKey, count } = await request.json().catch(() => ({}));
+      const gift = giftByKey(giftKey);
+      if (!gift) return err("Unknown gift");
+      const n = Math.min(Math.max(parseInt(count, 10) || 1, 1), LIVE_GIFT_MAX_COMBO);
+      const totalCoins = gift.coins * n;
+
+      const spend = await env.DB.prepare(
+        "UPDATE users SET coin_balance = coin_balance - ? WHERE id = ? AND coin_balance >= ?"
+      ).bind(totalCoins, user.id, totalCoins).run();
+      if (!spend.meta.changes) {
+        return err(`Not enough coins — that's ${totalCoins}`, 402);
+      }
+
+      const grossCents = Math.floor(totalCoins * COIN_PRICE_CENTS);
+      const creatorCents = Math.floor(grossCents * CREATOR_SHARE);
+      const giftId = uid();
+
+      await env.DB.batch([
+        env.DB.prepare(`
+          INSERT INTO gifts (id, sender_id, recipient_id, video_id, live_session_id, gift_key, coins, value_cents, created_at)
+          VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)
+        `).bind(giftId, user.id, session.creator_id, session.id, gift.key, totalCoins, creatorCents, now()),
+        env.DB.prepare(`
+          UPDATE users SET coin_balance = coin_balance + ?,
+                           lifetime_gifts_cents = lifetime_gifts_cents + ?
+          WHERE id = ?
+        `).bind(creatorCents, creatorCents, session.creator_id),
+      ]);
+
+      // Into the same rising stream everyone is already reading, so the room
+      // sees it without a second channel. The body carries the key and the
+      // combo count; the app turns that into the banner.
+      await env.DB.prepare(
+        "INSERT INTO live_comments (id, live_session_id, user_id, body, kind, created_at) VALUES (?, ?, ?, ?, 'gift', ?)"
+      ).bind(uid(), session.id, user.id, `${gift.key}|${n}`, now()).run();
+
+      const [me, them] = await Promise.all([
+        env.DB.prepare("SELECT coin_balance, gift_balance_cents FROM users WHERE id = ?").bind(user.id).first(),
+        env.DB.prepare("SELECT coin_balance, gift_balance_cents FROM users WHERE id = ?").bind(session.creator_id).first(),
+      ]);
+      const label = n > 1 ? `${gift.emoji} ${gift.name} x${n}` : `${gift.emoji} ${gift.name}`;
+      await recordTx(env, user.id, "gift_sent", -totalCoins, 0,
+                     me.coin_balance, me.gift_balance_cents, giftId, label);
+      await recordTx(env, session.creator_id, "gift_received", 0, creatorCents,
+                     them.coin_balance, them.gift_balance_cents, giftId, label);
+
+      return json({ ok: true, coins: totalCoins, balance: me.coin_balance });
+    }
+
     // Announcing yourself, so the creator sees the room fill up. Once per
     // person — a viewer whose signal drops shouldn't "join" again and again.
     if (action === "join" && method === "POST") {
@@ -5299,6 +5372,47 @@ async function handle(request, env, ctx) {
 const LIVE_PRESENCE_TTL_MS = 30_000;
 const LIVE_PRESENCE_WRITE_MS = 15_000;
 const LIVE_COUNT_CACHE_MS = 10_000;
+
+/// How far a gift combo can run before the counter stops. Holding the gift
+/// button multiplies what you are spending, so it has a ceiling: at the top of
+/// the catalogue ten taps is 20,000 coins, and nobody should be able to empty
+/// a wallet by leaning on a button.
+const LIVE_GIFT_MAX_COMBO = 10;
+
+/// The mix in Live discovery: this many from the viewer's own country, then
+/// one from anywhere else, repeating. Home first because that is who you can
+/// actually talk to; the outsider so the feed is not a village.
+const LIVE_HOME_RUN = 3;
+
+/// Orders live sessions as LIVE_HOME_RUN from the viewer's own country, then
+/// one from anywhere else, repeating.
+///
+/// Countries are compared by NAME, the same way ad targeting does it — the
+/// column holds a name, not a code, and the two must not start disagreeing.
+///
+/// Nothing is duplicated and nothing is dropped: both queues drain, and when
+/// one empties the other finishes the list on its own. That is what makes
+/// scrolling to the bottom of Live actually end.
+function interleaveByCountry(sessions, viewerCountry) {
+  if (!viewerCountry) return sessions;
+
+  const home = sessions.filter(s => s.country === viewerCountry);
+  const away = sessions.filter(s => s.country !== viewerCountry);
+  if (!home.length || !away.length) return sessions;
+
+  const out = [];
+  let h = 0, a = 0;
+  while (h < home.length || a < away.length) {
+    for (let i = 0; i < LIVE_HOME_RUN && h < home.length; i++) out.push(home[h++]);
+    if (a < away.length) out.push(away[a++]);
+    // Home is exhausted — the rest of the world finishes the list rather than
+    // the list finishing early.
+    if (h >= home.length) {
+      while (a < away.length) out.push(away[a++]);
+    }
+  }
+  return out;
+}
 
 // ---------- live: ending, cleanup, and the sweeper ----------
 

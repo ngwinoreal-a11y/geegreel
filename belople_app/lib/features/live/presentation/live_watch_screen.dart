@@ -10,6 +10,7 @@ import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/top_toast.dart';
 import '../../feed/data/feed_repository.dart';
 import '../data/live_repository.dart';
+import 'live_gift_sheet.dart';
 import 'live_overlay.dart';
 
 /// Watching someone else's live.
@@ -213,6 +214,7 @@ class _LiveWatchScreenState extends ConsumerState<LiveWatchScreen> {
                       // Counted locally and flushed in batches; the heart is
                       // meant to feel instant, not to be exact.
                       onReact: () => _pendingReacts++,
+                      onGift: () => showLiveGiftSheet(context, sessionId: widget.sessionId),
                       onClose: () => context.pop(),
                     ),
                   ],

@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
+import '../../wallet/data/gift_repository.dart';
 import '../data/live_repository.dart';
 
 /// Everything that floats over a live picture, for both sides of it.
@@ -30,6 +34,7 @@ class LiveOverlay extends StatelessWidget {
     this.onFollow,
     this.onSend,
     this.onReact,
+    this.onGift,
   });
 
   final int viewers;
@@ -47,6 +52,11 @@ class LiveOverlay extends StatelessWidget {
   final VoidCallback? onFollow;
   final void Function(String text)? onSend;
   final VoidCallback? onReact;
+
+  /// Opens the gift picker. Gifts are the one place coins are SPENT in a live —
+  /// the app never offers a way to buy them, which is the rule Play enforces
+  /// and the reason the wallet's own top-up lives on the website.
+  final VoidCallback? onGift;
 
   @override
   Widget build(BuildContext context) {
@@ -106,6 +116,11 @@ class LiveOverlay extends StatelessWidget {
               ),
             ),
 
+          // Gifts get their own strip above the chat. They are the loudest
+          // thing that happens in a room and they are over quickly — mixed
+          // into the rising comments they would scroll away mid-cheer, and
+          // left on screen they would bury it.
+          _GiftBanners(comments: comments),
           _commentStream(),
           _bottomBar(context),
         ],
@@ -247,19 +262,32 @@ class LiveOverlay extends StatelessWidget {
     // the room breathing, and pulling them into their own list would have made
     // three feeds out of one conversation.
     if (c.kind != 'comment') {
+      // The banner above says it loudly and goes; this is the line that stays,
+      // so the room can still see who gave what after the cheer has passed.
+      final isGift = c.kind == 'gift';
+      final icon = switch (c.kind) {
+        'like' => Icons.favorite,
+        'gift' => Icons.card_giftcard,
+        _ => Icons.waving_hand,
+      };
+      final text = switch (c.kind) {
+        'like' => '${c.user.name} liked the LIVE',
+        'gift' => '${c.user.name} sent a gift',
+        _ => '${c.user.name} joined',
+      };
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           children: [
-            Icon(c.kind == 'like' ? Icons.favorite : Icons.waving_hand,
-                size: 15, color: Colors.white70),
+            Icon(icon, size: 15, color: isGift ? AppColors.danger : Colors.white70),
             const SizedBox(width: 8),
             Flexible(
               child: Text(
-                c.kind == 'like' ? '${c.user.name} liked the LIVE' : '${c.user.name} joined',
+                text,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AppTypography.sans(fontSize: 13, color: Colors.white70)
+                style: AppTypography.sans(
+                        fontSize: 13, color: isGift ? Colors.white : Colors.white70)
                     .copyWith(shadows: shadow),
               ),
             ),
@@ -328,16 +356,141 @@ class LiveOverlay extends StatelessWidget {
         ),
       );
     }
-    return _ViewerBar(onSend: onSend, onReact: onReact);
+    return _ViewerBar(onSend: onSend, onReact: onReact, onGift: onGift);
+  }
+}
+
+/// Gifts, shown to the whole room and then gone.
+///
+/// Each one appears for [_hold] and leaves. Several can be up at once, because
+/// several people gift at once and the point is that everybody sees who did —
+/// their face, their name, what they sent and how many.
+class _GiftBanners extends ConsumerStatefulWidget {
+  const _GiftBanners({required this.comments});
+  final List<LiveComment> comments;
+
+  @override
+  ConsumerState<_GiftBanners> createState() => _GiftBannersState();
+}
+
+class _GiftBannersState extends ConsumerState<_GiftBanners> {
+  static const _hold = Duration(seconds: 5);
+
+  /// Ids already put on screen. The poll hands back the same rows until they
+  /// fall out of its window, and without this each one would be re-announced
+  /// every three seconds.
+  final _seen = <String>{};
+  final _showing = <LiveComment>[];
+  final _timers = <Timer>[];
+
+  @override
+  void didUpdateWidget(_GiftBanners old) {
+    super.didUpdateWidget(old);
+    _ingest();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _ingest();
+  }
+
+  void _ingest() {
+    for (final c in widget.comments) {
+      if (c.kind != 'gift' || _seen.contains(c.id)) continue;
+      _seen.add(c.id);
+      _showing.add(c);
+      _timers.add(Timer(_hold, () {
+        if (!mounted) return;
+        setState(() => _showing.remove(c));
+      }));
+    }
+    // Keeps the strip to what fits. A rush of gifts should look like a rush,
+    // not push the chat off the screen.
+    if (_showing.length > 3) _showing.removeRange(0, _showing.length - 3);
+  }
+
+  @override
+  void dispose() {
+    for (final t in _timers) {
+      t.cancel();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showing.isEmpty) return const SizedBox.shrink();
+    final catalog = kGifts;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 0, 60, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final c in _showing) _banner(c, catalog),
+        ],
+      ),
+    );
+  }
+
+  Widget _banner(LiveComment c, List<Gift> catalog) {
+    // The server writes "<giftKey>|<count>", so the room can be told what was
+    // sent without a second request per gift.
+    final parts = c.body.split('|');
+    final key = parts.first;
+    final count = parts.length > 1 ? int.tryParse(parts[1]) ?? 1 : 1;
+    final gift = catalog.where((g) => g.key == key).firstOrNull;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(6, 5, 12, 5),
+        decoration: BoxDecoration(
+          color: AppColors.danger.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AppAvatar(
+              size: 26,
+              imageUrl: c.user.avatarUrl == null ? null : mediaUrl(c.user.avatarUrl!),
+              displayName: c.user.name,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                '${c.user.name} sent ${gift?.name ?? 'a gift'}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.sans(
+                    fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(gift?.emoji ?? '🎁', style: const TextStyle(fontSize: 19)),
+            if (count > 1) ...[
+              const SizedBox(width: 6),
+              Text('x$count',
+                  style: AppTypography.sans(
+                      fontSize: 15, fontWeight: FontWeight.w900, color: Colors.white)),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 
 /// The viewer's bar: say something, or react. Kept as its own stateful widget
 /// so typing doesn't rebuild the video and the comment strip on every keypress.
 class _ViewerBar extends StatefulWidget {
-  const _ViewerBar({this.onSend, this.onReact});
+  const _ViewerBar({this.onSend, this.onReact, this.onGift});
   final void Function(String text)? onSend;
   final VoidCallback? onReact;
+  final VoidCallback? onGift;
 
   @override
   State<_ViewerBar> createState() => _ViewerBarState();
@@ -385,6 +538,19 @@ class _ViewerBarState extends State<_ViewerBar> {
                     hintStyle: AppTypography.sans(fontSize: 14.5, color: Colors.white54),
                   ),
                 ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onGift,
+              child: Container(
+                width: 46, height: 46,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.card_giftcard, color: Colors.white, size: 22),
               ),
             ),
             const SizedBox(width: 8),
