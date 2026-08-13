@@ -3586,18 +3586,42 @@ async function handle(request, env, ctx) {
   }
 
   // ----- search -----
+  // Everything in Belople, findable by any word written in it.
+  //
+  // It used to reach names, video captions and post text. That left whole
+  // kinds of thing unfindable: a sound by its title, a video by something
+  // somebody said in its comments, a person by what their bio says. If a word
+  // is stored anywhere a person typed it, searching that word should reach it.
   if (path === "/api/search" && method === "GET") {
     const q = (url.searchParams.get("q") || "").trim();
-    if (!q) return json({ accounts: [], videos: [], posts: [] });
+    if (!q) return json({ accounts: [], videos: [], posts: [], sounds: [] });
     const like = `%${q}%`;
+    const viewerId = user?.id || "";
 
-    const [accounts, videos, posts] = await Promise.all([
+    const [accounts, videos, posts, sounds] = await Promise.all([
       env.DB.prepare(`
         SELECT id, username, display_name, avatar_key FROM users
-        WHERE status != 'banned' AND (username LIKE ? OR display_name LIKE ?) LIMIT 20
-      `).bind(like, like).all(),
-      env.DB.prepare(FEED_SQL + ` WHERE ${NOT_BANNED} AND v.caption LIKE ? ORDER BY v.created_at DESC LIMIT 20`)
-        .bind(user?.id || "", user?.id || "", like).all(),
+        WHERE status != 'banned'
+          -- Bio too: people describe themselves in words they expect to be
+          -- found by, and it was the one field about a person nobody could search.
+          AND (username LIKE ? OR display_name LIKE ? OR COALESCE(bio,'') LIKE ?)
+        ORDER BY
+          -- An exact username match is almost always the thing being looked
+          -- for; before this it could sit below anyone whose bio mentioned it.
+          CASE WHEN username = ? THEN 0
+               WHEN username LIKE ? THEN 1
+               WHEN COALESCE(display_name,'') LIKE ? THEN 2
+               ELSE 3 END,
+          username
+        LIMIT 20
+      `).bind(like, like, like, q, `${q}%`, `${q}%`).all(),
+      // A video matches on its caption OR on anything said underneath it. A
+      // comment is where the words people actually remember end up.
+      env.DB.prepare(FEED_SQL + ` WHERE ${NOT_BANNED} AND (
+          v.caption LIKE ?
+          OR EXISTS(SELECT 1 FROM comments c WHERE c.video_id = v.id AND c.body LIKE ?)
+        ) ORDER BY v.created_at DESC LIMIT 20`)
+        .bind(viewerId, viewerId, like, like).all(),
       // Public posts are searched by caption too, same as videos — the Public
       // tab's content wasn't reachable from search at all before this.
       env.DB.prepare(`
@@ -3611,15 +3635,44 @@ async function handle(request, env, ctx) {
                        WHERE f.follower_id = ? AND f.followee_id = u.id
                          AND f.status = 'accepted')                       AS following
         FROM posts p JOIN users u ON u.id = p.user_id
-        WHERE u.status != 'banned' AND p.content LIKE ?
+        WHERE u.status != 'banned' AND (
+          p.content LIKE ?
+          -- Same as videos: what people wrote underneath counts as part of the
+          -- post as far as finding it again goes.
+          OR EXISTS(SELECT 1 FROM post_comments pc WHERE pc.post_id = p.id AND pc.body LIKE ?)
+        )
         ORDER BY p.created_at DESC LIMIT 20
-      `).bind(user?.id || "", user?.id || "", like).all(),
+      `).bind(viewerId, viewerId, like, like).all(),
+      // Sounds were reachable from the composer's own picker and nowhere else,
+      // so the library existed but could only be found by stumbling onto a
+      // video that used one. Same shape the picker returns, so one row widget
+      // renders both.
+      env.DB.prepare(`
+        SELECT snd.id, snd.title, snd.uses, snd.r2_key,
+               u.username AS author_username, u.display_name AS author_display_name,
+               v.thumb_key AS cover_key, v.duration AS duration, v.caption AS source_caption
+        FROM sounds snd
+        JOIN users u ON u.id = snd.author_user_id
+        LEFT JOIN videos v ON v.id = snd.source_video_id
+        WHERE snd.title LIKE ? OR u.username LIKE ? OR COALESCE(v.caption,'') LIKE ?
+        ORDER BY snd.uses DESC LIMIT 20
+      `).bind(like, like, like).all(),
     ]);
 
     return json({
       accounts: accounts.results.map(publicUser),
       videos: videos.results.map(shapeVideo),
       posts: posts.results.map(shapePost),
+      sounds: sounds.results.map(s => ({
+        id: s.id,
+        title: s.title,
+        uses: s.uses,
+        audioUrl: `/api/media/${s.r2_key}`,
+        coverUrl: s.cover_key ? `/api/media/${s.cover_key}` : null,
+        duration: s.duration || null,
+        sourceCaption: (s.source_caption || "").trim() || null,
+        author: { username: s.author_username, displayName: s.author_display_name },
+      })),
     });
   }
 
