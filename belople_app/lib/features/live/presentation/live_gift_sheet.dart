@@ -13,9 +13,13 @@ import '../../wallet/data/wallet_repository.dart';
 import '../data/live_repository.dart';
 
 /// The most a combo can reach. Matches LIVE_GIFT_MAX_COMBO on the server,
-/// which clamps it again — the client's copy is what the counter counts to,
-/// the server's is what protects the wallet.
-const int kLiveGiftMaxCombo = 10;
+/// which clamps it again.
+///
+/// 1000 because the owner asked for it: someone who wants to send a thousand
+/// should be able to keep tapping and have it land. The counter is not what
+/// stops an overspend — the wallet is, both here (the count stops at what they
+/// can afford) and on the server (one charge, refused whole if it doesn't fit).
+const int kLiveGiftMaxCombo = 1000;
 
 /// How long the combo waits for another tap before it commits. Long enough to
 /// keep tapping, short enough that the room sees it while it still means

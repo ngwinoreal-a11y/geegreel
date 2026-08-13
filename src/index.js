@@ -5373,11 +5373,15 @@ const LIVE_PRESENCE_TTL_MS = 30_000;
 const LIVE_PRESENCE_WRITE_MS = 15_000;
 const LIVE_COUNT_CACHE_MS = 10_000;
 
-/// How far a gift combo can run before the counter stops. Holding the gift
-/// button multiplies what you are spending, so it has a ceiling: at the top of
-/// the catalogue ten taps is 20,000 coins, and nobody should be able to empty
-/// a wallet by leaning on a button.
-const LIVE_GIFT_MAX_COMBO = 10;
+/// How far a gift combo can run. The owner set this at 1000 deliberately: a
+/// supporter who wants to send a thousand should be able to keep tapping and
+/// have it land.
+///
+/// The ceiling is not what protects the wallet — the balance is. Every combo
+/// is charged in one UPDATE with `WHERE coin_balance >= ?`, so a run longer
+/// than someone can afford is refused whole rather than partly taken. This
+/// number only bounds a single request.
+const LIVE_GIFT_MAX_COMBO = 1000;
 
 /// The mix in Live discovery: this many from the viewer's own country, then
 /// one from anywhere else, repeating. Home first because that is who you can
