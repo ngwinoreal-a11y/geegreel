@@ -11,6 +11,7 @@ import '../application/playback_speed.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../live/application/active_lives_controller.dart';
+import '../../live/presentation/live_avatar.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/brand_refresh.dart';
 import '../data/video_model.dart';
@@ -405,43 +406,25 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                           .valueOrNull
                           ?.where((s) => s.creator.id == author.id)
                           .firstOrNull;
-                      final avatar = AppAvatar(
-                        size: 44,
-                        imageUrl: author.avatarUrl != null ? mediaUrl(author.avatarUrl!) : null,
-                        displayName: author.displayName,
-                        borderColor: live != null ? AppColors.danger : Colors.white,
-                        borderWidth: live != null ? 3 : 2,
-                      );
                       return GestureDetector(
                         onTap: live != null
                             ? () => context.push('/live/${live.id}')
                             : widget.onAuthorTap,
-                        child: live == null
-                            ? avatar
-                            : Stack(
-                                alignment: Alignment.bottomCenter,
-                                clipBehavior: Clip.none,
-                                children: [
-                                  avatar,
-                                  Positioned(
-                                    bottom: -6,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 6, vertical: 1),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.danger,
-                                        borderRadius: BorderRadius.circular(4),
-                                        border: Border.all(color: Colors.black, width: 1.2),
-                                      ),
-                                      child: Text('LIVE',
-                                          style: AppTypography.sans(
-                                              fontSize: 8.5,
-                                              fontWeight: FontWeight.w900,
-                                              color: Colors.white)),
-                                    ),
-                                  ),
-                                ],
-                              ),
+                        child: Padding(
+                          // The badge hangs below the ring, so the row leaves it
+                          // that much room. Without this it landed on the
+                          // caption underneath and the whole thing read as
+                          // squashed rather than deliberate.
+                          padding: EdgeInsets.only(
+                              bottom: live != null ? LiveAvatar.overhangFor(44) + 2 : 0),
+                          child: LiveAvatar(
+                            size: 44,
+                            imageUrl:
+                                author.avatarUrl != null ? mediaUrl(author.avatarUrl!) : null,
+                            displayName: author.displayName,
+                            live: live != null,
+                          ),
+                        ),
                       );
                     }),
                     const SizedBox(width: 8),

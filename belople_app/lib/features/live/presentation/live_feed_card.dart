@@ -4,10 +4,10 @@ import 'package:go_router/go_router.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../../core/network/api_client.dart';
-import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../data/live_repository.dart';
+import 'live_avatar.dart';
 
 /// A live, sitting in the feed as one more thing you scroll onto.
 ///
@@ -138,38 +138,14 @@ class _LiveFeedCardState extends ConsumerState<LiveFeedCard> {
               children: [
                 Row(
                   children: [
-                    Stack(
-                      alignment: Alignment.bottomCenter,
-                      clipBehavior: Clip.none,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(color: AppColors.danger, width: 2),
-                          ),
-                          child: AppAvatar(
-                            size: 42,
-                            imageUrl: s.creator.avatarUrl == null
-                                ? null
-                                : mediaUrl(s.creator.avatarUrl!),
-                            displayName: s.creator.name,
-                          ),
-                        ),
-                        Positioned(
-                          bottom: -5,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: AppColors.danger,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text('LIVE',
-                                style: AppTypography.sans(
-                                    fontSize: 9, fontWeight: FontWeight.w900, color: Colors.white)),
-                          ),
-                        ),
-                      ],
+                    // The same widget the feed puts on a live creator's videos,
+                    // so the two cannot drift apart — which is exactly what the
+                    // owner spotted when they were built separately.
+                    LiveAvatar(
+                      size: 44,
+                      imageUrl:
+                          s.creator.avatarUrl == null ? null : mediaUrl(s.creator.avatarUrl!),
+                      displayName: s.creator.name,
                     ),
                     const SizedBox(width: 12),
                     Expanded(
