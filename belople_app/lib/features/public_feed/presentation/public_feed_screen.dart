@@ -907,6 +907,16 @@ class _VideoCardState extends State<_VideoCard> {
                     if (c != null && c.value.isInitialized)
                       FittedBox(
                         fit: BoxFit.cover,
+                        // FittedBox does NOT clip by default, and BoxFit.cover
+                        // makes the child bigger than the box on purpose — so
+                        // a portrait clip in this card painted its top and
+                        // bottom OUTSIDE the card, over the post above and the
+                        // post below. That is what made Public look like the
+                        // videos were bleeding into everything around them,
+                        // and no amount of changing the aspect ratio could fix
+                        // it: the box was always the right size, the paint
+                        // just wasn't kept inside it.
+                        clipBehavior: Clip.hardEdge,
                         child: SizedBox(
                           width: c.value.size.width,
                           height: c.value.size.height,
