@@ -99,6 +99,10 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   /// own without overriding someone who asked for quiet.
   bool _previewPaused = false;
 
+  /// Last known playing state, so the controller's per-tick notifications only
+  /// rebuild when the thing the UI actually shows has changed.
+  bool _lastPreviewPlaying = false;
+
   /// Keeps the clip running on the steps that show it.
   ///
   /// The mix sliders are useless against a still frame: the video's own audio
@@ -109,10 +113,16 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   /// that stopped it (a sheet, a rebuild, the end of a clip that didn't loop)
   /// left it stopped for good, with no control to start it again.
   void _ensurePreviewPlaying() {
-    final c = _previewController;
-    if (c == null || !c.value.isInitialized) return;
     if (_previewPaused || _videoStep == 3) return;
-    if (!c.value.isPlaying) c.play();
+    final c = _previewController;
+    if (c != null && c.value.isInitialized && !c.value.isPlaying) c.play();
+    // BOTH, together. The two levels can only be judged against each other if
+    // both tracks are actually running — restarting the clip alone still left
+    // half the mix silent whenever the sound had stopped on its own.
+    final s = _soundPreview;
+    if (_videoStep == 2 && _effectiveSoundId != null && s != null && !s.playing) {
+      s.play();
+    }
   }
 
   /// Tap the preview to stop and start it.
@@ -136,16 +146,8 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   void _applyPreviewVolumes() {
     final peak = _micVolume > _soundVolume ? _micVolume : _soundVolume;
     final scale = peak > 1.0 ? 1.0 / peak : 1.0;
-    final vidVol = (_micVolume * scale).clamp(0.0, 1.0);
-    final sndVol = (_soundVolume * scale).clamp(0.0, 1.0);
-    _previewController?.setVolume(vidVol);
-    _soundPreview?.setVolume(sndVol);
-    // DEBUG
-    debugPrint('[BLVOL] hasAudio=$_clipHasAudio mic=$_micVolume snd=$_soundVolume '
-        '-> vidVol=$vidVol sndVol=$sndVol '
-        'vidPlaying=${_previewController?.value.isPlaying} '
-        'vidInit=${_previewController?.value.isInitialized} '
-        'sndPlaying=${_soundPreview?.playing}');
+    _previewController?.setVolume((_micVolume * scale).clamp(0.0, 1.0));
+    _soundPreview?.setVolume((_soundVolume * scale).clamp(0.0, 1.0));
   }
   // Video is a 3-step wizard: 1 pick/record → 2 edit (sound/volume/caption) →
   // 3 audience + Publish. Photo/Text stay single-step.
@@ -250,10 +252,17 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
     final controller = VideoPlayerController.file(file);
     await controller.initialize();
     await controller.setLooping(true);
-    // Redraws the play badge the moment the clip stops or starts, so the
-    // overlay always tells the truth about what the preview is doing.
+    // Redraws the play badge the moment the clip stops or starts — and ONLY
+    // then. VideoPlayerController notifies on every position tick, several
+    // times a second, and rebuilding this whole screen that often made the
+    // audio stutter and break up. The badge only depends on isPlaying, so
+    // that is the only change worth a rebuild.
     controller.addListener(() {
-      if (mounted) setState(() {});
+      final playing = controller.value.isPlaying;
+      if (playing != _lastPreviewPlaying && mounted) {
+        _lastPreviewPlaying = playing;
+        setState(() {});
+      }
     });
     // The video's own audio plays at the "Your audio" level so the mic slider
     // is audible live; the chosen sound is layered on top via _soundPreview.
