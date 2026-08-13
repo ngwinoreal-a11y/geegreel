@@ -25,6 +25,8 @@ import '../../features/public_feed/presentation/public_feed_screen.dart';
 import '../../features/public_feed/data/post_model.dart';
 import '../../features/search/presentation/search_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
+import '../../features/live/data/live_repository.dart';
+import '../../features/live/presentation/live_broadcast_screen.dart';
 import '../../features/sounds/presentation/sound_screen.dart';
 import '../../features/wallet/presentation/monetization_screen.dart';
 import '../../features/wallet/presentation/cash_out_screen.dart';
@@ -153,6 +155,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // a track you can neither see nor hear.
       _route('/camera', (context, state) =>
           CameraCaptureScreen(soundId: state.uri.queryParameters['sound'])),
+      // The broadcaster's own screen. It takes the started session as an extra
+      // rather than an id in the path: the stream key is in there, it is
+      // single-use, and it has no business in a URL.
+      _route('/live/broadcast', (context, state) =>
+          LiveBroadcastScreen(start: state.extra as LiveStart)),
       _route('/promote', (context, state) => const PromoteScreen()),
       _route('/my-ads', (context, state) => const MyAdsScreen()),
       _route('/admin/ads', (context, state) => const AdminAdsScreen()),

@@ -4959,6 +4959,15 @@ async function handle(request, env, ctx) {
   if (path === "/api/live/start" && method === "POST") {
     requireUser(user);
 
+    // Said plainly, before anything else. Without this the missing credential
+    // surfaces as a generic 500 — the creator is told "something went wrong on
+    // our end" for a thing nobody has set up yet, and the one person who could
+    // fix it learns nothing from the message.
+    if (!env.MUX_TOKEN_ID || !env.MUX_TOKEN_SECRET) {
+      console.error("[LIVE] start refused: MUX_TOKEN_ID / MUX_TOKEN_SECRET are not set");
+      return err("Live isn't switched on yet — hang tight", 503);
+    }
+
     // One at a time. Without this a crashed app that reopens starts a second
     // paid encode while the first is still running.
     const open = await env.DB.prepare(

@@ -1,0 +1,397 @@
+import 'package:flutter/material.dart';
+
+import '../../../core/network/api_client.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../core/widgets/app_avatar.dart';
+import '../data/live_repository.dart';
+
+/// Everything that floats over a live picture, for both sides of it.
+///
+/// The arrangement is the one the owner pointed at on their own phone (see
+/// docs/live-design.md): a dark pill top-left carrying the creator, the
+/// headcount top-right, comments rising from the bottom over the video with no
+/// panel behind them, and a bar under that.
+///
+/// Nothing here scrolls backwards. The comment strip only ever grows upward
+/// and the oldest lines leave — which is the same promise the video makes.
+class LiveOverlay extends StatelessWidget {
+  const LiveOverlay({
+    super.key,
+    required this.viewers,
+    required this.comments,
+    required this.onClose,
+    this.title,
+    this.creator,
+    this.isBroadcaster = false,
+    this.connecting = false,
+    this.clockLabel,
+    this.following = false,
+    this.onFollow,
+    this.onSend,
+    this.onReact,
+  });
+
+  final int viewers;
+  final List<LiveComment> comments;
+  final VoidCallback onClose;
+  final String? title;
+  final LiveCreator? creator;
+
+  /// The creator sees their own elapsed time and no follow button; a viewer
+  /// sees the creator and can follow them.
+  final bool isBroadcaster;
+  final bool connecting;
+  final String? clockLabel;
+  final bool following;
+  final VoidCallback? onFollow;
+  final void Function(String text)? onSend;
+  final VoidCallback? onReact;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: Row(
+              children: [
+                Flexible(child: _creatorPill(context)),
+                const Spacer(),
+                _countPill(),
+                const SizedBox(width: 8),
+                _roundButton(Icons.close, onClose),
+              ],
+            ),
+          ),
+          if (title != null && title!.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 60, 0),
+              child: Text(
+                title!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.sans(fontSize: 14, color: Colors.white)
+                    .copyWith(shadows: const [Shadow(color: Colors.black87, blurRadius: 6)]),
+              ),
+            ),
+
+          const Spacer(),
+
+          if (connecting)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(
+                      width: 15, height: 15,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                  const SizedBox(width: 10),
+                  Text('Connecting…',
+                      style: AppTypography.sans(fontSize: 13.5, color: Colors.white)
+                          .copyWith(shadows: const [Shadow(color: Colors.black87, blurRadius: 6)])),
+                ],
+              ),
+            ),
+
+          _commentStream(),
+          _bottomBar(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _creatorPill(BuildContext context) {
+    final c = creator;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(4, 4, 12, 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (c != null)
+            AppAvatar(
+                imageUrl: c.avatarUrl == null ? null : mediaUrl(c.avatarUrl!),
+                displayName: c.name,
+                size: 34)
+          else
+            Container(
+              width: 34, height: 34,
+              decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle),
+              child: const Icon(Icons.podcasts, size: 18, color: Colors.white),
+            ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  isBroadcaster ? 'You are live' : (c?.name ?? 'Live'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.sans(
+                      fontSize: 14.5, fontWeight: FontWeight.w700, color: Colors.white),
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: AppColors.danger,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text('LIVE',
+                          style: AppTypography.sans(
+                              fontSize: 10, fontWeight: FontWeight.w900, color: Colors.white)),
+                    ),
+                    if (clockLabel != null) ...[
+                      const SizedBox(width: 6),
+                      Text(clockLabel!,
+                          style: AppTypography.sans(fontSize: 11.5, color: Colors.white70)),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          // A viewer can follow without leaving; the creator has nobody to
+          // follow, so the slot is simply absent rather than disabled.
+          if (!isBroadcaster && !following && onFollow != null) ...[
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: onFollow,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.danger,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text('Follow',
+                    style: AppTypography.sans(
+                        fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _countPill() => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.remove_red_eye_outlined, size: 15, color: Colors.white),
+            const SizedBox(width: 5),
+            Text('$viewers',
+                style: AppTypography.sans(
+                    fontSize: 13.5, fontWeight: FontWeight.w700, color: Colors.white)),
+          ],
+        ),
+      );
+
+  Widget _roundButton(IconData icon, VoidCallback onTap) => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          width: 36, height: 36,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.45),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, size: 20, color: Colors.white),
+        ),
+      );
+
+  /// Rises from the bottom, no background of its own, oldest at the top. Fixed
+  /// height so it never pushes the bar around as lines arrive.
+  Widget _commentStream() => SizedBox(
+        height: 200,
+        child: ListView.builder(
+          padding: const EdgeInsets.fromLTRB(14, 0, 60, 8),
+          // Newest at the bottom, and the list sits at the bottom by default —
+          // which is where a live chat is always read from.
+          reverse: true,
+          itemCount: comments.length,
+          itemBuilder: (context, i) => _line(comments[comments.length - 1 - i]),
+        ),
+      );
+
+  Widget _line(LiveComment c) {
+    final shadow = const [Shadow(color: Colors.black87, blurRadius: 6)];
+    // Arrivals and reactions share the strip with what people type — they are
+    // the room breathing, and pulling them into their own list would have made
+    // three feeds out of one conversation.
+    if (c.kind != 'comment') {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            Icon(c.kind == 'like' ? Icons.favorite : Icons.waving_hand,
+                size: 15, color: Colors.white70),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                c.kind == 'like' ? '${c.user.name} liked the LIVE' : '${c.user.name} joined',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.sans(fontSize: 13, color: Colors.white70)
+                    .copyWith(shadows: shadow),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AppAvatar(
+              imageUrl: c.user.avatarUrl == null ? null : mediaUrl(c.user.avatarUrl!),
+              displayName: c.user.name,
+              size: 24),
+          const SizedBox(width: 8),
+          Expanded(
+            child: RichText(
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              text: TextSpan(children: [
+                TextSpan(
+                  text: '${c.user.name}  ',
+                  style: AppTypography.sans(fontSize: 13, color: Colors.white60)
+                      .copyWith(shadows: shadow),
+                ),
+                TextSpan(
+                  text: c.body,
+                  style: AppTypography.sans(fontSize: 14, color: Colors.white)
+                      .copyWith(shadows: shadow),
+                ),
+              ]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bottomBar(BuildContext context) {
+    if (isBroadcaster) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(14, 6, 14, 14),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text('Your live is on',
+                  style: AppTypography.sans(fontSize: 13, color: Colors.white70)
+                      .copyWith(shadows: const [Shadow(color: Colors.black87, blurRadius: 6)])),
+            ),
+            GestureDetector(
+              onTap: onClose,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+                decoration: BoxDecoration(
+                  color: AppColors.danger,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text('End live',
+                    style: AppTypography.sans(
+                        fontSize: 14.5, fontWeight: FontWeight.w800, color: Colors.white)),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return _ViewerBar(onSend: onSend, onReact: onReact);
+  }
+}
+
+/// The viewer's bar: say something, or react. Kept as its own stateful widget
+/// so typing doesn't rebuild the video and the comment strip on every keypress.
+class _ViewerBar extends StatefulWidget {
+  const _ViewerBar({this.onSend, this.onReact});
+  final void Function(String text)? onSend;
+  final VoidCallback? onReact;
+
+  @override
+  State<_ViewerBar> createState() => _ViewerBarState();
+}
+
+class _ViewerBarState extends State<_ViewerBar> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _send() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    _controller.clear();
+    widget.onSend?.call(text);
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            12, 6, 12, 12 + MediaQuery.of(context).viewInsets.bottom),
+        child: Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: TextField(
+                  controller: _controller,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _send(),
+                  style: AppTypography.sans(fontSize: 14.5, color: Colors.white),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 13),
+                    hintText: 'Type…',
+                    hintStyle: AppTypography.sans(fontSize: 14.5, color: Colors.white54),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              // No await, no spinner, no confirmation: the tap is the whole
+              // interaction and the count is approximate anyway.
+              onTap: widget.onReact,
+              child: Container(
+                width: 46, height: 46,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.favorite, color: AppColors.danger, size: 22),
+              ),
+            ),
+          ],
+        ),
+      );
+}

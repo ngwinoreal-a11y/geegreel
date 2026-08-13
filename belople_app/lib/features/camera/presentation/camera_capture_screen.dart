@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:camera/camera.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +13,7 @@ import '../../../core/theme/app_radii.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/top_toast.dart';
 import '../../auth/application/auth_controller.dart';
+import '../../live/data/live_repository.dart';
 import '../../profile/data/profile_repository.dart';
 import '../../public_feed/application/public_feed_controller.dart';
 import '../data/capture_result.dart';
@@ -38,7 +40,7 @@ class CameraCaptureScreen extends ConsumerStatefulWidget {
   ConsumerState<CameraCaptureScreen> createState() => _CameraCaptureScreenState();
 }
 
-enum _CamMode { short, public, text }
+enum _CamMode { short, public, text, live }
 
 class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with WidgetsBindingObserver {
   /// The sound being recorded to, once fetched. Null when none is attached.
@@ -134,11 +136,41 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
 
   // ----- capture actions -----
 
+  /// True between tapping Go Live and the broadcast screen opening. The button
+  /// shows a spinner and stops taking taps: opening a live stream is a paid
+  /// call, and a double tap used to be how you got two of anything.
+  bool _startingLive = false;
+
   Future<void> _onCapture() async {
     if (_mode == _CamMode.public) {
       await _takePhoto();
     } else {
       await _toggleRecording();
+    }
+  }
+
+  /// Opens the session on the backend, then hands off to the broadcast screen.
+  /// Nothing about the provider reaches here — the backend returns somewhere to
+  /// push to, and that is all this knows.
+  Future<void> _goLive() async {
+    if (_startingLive) return;
+    setState(() => _startingLive = true);
+    try {
+      final start = await ref.read(liveRepositoryProvider).start();
+      if (!mounted) return;
+      await context.push('/live/broadcast', extra: start);
+      if (mounted) context.pop();
+    } catch (e) {
+      // The backend's own words where it has them — "You already have a live
+      // going", the follower threshold, or that Live isn't configured yet.
+      // None of those are things to fail silently on.
+      debugPrint('[BLLIVE] start failed: $e');
+      final msg = e is DioException
+          ? (e.response?.data is Map ? (e.response!.data['error']?.toString()) : null)
+          : null;
+      if (mounted) showTopToast(context, msg ?? "Couldn't start the live — try again");
+    } finally {
+      if (mounted) setState(() => _startingLive = false);
     }
   }
 
@@ -433,7 +465,11 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
                                   // look permanently underneath the shutter,
                                   // where it could be neither seen nor tapped;
                                   // paging keeps the middle empty on purpose.
-                                  if (!_recording && ready)
+                                  // Not in Live: the looks are burnt in by an
+                                  // FFmpeg pass after recording, and a live
+                                  // stream never gets one. Offering them here
+                                  // would promise a grade that never arrives.
+                                  if (!_recording && ready && _mode != _CamMode.live)
                                     PageView.builder(
                                       itemCount: (kCameraFilters.length / 4).ceil(),
                                       itemBuilder: (context, page) {
@@ -465,29 +501,74 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
                                     ),
                                   // The shutter sits ON the strip, not in it, so
                                   // it stays put while the looks slide past.
-                                  GestureDetector(
-                                    behavior: HitTestBehavior.opaque,
-                                    onTap: _onCapture,
-                                    child: Container(
-                                      width: 84, height: 84,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: Colors.black.withValues(alpha: 0.35),
-                                        border: Border.all(color: Colors.white, width: 4),
+                                  //
+                                  // Live gets a named button instead of a
+                                  // shutter: a round red circle means "this
+                                  // records to your phone", and going live is
+                                  // not that — it is public the instant it
+                                  // starts, so it says what it will do.
+                                  if (_mode == _CamMode.live)
+                                    GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: _startingLive ? null : _goLive,
+                                      child: Container(
+                                        height: 62,
+                                        // Sized to its words, not to the row.
+                                        // A Center inside here took the Stack's
+                                        // full width and the button ran the
+                                        // whole screen, straight over the looks.
+                                        padding: const EdgeInsets.symmetric(horizontal: 40),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.danger,
+                                          borderRadius: BorderRadius.circular(999),
+                                          border: Border.all(color: Colors.white, width: 3),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (_startingLive)
+                                              const SizedBox(
+                                                width: 22, height: 22,
+                                                child: CircularProgressIndicator(
+                                                    color: Colors.white, strokeWidth: 2.5),
+                                              )
+                                            else ...[
+                                              const Icon(Icons.podcasts, color: Colors.white, size: 21),
+                                              const SizedBox(width: 10),
+                                              Text('Go Live',
+                                                  style: AppTypography.sans(
+                                                      fontSize: 19,
+                                                      fontWeight: FontWeight.w800,
+                                                      color: Colors.white)),
+                                            ],
+                                          ],
+                                        ),
                                       ),
-                                      child: Center(
-                                        child: AnimatedContainer(
-                                          duration: const Duration(milliseconds: 200),
-                                          width: _recording ? 30 : 64,
-                                          height: _recording ? 30 : 64,
-                                          decoration: BoxDecoration(
-                                            color: _mode == _CamMode.public ? Colors.white : AppColors.danger,
-                                            borderRadius: BorderRadius.circular(_recording ? 8 : 40),
+                                    )
+                                  else
+                                    GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: _onCapture,
+                                      child: Container(
+                                        width: 84, height: 84,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: Colors.black.withValues(alpha: 0.35),
+                                          border: Border.all(color: Colors.white, width: 4),
+                                        ),
+                                        child: Center(
+                                          child: AnimatedContainer(
+                                            duration: const Duration(milliseconds: 200),
+                                            width: _recording ? 30 : 64,
+                                            height: _recording ? 30 : 64,
+                                            decoration: BoxDecoration(
+                                              color: _mode == _CamMode.public ? Colors.white : AppColors.danger,
+                                              borderRadius: BorderRadius.circular(_recording ? 8 : 40),
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
                                 ],
                               ),
                             ),
@@ -495,13 +576,28 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
                             // Mode tabs centred, gallery pinned to the left of
                             // them — the shape every camera uses, and it frees
                             // the record row entirely for the looks.
+                            // Gallery first, tabs taking what's left. It used to
+                            // be a Stack with the gallery floating over centred
+                            // tabs, which worked with three of them and buried
+                            // "Short" under the button the moment Live made it
+                            // four. Laid out in a row, they cannot collide.
                             SizedBox(
                               height: 52,
-                              child: Stack(
-                                alignment: Alignment.center,
+                              child: Row(
                                 children: [
-                                  _modeTabs(),
-                                  Positioned(left: 18, child: _GalleryButton(onTap: _pickFromGallery)),
+                                  const SizedBox(width: 14),
+                                  // Nothing in the gallery is a live broadcast,
+                                  // so in Live the button is absent rather than
+                                  // present and pointless — but it keeps its
+                                  // space, so the tabs don't jump as you switch.
+                                  SizedBox(
+                                    width: 46,
+                                    child: _mode == _CamMode.live
+                                        ? null
+                                        : _GalleryButton(onTap: _pickFromGallery),
+                                  ),
+                                  Expanded(child: _modeTabs()),
+                                  const SizedBox(width: 14),
                                 ],
                               ),
                             ),
@@ -531,9 +627,21 @@ class _CameraCaptureScreenState extends ConsumerState<CameraCaptureScreen> with 
                 ).copyWith(shadows: const [Shadow(color: Colors.black87, blurRadius: 6)])),
           ),
         );
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [tab('Short', _CamMode.short), tab('Public', _CamMode.public), tab('Text', _CamMode.text)],
+    // Four now, so they get a little less air each and are allowed to scroll
+    // rather than squeeze — on a narrow phone four fixed-width labels at this
+    // size run off the edge, and the one that goes is the last.
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const ClampingScrollPhysics(),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          tab('Short', _CamMode.short),
+          tab('Public', _CamMode.public),
+          tab('Text', _CamMode.text),
+          tab('Live', _CamMode.live),
+        ],
+      ),
     );
   }
 
