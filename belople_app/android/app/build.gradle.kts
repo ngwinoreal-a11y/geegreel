@@ -47,6 +47,22 @@ kotlin {
     }
 }
 
+// rtmp_broadcaster (the Live RTMP publisher) still lists
+// `com.android.support:support-v4:28.0.0` — the PRE-AndroidX support library —
+// in its build.gradle. Its own code never touches it: every import is androidx
+// (ActivityCompat, ContextCompat, annotation), and support-v4 is dead weight
+// left behind when the plugin was migrated. Gradle still resolves it though,
+// and then the manifest merger dies on
+//
+//   Namespace 'androidx.versionedparcelable' is used in multiple modules
+//
+// because the old library and its AndroidX replacement declare the same one.
+// Dropping the whole obsolete group is the fix; nothing in the app or in any
+// plugin compiles against it.
+configurations.all {
+    exclude(group = "com.android.support")
+}
+
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
