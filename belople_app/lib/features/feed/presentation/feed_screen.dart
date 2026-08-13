@@ -16,6 +16,9 @@ import '../../../core/widgets/seg_control.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../../auth/application/auth_controller.dart';
 import '../../camera/data/capture_result.dart';
+import '../../live/application/active_lives_controller.dart';
+import '../../live/data/live_repository.dart';
+import '../../live/presentation/live_feed_card.dart';
 import '../../profile/data/profile_repository.dart';
 import '../../overlays/presentation/ad_comments_sheet.dart';
 import '../../overlays/presentation/comments_sheet.dart';
@@ -205,11 +208,19 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
     }
   }
 
+  /// The lives currently riding at the front of the feed's scroll. Read in one
+  /// place so the page index and the video index cannot drift apart mid-build.
+  List<LiveSession> _lives = const [];
+
   void _onPageChanged(int index) {
     setState(() => _activeIndex = index);
     final state = ref.read(feedControllerProvider(_tab)).valueOrNull;
+    // Counted against the VIDEOS, not the pages: the live cards sit in front
+    // of them, and measuring "three from the end" against the page index would
+    // ask for the next batch that many swipes early.
+    final videoIndex = index - _lives.length;
     if (state != null &&
-        index >= state.videos.length - 3 &&
+        videoIndex >= state.videos.length - 3 &&
         state.nextCursor != null &&
         !state.isLoadingMore) {
       ref.read(feedControllerProvider(_tab).notifier).loadMore();
@@ -219,6 +230,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
   @override
   Widget build(BuildContext context) {
     final feedAsync = ref.watch(feedControllerProvider(_tab));
+    // Read once per build and held on the State, so itemCount, itemBuilder and
+    // _onPageChanged all agree about how many pages sit in front of the videos
+    // even if the list changes between them.
+    _lives = ref.watch(activeLivesProvider).valueOrNull ?? const [];
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -278,13 +293,26 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                 // swipe lands on a ready frame instead of a black loading one.
                 allowImplicitScrolling: true,
                 onPageChanged: _onPageChanged,
-                itemCount: state.videos.length,
+                // Lives ride at the front of the same scroll. There is no Live
+                // section to go to: you swipe down the feed you were already
+                // swiping and arrive on one, the way the owner asked for it.
+                // They are first because a live is only worth showing while it
+                // is happening — behind fifty videos it would be over.
+                itemCount: _lives.length + state.videos.length,
                 itemBuilder: (context, index) {
+                  if (index < _lives.length) {
+                    return LiveFeedCard(
+                      key: ValueKey('live-${_lives[index].id}'),
+                      session: _lives[index],
+                      isActive: index == _activeIndex && _routeVisible,
+                    );
+                  }
+                  final videoIndex = index - _lives.length;
                   // Preload ring: only mount the controller for the active
                   // slide +/-1 — matches warmNeighbours()'s windowed
                   // preload rather than keeping every loaded slide alive.
                   final withinWindow = (index - _activeIndex).abs() <= 1;
-                  final video = state.videos[index];
+                  final video = state.videos[videoIndex];
                   if (!withinWindow) {
                     // Outside the preload ring: show the poster frame rather
                     // than a bare black box, so if the window and the viewport
@@ -369,7 +397,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
             right: 0,
             child: SafeArea(
               bottom: false,
-              child: Padding(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+              Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: Row(
                   children: [
@@ -432,6 +463,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                     ),
                   ],
                 ),
+              ),
+                ],
               ),
             ),
           ),

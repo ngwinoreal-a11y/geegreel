@@ -58,8 +58,17 @@ class LiveOverlay extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Row(
               children: [
-                Flexible(child: _creatorPill(context)),
-                const Spacer(),
+                // Expanded + Align, NOT Flexible + Spacer. A Spacer is an
+                // Expanded(flex: 1), so it competed with the pill's Flexible
+                // for the row and each got half — the pill overflowed its half
+                // and Flutter drew the overflow stripes over the creator's name.
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _creatorPill(context),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 _countPill(),
                 const SizedBox(width: 8),
                 _roundButton(Icons.close, onClose),
@@ -163,8 +172,10 @@ class LiveOverlay extends StatelessWidget {
             ),
           ),
           // A viewer can follow without leaving; the creator has nobody to
-          // follow, so the slot is simply absent rather than disabled.
-          if (!isBroadcaster && !following && onFollow != null) ...[
+          // follow, so the slot is simply absent rather than disabled. It also
+          // waits for the creator to load — a Follow button beside a blank name
+          // is asking you to follow you-don't-know-who.
+          if (!isBroadcaster && c != null && !following && onFollow != null) ...[
             const SizedBox(width: 10),
             GestureDetector(
               onTap: onFollow,
