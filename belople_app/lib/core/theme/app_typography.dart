@@ -30,11 +30,17 @@ abstract final class AppTypography {
   //      this phone /system/etc/fonts.xml declares the emoji families with
   //      `lang="und-Zsye"` and NO name attribute, so there is no family by that
   //      name to select. It is reachable only through the fallback chain.
-  //   3. A plain TextStyle() with no family at all — STILL white. So it is not
-  //      our font choice: Roboto has the glyph too, and Flutter's chain never
-  //      reaches the emoji font. The U+FE0F that should force emoji
-  //      presentation is genuinely in the data (bytes E29DA4 EFB88F, checked
-  //      in D1) and is not honoured here.
+  //   3. A plain TextStyle() in one field — still white, but that test was
+  //      WORTHLESS: app_theme.dart sets fontFamily on the whole ThemeData, so
+  //      the field inherited Inter regardless. Repeated properly by stripping
+  //      the global family from the theme itself — STILL white. So it really is
+  //      not our font choice.
+  //
+  // The U+FE0F that should force emoji presentation is genuinely in the data
+  // (bytes E29DA4 EFB88F, checked in D1) and Flutter does not honour it. Every
+  // other app on the same phone shows the heart red, including the keyboard
+  // drawing its own preview a centimetre below ours — so this is Flutter's text
+  // stack, not the device.
   //
   // The only fix left is to BUNDLE a colour emoji font with the app and name
   // it, which costs roughly 10 MB of APK. That is the owner's call, not a
