@@ -1733,7 +1733,14 @@ async function handle(request, env, ctx) {
 
   // ----- public: photo feed -----
   if (path === "/api/posts" && method === "GET") {
-    const limit = Math.min(parseInt(url.searchParams.get("limit") || "15"), 30);
+    // Deliberately small, and it is the difference between rotation working
+    // and rotation being theoretically correct.
+    //
+    // At 15 a page held every post there was, so "unseen first" had nothing
+    // left to promote and a refresh returned the identical list — exactly the
+    // complaint. Public is an endless scroll that loads more as you go, so a
+    // smaller page costs nothing and always keeps something back for the pull.
+    const limit = Math.min(parseInt(url.searchParams.get("limit") || "6"), 30);
     const cursor = url.searchParams.get("cursor");
     const viewerId = user?.id || "";
 

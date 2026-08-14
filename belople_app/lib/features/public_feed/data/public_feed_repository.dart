@@ -30,7 +30,11 @@ class PublicFeedRepository {
     return _parsePage(raw);
   }
 
-  Future<PostsPage> fetchPosts({String? cursor, int limit = 12}) async {
+  /// Six, not twelve. The server puts unseen posts first, and a page big
+  /// enough to hold everything there is leaves nothing for the next pull to
+  /// bring — which is what made refreshing Public look like it did nothing at
+  /// all. More arrives on scroll regardless.
+  Future<PostsPage> fetchPosts({String? cursor, int limit = 6}) async {
     final res = await _dio.get('/posts', queryParameters: {
       'limit': limit,
       if (cursor != null) 'cursor': cursor,
