@@ -325,15 +325,25 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     ? CachedNetworkImage(imageUrl: mediaUrl(url), fit: BoxFit.cover)
                     // A text post has no picture — show its words, which is
                     // the whole post anyway.
-                    : Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: Text(
-                          (text ?? '').trim(),
-                          maxLines: 6,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTypography.sans(fontSize: 12, color: AppColors.text),
-                        ),
-                      ),
+                    : (text ?? '').trim().isNotEmpty
+                        ? Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Text(
+                              text!.trim(),
+                              maxLines: 6,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTypography.sans(fontSize: 12, color: AppColors.text),
+                            ),
+                          )
+                        // Nothing to show at all: a video whose poster frame
+                        // never got made, or a post with neither picture nor
+                        // words. It drew as a blank grey hole in the grid,
+                        // which reads as the grid being broken rather than as
+                        // a result you can still tap.
+                        : const Center(
+                            child: Icon(Icons.play_circle_outline,
+                                color: AppColors.faint, size: 30),
+                          ),
               ),
             ),
           );
