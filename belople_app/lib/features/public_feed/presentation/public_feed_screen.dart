@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/router/app_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
@@ -73,7 +74,7 @@ const _videoEvery = 3;
 /// on the page reads as the page being an ad.
 const _adAfter = 2;
 
-class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
+class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> with RouteAware {
   late final ScrollController _scrollController;
 
   // Videos to splice in, drawn lazily from the For You feed. Kept in the
@@ -96,6 +97,40 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
     super.initState();
     _scrollController = ScrollController()..addListener(_onScroll);
     _loadVideos();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) routeObserver.subscribe(this, route);
+  }
+
+  /// Coming BACK to Public — from a post, a profile, anywhere — asks for a
+  /// fresh page.
+  ///
+  /// Without this, returning showed the cached first page: the same posts, in
+  /// the same order, however long you had been away. The server already puts
+  /// what you have not seen first; it just never got asked again. Only the
+  /// posts are invalidated, so the scroll position is kept — you come back to
+  /// where you were, with new things above.
+  @override
+  void didPopNext() {
+    if (!mounted) return;
+    setState(() {
+      _videoPool.clear();
+      _videoCursor = null;
+      _videoDone = false;
+    });
+    ref.invalidate(publicFeedControllerProvider);
+    _loadVideos();
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadVideos() async {
@@ -145,12 +180,6 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> {
       }
     }
     return items;
-  }
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
   }
 
   /// Reaching for the phone's volume rocker while a muted preview is playing

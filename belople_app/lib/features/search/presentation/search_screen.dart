@@ -34,6 +34,21 @@ class SearchScreen extends ConsumerStatefulWidget {
 const _kRecentSearchesKey = 'recent_searches';
 const _kMaxRecent = 12;
 
+// ---------------------------------------------------------------------------
+// Search is a WHITE page, like Public — so every colour it uses is named here
+// rather than reached for. Reading AppColors.text (built for dark chrome) on a
+// white page is how text has ended up invisible before.
+// ---------------------------------------------------------------------------
+
+/// Names, captions, the typed query.
+const _ink = AppColors.onChrome; // #111
+
+/// Handles, follower counts, hints, section labels.
+const _inkMuted = AppColors.onSheetMuted;
+
+/// The search pill, thumbnails behind a missing image, the history bullet.
+const _fill = AppColors.sheetFill;
+
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _controller = TextEditingController();
   Timer? _debounce;
@@ -56,8 +71,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     _debounce = Timer(const Duration(milliseconds: 300), () => _run(value));
   }
 
-  /// Saved when a search actually returns something, not on every keystroke —
-  /// otherwise the list fills with "a", "ab", "abc" on the way to one word.
+  /// Saved when a result is OPENED, never when a search merely runs.
+  ///
+  /// Typing is not searching. Every keystroke fires a query, so remembering on
+  /// results filled the history with "m", "mu", "mur" on the way to one word —
+  /// and kept searches that turned up nothing anyone wanted. What belongs in a
+  /// history is what you actually went to look at.
   Future<void> _remember(String term) async {
     final t = term.trim();
     if (t.isEmpty) return;
@@ -96,7 +115,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       final results = await ref.read(searchRepositoryProvider).search(q);
       if (!mounted) return;
       setState(() { _results = results; _loading = false; });
-      if (!results.isEmpty) _remember(q);
     } catch (e) {
       // A search that fails quietly looks exactly like a search with no
       // results, and the person retypes the same word forever.
@@ -116,14 +134,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget build(BuildContext context) {
     final results = _results;
     return Scaffold(
-      backgroundColor: AppColors.bg,
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        backgroundColor: AppColors.bg,
-        surfaceTintColor: AppColors.bg,
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         elevation: 0,
         titleSpacing: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: AppColors.text),
+          icon: const Icon(Icons.arrow_back, color: _ink),
           onPressed: () => context.pop(),
         ),
         title: Padding(
@@ -132,12 +150,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             height: 42,
             padding: const EdgeInsets.symmetric(horizontal: 14),
             decoration: BoxDecoration(
-              color: AppColors.surface,
+              color: _fill,
               borderRadius: BorderRadius.circular(999),
             ),
             child: Row(
               children: [
-                const Icon(Icons.search, size: 20, color: AppColors.muted),
+                const Icon(Icons.search, size: 20, color: _inkMuted),
                 const SizedBox(width: 10),
                 Expanded(
                   child: TextField(
@@ -146,13 +164,22 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     textInputAction: TextInputAction.search,
                     onChanged: _onChanged,
                     onSubmitted: _run,
-                    style: AppTypography.sans(fontSize: 15, color: AppColors.text),
+                    style: AppTypography.sans(fontSize: 15, color: _ink),
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      // The app's InputDecorationTheme is built for dark
+                      // chrome and fills its fields with it, so on this white
+                      // page the box painted a black slab over the pill and
+                      // swallowed the typed word. This page draws its own
+                      // background; the field must draw none.
+                      filled: false,
+                      fillColor: Colors.transparent,
                       contentPadding: const EdgeInsets.symmetric(vertical: 11),
                       hintText: 'Search',
-                      hintStyle: AppTypography.sans(fontSize: 15, color: AppColors.muted),
+                      hintStyle: AppTypography.sans(fontSize: 15, color: _inkMuted),
                     ),
                   ),
                 ),
@@ -163,7 +190,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       _controller.clear();
                       setState(() => _results = null);
                     },
-                    child: const Icon(Icons.close, size: 19, color: AppColors.muted),
+                    child: const Icon(Icons.close, size: 19, color: _inkMuted),
                   ),
               ],
             ),
@@ -208,7 +235,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               const SizedBox(height: 12),
               Text('Nothing matched "${_controller.text.trim()}"',
                   textAlign: TextAlign.center,
-                  style: AppTypography.sans(fontSize: 15, color: AppColors.muted)),
+                  style: AppTypography.sans(fontSize: 15, color: _inkMuted)),
             ],
           ),
         ),
@@ -238,7 +265,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               title: _Highlighted(
                 text: u.displayName,
                 query: q,
-                style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w600),
+                style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w600, color: _ink),
               ),
               // Handle and audience on one line, the way the reference does it:
               // a name alone says nothing about which of four similar accounts
@@ -249,14 +276,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     child: _Highlighted(
                       text: '@${u.username}',
                       query: q,
-                      style: AppTypography.sans(fontSize: 13, color: AppColors.muted),
+                      style: AppTypography.sans(fontSize: 13, color: _inkMuted),
                     ),
                   ),
                   Text(' · ${_followers(u.followersCount)} followers',
-                      style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+                      style: AppTypography.sans(fontSize: 13, color: _inkMuted)),
                 ],
               ),
-              onTap: () => context.push('/profile/${u.username}'),
+              onTap: () { _remember(q); context.push('/profile/${u.username}'); },
             ),
         ],
         if (r.sounds.isNotEmpty) ...[
@@ -271,19 +298,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                         width: 44, height: 44, fit: BoxFit.cover)
                     : Container(
                         width: 44, height: 44,
-                        color: AppColors.surface,
-                        child: const Icon(Icons.music_note, color: AppColors.muted),
+                        color: _fill,
+                        child: const Icon(Icons.music_note, color: _inkMuted),
                       ),
               ),
               title: Text(s.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: AppTypography.sans(fontWeight: FontWeight.w600)),
+                  style: AppTypography.sans(fontWeight: FontWeight.w600, color: _ink)),
               subtitle: Text(
                   '${s.uses} ${s.uses == 1 ? 'video' : 'videos'}'
                   '${s.authorUsername != null ? ' · @${s.authorUsername}' : ''}',
-                  style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
-              onTap: () => context.push('/sound/${s.id}'),
+                  style: AppTypography.sans(fontSize: 13, color: _inkMuted)),
+              onTap: () { _remember(q); context.push('/sound/${s.id}'); },
             ),
         ],
         // Rows, not a grid. A grid shows the picture and hides the words — and
@@ -300,7 +327,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               isVideo: true,
               // The model travels with it, so the player opens on its own frame
               // rather than spinning through a fetch it does not need.
-              onTap: () => context.push('/v/${h.item.id}', extra: h.item),
+              onTap: () { _remember(q); context.push('/v/${h.item.id}', extra: h.item); },
             ),
         ],
         if (r.posts.isNotEmpty) ...[
@@ -314,7 +341,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               isVideo: false,
               // Required here, not just nice: /p/:id with no model in `extra`
               // falls back to the whole Public feed.
-              onTap: () => context.push('/p/${h.item.id}', extra: h.item),
+              onTap: () { _remember(q); context.push('/p/${h.item.id}', extra: h.item); },
             ),
         ],
       ],
@@ -350,7 +377,7 @@ class _RecentSearches extends StatelessWidget {
           padding: const EdgeInsets.all(32),
           child: Text('Search people, videos, posts and sounds',
               textAlign: TextAlign.center,
-              style: AppTypography.sans(fontSize: 14.5, color: AppColors.muted)),
+              style: AppTypography.sans(fontSize: 14.5, color: _inkMuted)),
         ),
       );
     }
@@ -363,7 +390,7 @@ class _RecentSearches extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Recent searches',
-                  style: AppTypography.sans(fontSize: 16, fontWeight: FontWeight.w700)),
+                  style: AppTypography.sans(fontSize: 16, fontWeight: FontWeight.w700, color: _ink)),
               TextButton(
                 onPressed: onClear,
                 style: TextButton.styleFrom(foregroundColor: AppColors.accent),
@@ -377,15 +404,15 @@ class _RecentSearches extends StatelessWidget {
             dense: true,
             leading: Container(
               width: 34, height: 34,
-              decoration: const BoxDecoration(color: AppColors.surface, shape: BoxShape.circle),
-              child: const Icon(Icons.history, size: 18, color: AppColors.muted),
+              decoration: const BoxDecoration(color: _fill, shape: BoxShape.circle),
+              child: const Icon(Icons.history, size: 18, color: _inkMuted),
             ),
             title: Text(term,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AppTypography.sans(fontSize: 15, color: AppColors.text)),
+                style: AppTypography.sans(fontSize: 15, color: _ink)),
             trailing: IconButton(
-              icon: const Icon(Icons.close, size: 18, color: AppColors.muted),
+              icon: const Icon(Icons.close, size: 18, color: _inkMuted),
               onPressed: () => onForget(term),
             ),
             onTap: () => onUse(term),
@@ -482,12 +509,12 @@ class _MediaRow extends StatelessWidget {
                 child: thumbUrl != null
                     ? CachedNetworkImage(imageUrl: mediaUrl(thumbUrl!), fit: BoxFit.cover)
                     : Container(
-                        color: AppColors.surface,
+                        color: _fill,
                         // A video with no poster frame, or a text post. Better a
                         // glyph than a grey hole that reads as a broken row.
                         child: Icon(
                             isVideo ? Icons.play_circle_outline : Icons.article_outlined,
-                            color: AppColors.faint, size: 22),
+                            color: _inkMuted, size: 22),
                       ),
               ),
             ),
@@ -501,11 +528,11 @@ class _MediaRow extends StatelessWidget {
                     text: text.trim().isEmpty ? '(no caption)' : text.trim(),
                     query: query,
                     maxLines: 2,
-                    style: AppTypography.sans(fontSize: 14.5, color: AppColors.text),
+                    style: AppTypography.sans(fontSize: 14.5, color: _ink),
                   ),
                   const SizedBox(height: 3),
                   Text(subtitle,
-                      style: AppTypography.sans(fontSize: 12.5, color: AppColors.muted)),
+                      style: AppTypography.sans(fontSize: 12.5, color: _inkMuted)),
                 ],
               ),
             ),
