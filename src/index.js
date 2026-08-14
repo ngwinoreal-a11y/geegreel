@@ -1812,20 +1812,31 @@ async function handle(request, env, ctx) {
     // It means a post scrolled straight past still counts as seen, which is the
     // honest trade — the alternative is a report from the client for every card
     // that crosses the screen.
-    if (personalised && results.length) {
+    // Only the FIRST page re-stamps. Pages fetched while scrolling must not
+    // reorder the list underneath the finger doing the scrolling — the offset
+    // would then point somewhere else and you would get the same post twice
+    // and miss another. Arriving or pulling is what rotates the feed; walking
+    // down it is not.
+    if (personalised && results.length && !cursor) {
       const t = now();
       ctx.waitUntil(
         env.DB.batch(
-          results.map(r =>
-            // DO NOTHING, not DO UPDATE. seen_at is when you FIRST saw a post
-            // and must never move. Re-stamping it on every serve gave the
-            // whole feed one timestamp, so "oldest seen first" collapsed into
-            // two groups trading places on each pull — the same two posts
-            // alternating for ever, which is exactly what was reported.
+          results.map((r, i) =>
+            // Every post gets its OWN seen_at — t + its position — and a post
+            // shown again is re-stamped.
+            //
+            // Both halves matter, and getting either wrong breaks the feed in
+            // a different way. Stamping a whole page with one timestamp gave
+            // 11 posts two distinct values between them, so "oldest seen
+            // first" had almost nothing to sort by and the same six sat at the
+            // top for ever. Not re-stamping at all froze that order
+            // permanently. Distinct, moving stamps make the ordering a real
+            // queue: what you were just shown goes to the back, and the pull
+            // after this one brings what has waited longest.
             env.DB.prepare(
               "INSERT INTO post_exposures (user_id, post_id, seen_at) VALUES (?, ?, ?) " +
-              "ON CONFLICT(user_id, post_id) DO NOTHING"
-            ).bind(viewerId, r.id, t)
+              "ON CONFLICT(user_id, post_id) DO UPDATE SET seen_at = excluded.seen_at"
+            ).bind(viewerId, r.id, t + i)
           )
         ).catch(e => console.error("[PUBLIC] recording exposures failed", e))
       );

@@ -97,6 +97,19 @@ class _PublicFeedScreenState extends ConsumerState<PublicFeedScreen> with RouteA
     super.initState();
     _scrollController = ScrollController()..addListener(_onScroll);
     _loadVideos();
+    // Opening Public asks the server again, every time.
+    //
+    // The screen is pushed fresh on each visit, but the posts live in a
+    // Riverpod provider that outlives it — so a new screen read the SAME
+    // cached page and showed the same posts however long you had been away.
+    // The rotation was working on the server and nobody was asking it.
+    //
+    // After the first frame, so the cached page paints instantly and is
+    // replaced when the answer arrives, rather than showing a spinner on a
+    // screen we already have content for.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.invalidate(publicFeedControllerProvider);
+    });
   }
 
   @override
