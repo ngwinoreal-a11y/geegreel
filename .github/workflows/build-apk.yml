@@ -47,8 +47,25 @@ jobs:
 
       # Release build — signed with debug keys for now (installs & runs on any
       # phone). A real Play Store keystore gets wired in when we publish.
+      #
+      # --build-number: the versionCode. Every APK shipped so far was 1, so
+      # Android had no way to tell one build from another. The run number is
+      # monotonic and free.
+      #
+      # --dart-define: the label Settings shows, assembled here from the version
+      # in pubspec, this run and the commit. Built rather than typed, so it
+      # cannot claim to be a version it isn't — which is how the About line came
+      # to read "Version 1.0.0" for months. See lib/core/build_info.dart.
       - name: Build release APK
-        run: flutter build apk --release
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          LABEL="$VERSION · build ${GITHUB_RUN_NUMBER} · $SHORT_SHA"
+          echo "Building: $LABEL"
+          echo "APK_LABEL=$LABEL" >> "$GITHUB_ENV"
+          flutter build apk --release \
+            --build-number="${GITHUB_RUN_NUMBER}" \
+            --dart-define=BELOPLE_BUILD="$LABEL"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -67,6 +84,15 @@ jobs:
         run: |
           gh release delete latest-apk --yes --cleanup-tag || true
           gh release create latest-apk build/app/outputs/flutter-apk/app-release.apk \
-            --title "Belople — latest APK" \
-            --notes "Auto-built release APK from commit ${{ github.sha }}. Open this on your Android phone and tap the app-release.apk to install." \
+            --title "Belople — $APK_LABEL" \
+            --notes "$(printf '%s\n' \
+              "**$APK_LABEL**" \
+              "" \
+              "Built from commit ${{ github.sha }} on $(date -u '+%Y-%m-%d %H:%M UTC')." \
+              "" \
+              "Open this page on an Android phone and tap **app-release.apk** to install." \
+              "The same line appears in the app under **Settings → About**, so you can" \
+              "always tell which build a phone is actually running." \
+              "" \
+              "Signed with a debug key: installs anywhere, but not accepted by the Play Store.")" \
             --prerelease

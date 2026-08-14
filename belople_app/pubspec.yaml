@@ -16,7 +16,11 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+# The number after the + is a placeholder. CI passes --build-number from the
+# Actions run number, so every APK that leaves the workflow gets a distinct,
+# increasing versionCode — Android needs that to treat one build as an upgrade
+# of another, and every APK handed out so far was versionCode 1.
+version: 1.1.0+1
 
 environment:
   sdk: ^3.12.2

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../core/build_info.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radii.dart';
@@ -460,7 +462,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 28),
           Text('ABOUT', style: AppTypography.sectionLabel),
           const SizedBox(height: 4),
-          Text('Belople · Version 1.0.0', style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+          // Long-pressable so it can be pasted into a message. Somebody
+          // reporting a problem is usually the last person able to type a
+          // seven-character SHA off a screen correctly.
+          GestureDetector(
+            onLongPress: () {
+              Clipboard.setData(ClipboardData(text: 'Belople $kBuildLabel'));
+              showTopToast(context, 'Build copied');
+            },
+            child: Text('Belople · $kBuildLabel',
+                style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+          ),
           const SizedBox(height: 20),
         ],
       ),
