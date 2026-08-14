@@ -52,8 +52,11 @@ class VideoEditService {
 
     // Progress is FFmpeg's position in the clip over the clip's length. Without
     // a length there's nothing to divide by, so the bar just stays put rather
-    // than inventing a number.
-    final totalMs = await _durationMs(videoPath);
+    // than inventing a number. Nobody asking for progress means nobody needs
+    // the length either — the composer stopped asking when the percentage was
+    // taken off the publish screen, and probing anyway would be an ffprobe run
+    // per post for a number no one reads.
+    final totalMs = onProgress == null ? null : await _durationMs(videoPath);
 
     // The overlay is a second input, composited over whatever the colour chain
     // produced. scale2ref forces the PNG to the frame's exact size before it

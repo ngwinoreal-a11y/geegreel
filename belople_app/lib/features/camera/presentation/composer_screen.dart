@@ -184,7 +184,6 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
     if (picked == null || !mounted) return;
     setState(() => _country = picked == kEverywhere ? null : picked);
   }
-  double _progress = 0;
   String? _error;
 
   /// The look to burn in on publish, and what the preview is tinted with so the
@@ -193,10 +192,15 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   late int _filterIndex = widget.filterIndex;
   CameraFilter get _filter => kCameraFilters[_filterIndex.clamp(0, kCameraFilters.length - 1)];
 
-  /// What the publish button's percentage is counting right now. Burning a look
-  /// in takes real time on a phone, and a bar that silently means two different
-  /// things at two different moments is worse than no bar.
-  String _stage = 'Uploading';
+  /// Publishing shows ONE moving line and nothing else — no stage name, no
+  /// percentage. The owner's call, on 2026-08-14: the steps a post goes through
+  /// (burning the look and the text in, then uploading) are the app's business,
+  /// not the poster's, and naming them only invites someone to wonder whether
+  /// something is wrong. A line that is moving says the one thing they need.
+  ///
+  /// So there is no progress VALUE anywhere: `onProgress` from the render and
+  /// the byte counts from the upload are not plumbed into the UI. A failure
+  /// still speaks — the dialog and the error line are untouched.
 
   final _picker = ImagePicker();
 
@@ -413,23 +417,14 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
       displaySize: _previewController?.value.size,
     );
 
-    if (mounted) {
-      setState(() {
-        _stage = chain == null
-            ? 'Adding your text'
-            : (overlayPng == null
-                ? 'Applying ${_filter.label}'
-                : 'Applying ${_filter.label} and your text');
-        _progress = 0;
-      });
-    }
+    // No onProgress: the moving line does not count anything, so asking FFmpeg
+    // for its position would only rebuild the screen a few times a second for
+    // a number nobody is shown.
     final out = await VideoEditService.burnIn(
       videoPath: video.path,
       chain: chain,
       overlayPngPath: overlayPng,
-      onProgress: (p) { if (mounted) setState(() => _progress = p); },
     );
-    if (mounted) setState(() { _stage = 'Uploading'; _progress = 0; });
     return File(out);
   }
 
@@ -516,7 +511,7 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
 
   Future<void> _publish() async {
     if (_uploading) return;
-    setState(() { _uploading = true; _error = null; _progress = 0; });
+    setState(() { _uploading = true; _error = null; });
     try {
       final repo = ref.read(uploadRepositoryProvider);
       String? uploadedVideoId;
@@ -537,7 +532,6 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
             return;
           }
           filtered = _videoFile!;
-          if (mounted) setState(() { _stage = 'Uploading'; _progress = 0; });
         }
         final fileToUpload = await _applySound(filtered);
         final thumb = await _makeThumbnail(fileToUpload);
@@ -555,17 +549,11 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
           width: size != null && size.width > 0 ? size.width.round() : null,
           height: size != null && size.height > 0 ? size.height.round() : null,
           duration: dur != null && dur > Duration.zero ? dur.inMilliseconds / 1000.0 : null,
-          onProgress: (sent, total) {
-            if (total > 0 && mounted) setState(() => _progress = sent / total);
-          },
         );
       } else {
         await repo.uploadPost(
           imageFile: _imageFile,
           content: _captionController.text.trim(),
-          onProgress: (sent, total) {
-            if (total > 0 && mounted) setState(() => _progress = sent / total);
-          },
         );
       }
       if (!mounted) return;
@@ -747,9 +735,11 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
                   textStyle: AppTypography.sans(fontSize: 19, fontWeight: FontWeight.w800),
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 ),
-                child: _uploading
-                    ? Text('${(_progress * 100).toStringAsFixed(0)}%')
-                    : Text(label),
+                // The label stays put while publishing, greyed by
+                // disabledForegroundColor. It used to be replaced by a
+                // percentage; the line below the bar is now the only thing that
+                // reports, and it reports without a number.
+                child: Text(label),
               ),
             ),
         ],
@@ -759,32 +749,25 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Says what the percentage on the button is counting. Burning a
-            // look in can outlast the upload that follows it, and a bar sitting
-            // at 40% with no word for it reads as a stuck app.
+            // One moving line, edge to edge, and nothing else — no stage name
+            // and no percentage. See the note on the publishing state above for
+            // why. An indeterminate bar on purpose: it says "working" without
+            // claiming to know how far along it is, and it keeps moving across
+            // the burn-in and the upload alike instead of resetting between
+            // them.
             //
             // It goes FIRST, not at the foot of the page: on the audience step
             // the category chips run well past the bottom of the screen, so a
             // status line below them is one nobody publishing ever sees. That
             // is exactly how it shipped on the device the first time.
             if (_uploading) ...[
-              Row(
-                children: [
-                  Text('$_stage…',
-                      style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(999),
-                      child: LinearProgressIndicator(
-                        value: _progress == 0 ? null : _progress,
-                        minHeight: 4,
-                        backgroundColor: AppColors.surface,
-                        valueColor: const AlwaysStoppedAnimation(AppColors.accent),
-                      ),
-                    ),
-                  ),
-                ],
+              ClipRRect(
+                borderRadius: BorderRadius.circular(999),
+                child: const LinearProgressIndicator(
+                  minHeight: 4,
+                  backgroundColor: AppColors.surface,
+                  valueColor: AlwaysStoppedAnimation(AppColors.accent),
+                ),
               ),
               const SizedBox(height: 14),
             ],

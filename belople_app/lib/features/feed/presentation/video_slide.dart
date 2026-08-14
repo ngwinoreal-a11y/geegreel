@@ -315,6 +315,11 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
             fadeInDuration: Duration.zero,
           )
         else if (_initialized && _controller != null)
+          // Cover, so the slide is filled — which means a 9:16 clip on this
+          // 1080x2436 screen loses 10.6% off each side, measured. The text
+          // editor knows that number and keeps overlays inside what survives it;
+          // see kOverlaySafeLeft in video_text_overlay.dart. Changing this fit
+          // changes what those margins have to be.
           FittedBox(
             fit: BoxFit.cover,
             child: SizedBox(

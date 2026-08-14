@@ -73,9 +73,48 @@ const kOverlayTextColors = <Color>[
 /// one put the same text at the same visual size.
 const double kOverlayBaseFontFraction = 0.058;
 
-/// Text wraps at this fraction of the frame width, leaving a margin the same
-/// way TikTok's does — text running edge to edge reads as broken.
-const double kOverlayMaxWidthFraction = 0.86;
+/// The part of the frame every viewer is actually going to see, as fractions of
+/// the frame.
+///
+/// **The file is not what a viewer sees.** The composer letterboxes the clip —
+/// the whole picture, edge to edge — while the feed paints it with
+/// `BoxFit.cover` to fill the phone. Text dragged to the edge of the editor
+/// therefore came back with its first letter shaved off, which is what was
+/// reported on 2026-08-14.
+///
+/// The numbers are measured, not guessed. A probe in `video_slide.dart` on the
+/// TECNO reported `slide=392.7x885.8 video=720x1280 cropX=0.1059 cropY=0.0000`:
+/// the slide is the WHOLE screen, so a 9:16 clip loses **10.6% off each side**
+/// and nothing at all top or bottom. Taller phones lose more — a 2.4:1 screen
+/// loses 13% — so the sides here are 14%.
+///
+/// Top and bottom are not crop; they are the feed's own chrome painted over the
+/// video: the tab row reaches 11% down, and the author, caption, sound line,
+/// progress bar and nav cover everything below 80%.
+///
+/// Not "guidance": [overlayTopLeft] cannot place text outside this box, so the
+/// promise is kept by the geometry rather than by the poster's judgement.
+///
+/// The right-hand column of action buttons (like, comment, share) sits over
+/// roughly x 0.80–0.86 of the picture and is deliberately NOT excluded — text
+/// there is still legible around them, the way it is on TikTok, and reserving
+/// it would cost a fifth of the canvas.
+const double kOverlaySafeLeft = 0.14;
+const double kOverlaySafeRight = 0.14;
+const double kOverlaySafeTop = 0.13;
+const double kOverlaySafeBottom = 0.22;
+
+/// The safe box in the frame's own coordinates.
+Rect overlaySafeRect(Size frame) => Rect.fromLTRB(
+      frame.width * kOverlaySafeLeft,
+      frame.height * kOverlaySafeTop,
+      frame.width * (1 - kOverlaySafeRight),
+      frame.height * (1 - kOverlaySafeBottom),
+    );
+
+/// Text wraps at the safe box's width, so a long line cannot reach the part of
+/// the frame that gets cropped away.
+const double kOverlayMaxWidthFraction = 1 - kOverlaySafeLeft - kOverlaySafeRight;
 
 const double kOverlayMinScale = 0.5;
 const double kOverlayMaxScale = 2.6;
@@ -126,13 +165,24 @@ TextPainter overlayPainter(VideoTextOverlay overlay, double frameWidth) => TextP
       ellipsis: '…',
     )..layout(maxWidth: frameWidth * kOverlayMaxWidthFraction);
 
+/// How much room the block has to move in, INSIDE the safe box.
+Size overlayFreeSpace(Size frame, Size block) {
+  final safe = overlaySafeRect(frame);
+  return Size(
+    (safe.width - block.width).clamp(0.0, double.infinity),
+    (safe.height - block.height).clamp(0.0, double.infinity),
+  );
+}
+
 /// Where the block's top-left corner goes, given the frame and the block's own
-/// measured size. `free * d` — see [VideoTextOverlay.dx]. Both surfaces use it,
-/// and it is the same rule as `Alignment(dx * 2 - 1, dy * 2 - 1)`.
-Offset overlayTopLeft(VideoTextOverlay overlay, Size frame, Size block) => Offset(
-      (frame.width - block.width).clamp(0.0, double.infinity) * overlay.dx,
-      (frame.height - block.height).clamp(0.0, double.infinity) * overlay.dy,
-    );
+/// measured size. `safe.topLeft + free * d` — see [VideoTextOverlay.dx]. Both
+/// surfaces use it, and dx/dy of 0 and 1 are the safe box's edges, not the
+/// frame's, so text cannot be placed where the feed would crop it.
+Offset overlayTopLeft(VideoTextOverlay overlay, Size frame, Size block) {
+  final safe = overlaySafeRect(frame);
+  final free = overlayFreeSpace(frame, block);
+  return Offset(safe.left + free.width * overlay.dx, safe.top + free.height * overlay.dy);
+}
 
 const int kOverlayMaxLines = 6;
 

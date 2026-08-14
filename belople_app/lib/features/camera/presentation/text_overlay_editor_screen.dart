@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -147,14 +148,15 @@ class _TextOverlayEditorScreenState extends State<TextOverlayEditorScreen> {
   ///
   /// The delta is divided by the FREE space rather than the frame, because that
   /// is what dx/dy measure — dividing by the frame instead makes a long line
-  /// travel further than the finger and stop short of the edge.
+  /// travel further than the finger and stop short of the edge. The free space
+  /// is the safe box's, so the finger simply stops at the edge of what a viewer
+  /// will see rather than dragging text into the crop.
   void _drag(VideoTextOverlay overlay, Offset delta, Size frame) {
     final block = overlayPainter(overlay, frame.width).size;
-    final freeW = (frame.width - block.width).clamp(1.0, double.infinity);
-    final freeH = (frame.height - block.height).clamp(1.0, double.infinity);
+    final free = overlayFreeSpace(frame, block);
     setState(() {
-      overlay.dx = (overlay.dx + delta.dx / freeW).clamp(0.0, 1.0);
-      overlay.dy = (overlay.dy + delta.dy / freeH).clamp(0.0, 1.0);
+      overlay.dx = (overlay.dx + delta.dx / max(free.width, 1)).clamp(0.0, 1.0);
+      overlay.dy = (overlay.dy + delta.dy / max(free.height, 1)).clamp(0.0, 1.0);
     });
   }
 
@@ -205,6 +207,22 @@ class _TextOverlayEditorScreenState extends State<TextOverlayEditorScreen> {
                                           colorFilter: widget.tint!,
                                           child: VideoPlayer(controller),
                                         ),
+                                ),
+                                // The box text is kept inside. Drawn because
+                                // being stopped by an invisible wall reads as a
+                                // broken drag; with the line there, it reads as
+                                // the edge of what people will see.
+                                Positioned.fromRect(
+                                  rect: overlaySafeRect(frame),
+                                  child: IgnorePointer(
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        border: Border.all(
+                                          color: Colors.white.withValues(alpha: 0.22),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                                 for (final overlay in _items)
                                   if (overlay != _editing)
@@ -270,26 +288,37 @@ class _TextOverlayEditorScreenState extends State<TextOverlayEditorScreen> {
         left: 0,
         right: 0,
         bottom: 24,
-        child: Center(
-          // Intrinsic width, not the theme's. ElevatedButton inherits a
-          // full-width minimum from the app theme, which painted an amber slab
-          // right across the bottom of the clip being edited — over the very
-          // picture the text is being placed on.
-          child: IntrinsicWidth(
-            child: ElevatedButton.icon(
-              onPressed: _add,
-              icon: const Text('Aa',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, height: 1)),
-              label: Text(_items.isEmpty ? 'Add text' : 'Add more'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accent,
-                foregroundColor: Colors.black,
-                minimumSize: Size.zero,
-                padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-                textStyle: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w800),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Text stays inside the line — outside it gets cropped',
+              textAlign: TextAlign.center,
+              style: AppTypography.sans(fontSize: 11.5, color: Colors.white70),
+            ),
+            const SizedBox(height: 10),
+            // Amber lettering on a dark pill, not an amber slab. Filled, the
+            // button was a bar of colour across the bottom of the very picture
+            // the text is being placed on — it competed with the clip instead of
+            // sitting on it. Intrinsic width too: ElevatedButton inherits a
+            // full-width minimum from the app theme.
+            IntrinsicWidth(
+              child: TextButton.icon(
+                onPressed: _add,
+                icon: const Text('Aa',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, height: 1)),
+                label: Text(_items.isEmpty ? 'Add text' : 'Add more'),
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.black.withValues(alpha: 0.55),
+                  foregroundColor: AppColors.accent,
+                  minimumSize: Size.zero,
+                  padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 13),
+                  shape: const StadiumBorder(),
+                  textStyle: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w800),
+                ),
               ),
             ),
-          ),
+          ],
         ),
       );
 
