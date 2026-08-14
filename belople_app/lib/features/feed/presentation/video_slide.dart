@@ -293,11 +293,18 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
     });
   }
 
-  /// The signed-in user is this video's author — used to hide repost/gift on
-  /// your own video (you can't repost or tip yourself), matching the web.
+  /// The signed-in user made the CONTENT — used to hide repost/gift, since you
+  /// can't repost or tip yourself, matching the web.
+  ///
+  /// The creator, not `video.user`, which on a repost is whoever reposted it.
+  /// Read the wrong way round it was wrong in both directions: someone else's
+  /// repost of your own video offered you a gift button that the server then
+  /// refused ("You can't gift your own video" — it resolves the repost to the
+  /// original first), and your own repost of someone else's video hid the gift
+  /// button for a creator you were perfectly entitled to tip.
   bool get _isMine {
     final me = ref.watch(authControllerProvider).valueOrNull;
-    return me != null && me.id == widget.video.user.id;
+    return me != null && me.id == (widget.video.repostOf ?? widget.video.user).id;
   }
 
   @override
