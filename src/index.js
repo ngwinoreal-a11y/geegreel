@@ -1034,7 +1034,13 @@ const shapeVideo = r => ({
     avatarUrl: r.avatar_key ? `/api/media/${r.avatar_key}` : null,
   },
   repostOf: r.repost_of ? {
-    id: r.repost_of,
+    // The original CREATOR's user id. It used to be `r.repost_of` — the
+    // original VIDEO's id — in an object whose every other field describes a
+    // person, so every consumer that read it as a user id was silently wrong:
+    // the web's follow-state sync (`x.repostOf?.id === uid`) never matched on a
+    // repost, and the app compared it against live-stream creator ids. Nothing
+    // wanted the video id; `ru.id` was already selected and simply unused.
+    id: r.repost_of_user_id,
     username: r.repost_of_username,
     displayName: r.repost_of_display_name,
     avatarUrl: r.repost_of_avatar_key ? `/api/media/${r.repost_of_avatar_key}` : null,

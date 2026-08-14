@@ -41,8 +41,20 @@ class VideoSlide extends ConsumerStatefulWidget {
   final VideoModel video;
   final bool isActive;
   final VoidCallback? onLikeTap;
-  final VoidCallback? onFollowTap;
-  final VoidCallback? onAuthorTap;
+
+  /// Follows the person whose name the button is standing next to — the ORIGINAL
+  /// creator on a repost, not whoever reposted it. It takes the id rather than
+  /// reading `video.user.id` at the call site, which is how it came to follow
+  /// the wrong person: the server already reports `following` for the creator
+  /// (`COALESCE(ru.id, u.id)` in the feed query), so tapping Follow on a repost
+  /// followed the reposter and the button did not even change state.
+  final void Function(String userId)? onFollowTap;
+
+  /// Opens a profile. Which one is the slide's to say, because the slide is what
+  /// drew the face that was tapped: the big avatar and the name belong to the
+  /// creator, the small one on the "Reposted" line belongs to the reposter, and
+  /// both used to lead to the reposter.
+  final void Function(String username)? onAuthorTap;
   final VoidCallback? onCommentTap;
   final VoidCallback? onMoreTap;
   final VoidCallback? onSoundTap;
@@ -396,21 +408,36 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                 // backend puts the original creator in repostOf and the
                 // reposter in user.)
                 if (widget.video.isRepost) ...[
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AppAvatar(
-                        size: 18,
-                        imageUrl: widget.video.user.avatarUrl != null
-                            ? mediaUrl(widget.video.user.avatarUrl!)
-                            : null,
-                        displayName: widget.video.user.displayName,
-                      ),
-                      const SizedBox(width: 6),
-                      Text('Reposted',
-                          style: AppTypography.sans(
-                              fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white)),
-                    ],
+                  // The one place the REPOSTER is reachable. Their face and
+                  // their name, and tapping either opens their profile — the
+                  // row above belongs entirely to the creator.
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => widget.onAuthorTap?.call(widget.video.user.username),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        AppAvatar(
+                          size: 18,
+                          imageUrl: widget.video.user.avatarUrl != null
+                              ? mediaUrl(widget.video.user.avatarUrl!)
+                              : null,
+                          displayName: widget.video.user.displayName,
+                        ),
+                        const SizedBox(width: 6),
+                        // Named, not just "Reposted". A bare word next to a
+                        // 18px face asked you to recognise someone by their
+                        // thumbnail, and gave a tap nothing to promise.
+                        Flexible(
+                          child: Text(
+                            'Reposted by ${widget.video.user.displayName}',
+                            style: AppTypography.sans(
+                                fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 6),
                 ],
@@ -435,7 +462,7 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                       return GestureDetector(
                         onTap: live != null
                             ? () => context.push('/live/${live.id}')
-                            : widget.onAuthorTap,
+                            : () => widget.onAuthorTap?.call(author.username),
                         child: Padding(
                           // The badge hangs below the ring, so the row leaves it
                           // that much room. Without this it landed on the
@@ -456,7 +483,8 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                     const SizedBox(width: 8),
                     Flexible(
                       child: GestureDetector(
-                      onTap: widget.onAuthorTap,
+                      onTap: () => widget.onAuthorTap
+                          ?.call((widget.video.repostOf ?? widget.video.user).username),
                       child: Text(
                         (widget.video.repostOf ?? widget.video.user).displayName,
                         style: AppTypography.sans(
@@ -472,7 +500,8 @@ class _VideoSlideState extends ConsumerState<VideoSlide> with WidgetsBindingObse
                       const SizedBox(width: 8),
                       GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: widget.onFollowTap,
+                        onTap: () => widget.onFollowTap
+                            ?.call((widget.video.repostOf ?? widget.video.user).id),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
                           decoration: BoxDecoration(

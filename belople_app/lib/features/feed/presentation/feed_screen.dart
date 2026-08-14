@@ -366,10 +366,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen> with RouteAware {
                         : ref.read(feedControllerProvider(_tab).notifier).toggleLike(video.id)),
                     // Records the CTA click on a user ad (best-effort).
                     onAdClick: () => ref.read(feedRepositoryProvider).recordAdClick(video.id),
-                    onFollowTap: () => _requireLogin(() => ref
-                        .read(feedControllerProvider(_tab).notifier)
-                        .toggleFollow(video.user.id)),
-                    onAuthorTap: () => context.push('/profile/${video.user.username}'),
+                    // The slide says WHO — it drew the face that was tapped, and
+                    // on a repost the face is the creator's while `video.user`
+                    // is the reposter's.
+                    onFollowTap: (userId) => _requireLogin(
+                        () => ref.read(feedControllerProvider(_tab).notifier).toggleFollow(userId)),
+                    onAuthorTap: (username) => context.push('/profile/$username'),
                     onCommentTap: () => video.isAd
                         ? showAdCommentsSheet(context, adId: video.id)
                         : showCommentsSheet(context, videoId: video.id),

@@ -172,7 +172,7 @@ class _SingleVideoScreenState extends ConsumerState<SingleVideoScreen> with Rout
                   onLikeTap: () => _requireLogin(
                       () => ref.invalidate(singleVideoProvider(video.id))),
                   onCommentTap: () => showCommentsSheet(context, videoId: video.id),
-                  onAuthorTap: () => context.push('/profile/${video.user.username}'),
+                  onAuthorTap: (username) => context.push('/profile/$username'),
                   onSoundTap: video.soundId != null
                       ? () => context.push('/sound/${video.soundId}')
                       : null,

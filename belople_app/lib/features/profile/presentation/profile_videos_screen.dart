@@ -86,7 +86,7 @@ class _ProfileVideosScreenState extends ConsumerState<ProfileVideosScreen> with 
         if (!ref.read(isLoggedInProvider)) context.push('/login');
       },
       onCommentTap: () => showCommentsSheet(context, videoId: video.id),
-      onAuthorTap: () => context.push('/profile/${video.user.username}'),
+      onAuthorTap: (username) => context.push('/profile/$username'),
       onSoundTap: video.soundId != null ? () => context.push('/sound/${video.soundId}') : null,
       onGiftTap: () {
         if (!ref.read(isLoggedInProvider)) {
