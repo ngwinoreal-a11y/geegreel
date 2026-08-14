@@ -62,6 +62,10 @@ class UserModel {
         displayName: json['displayName'] as String? ?? json['username'] as String? ?? '',
         bio: json['bio'] as String?,
         avatarUrl: json['avatarUrl'] as String?,
+        // Search sends this at the top level rather than inside `stats`: it
+        // counts followers in the same query that finds the account, instead
+        // of shipping a whole stats block for twenty rows nobody may tap.
+        followersCount: (json['followers'] as num?)?.toInt() ?? 0,
         email: json['email'] as String?,
         role: json['role'] as String? ?? 'user',
         monetized: json['monetized'] as bool? ?? false,

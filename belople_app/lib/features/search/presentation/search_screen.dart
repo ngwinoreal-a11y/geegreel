@@ -214,7 +214,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         ),
       );
 
+  /// Formats a follower count the way every app does — 285K, not 285000.
+  String _followers(int n) {
+    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(n % 1000000 == 0 ? 0 : 1)}M';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(n % 1000 == 0 ? 0 : 1)}K';
+    return '$n';
+  }
+
   Widget _resultList(SearchResults r) {
+    final q = _controller.text.trim();
     return ListView(
       padding: const EdgeInsets.only(bottom: 32),
       children: [
@@ -227,12 +235,27 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                 imageUrl: u.avatarUrl != null ? mediaUrl(u.avatarUrl!) : null,
                 displayName: u.displayName,
               ),
-              title: Text(u.displayName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTypography.sans(fontWeight: FontWeight.w600)),
-              subtitle: Text('@${u.username}',
-                  style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+              title: _Highlighted(
+                text: u.displayName,
+                query: q,
+                style: AppTypography.sans(fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+              // Handle and audience on one line, the way the reference does it:
+              // a name alone says nothing about which of four similar accounts
+              // is the one you meant.
+              subtitle: Row(
+                children: [
+                  Flexible(
+                    child: _Highlighted(
+                      text: '@${u.username}',
+                      query: q,
+                      style: AppTypography.sans(fontSize: 13, color: AppColors.muted),
+                    ),
+                  ),
+                  Text(' · ${_followers(u.followersCount)} followers',
+                      style: AppTypography.sans(fontSize: 13, color: AppColors.muted)),
+                ],
+              ),
               onTap: () => context.push('/profile/${u.username}'),
             ),
         ],
@@ -263,28 +286,36 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               onTap: () => context.push('/sound/${s.id}'),
             ),
         ],
-        // Videos and posts are grids, not rows: what you recognise in a video
-        // is its picture, and a list of captions is unreadable next to it.
+        // Rows, not a grid. A grid shows the picture and hides the words — and
+        // the words are the reason the result is here at all, so they have to
+        // be readable with the searched part picked out.
         if (r.videos.isNotEmpty) ...[
           _sectionLabel('Videos'),
-          _grid(
-            count: r.videos.length,
-            thumb: (i) => r.videos[i].thumbUrl,
-            // The model travels with it, so the player opens on its own frame
-            // rather than spinning through a fetch it does not need.
-            onTap: (i) => context.push('/v/${r.videos[i].id}', extra: r.videos[i]),
-          ),
+          for (final h in r.videos)
+            _MediaRow(
+              thumbUrl: h.item.thumbUrl,
+              text: h.matchText ?? h.item.caption,
+              query: q,
+              subtitle: '@${h.item.user.username}',
+              isVideo: true,
+              // The model travels with it, so the player opens on its own frame
+              // rather than spinning through a fetch it does not need.
+              onTap: () => context.push('/v/${h.item.id}', extra: h.item),
+            ),
         ],
         if (r.posts.isNotEmpty) ...[
           _sectionLabel('Posts'),
-          _grid(
-            count: r.posts.length,
-            thumb: (i) => r.posts[i].imageUrl,
-            caption: (i) => r.posts[i].content,
-            // Required here, not just nice: /p/:id with no model in `extra`
-            // falls back to the whole Public feed.
-            onTap: (i) => context.push('/p/${r.posts[i].id}', extra: r.posts[i]),
-          ),
+          for (final h in r.posts)
+            _MediaRow(
+              thumbUrl: h.item.imageUrl,
+              text: h.matchText ?? h.item.content,
+              query: q,
+              subtitle: '@${h.item.user.username}',
+              isVideo: false,
+              // Required here, not just nice: /p/:id with no model in `extra`
+              // falls back to the whole Public feed.
+              onTap: () => context.push('/p/${h.item.id}', extra: h.item),
+            ),
         ],
       ],
     );
@@ -293,61 +324,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget _sectionLabel(String text) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
         child: Text(text.toUpperCase(), style: AppTypography.sectionLabel),
-      );
-
-  Widget _grid({
-    required int count,
-    required String? Function(int) thumb,
-    String Function(int)? caption,
-    required void Function(int) onTap,
-  }) =>
-      GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          mainAxisSpacing: 4,
-          crossAxisSpacing: 4,
-          childAspectRatio: 0.72,
-        ),
-        itemCount: count,
-        itemBuilder: (context, i) {
-          final url = thumb(i);
-          final text = caption?.call(i);
-          return GestureDetector(
-            onTap: () => onTap(i),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(AppRadii.sm),
-              child: Container(
-                color: AppColors.surface,
-                child: url != null
-                    ? CachedNetworkImage(imageUrl: mediaUrl(url), fit: BoxFit.cover)
-                    // A text post has no picture — show its words, which is
-                    // the whole post anyway.
-                    : (text ?? '').trim().isNotEmpty
-                        ? Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: Text(
-                              text!.trim(),
-                              maxLines: 6,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppTypography.sans(fontSize: 12, color: AppColors.text),
-                            ),
-                          )
-                        // Nothing to show at all: a video whose poster frame
-                        // never got made, or a post with neither picture nor
-                        // words. It drew as a blank grey hole in the grid,
-                        // which reads as the grid being broken rather than as
-                        // a result you can still tap.
-                        : const Center(
-                            child: Icon(Icons.play_circle_outline,
-                                color: AppColors.faint, size: 30),
-                          ),
-              ),
-            ),
-          );
-        },
       );
 }
 
@@ -415,6 +391,127 @@ class _RecentSearches extends StatelessWidget {
             onTap: () => onUse(term),
           ),
       ],
+    );
+  }
+}
+
+/// Text with the searched word picked out.
+///
+/// Case-insensitive, and it highlights every occurrence rather than the first —
+/// a caption that says the word three times should show all three, or the eye
+/// goes looking for the one it missed.
+class _Highlighted extends StatelessWidget {
+  const _Highlighted({
+    required this.text,
+    required this.query,
+    required this.style,
+    this.maxLines = 1,
+  });
+
+  final String text;
+  final String query;
+  final TextStyle style;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    final q = query.trim();
+    if (q.isEmpty) {
+      return Text(text, maxLines: maxLines, overflow: TextOverflow.ellipsis, style: style);
+    }
+
+    final hay = text.toLowerCase();
+    final needle = q.toLowerCase();
+    final spans = <TextSpan>[];
+    var at = 0;
+    while (true) {
+      final found = hay.indexOf(needle, at);
+      if (found < 0) {
+        spans.add(TextSpan(text: text.substring(at)));
+        break;
+      }
+      if (found > at) spans.add(TextSpan(text: text.substring(at, found)));
+      spans.add(TextSpan(
+        text: text.substring(found, found + needle.length),
+        style: style.copyWith(color: AppColors.accent, fontWeight: FontWeight.w800),
+      ));
+      at = found + needle.length;
+    }
+
+    return RichText(
+      maxLines: maxLines,
+      overflow: TextOverflow.ellipsis,
+      text: TextSpan(style: style, children: spans),
+    );
+  }
+}
+
+/// One video or post: its picture, the words that matched with the searched
+/// part picked out, and whose it is.
+class _MediaRow extends StatelessWidget {
+  const _MediaRow({
+    required this.text,
+    required this.query,
+    required this.subtitle,
+    required this.isVideo,
+    required this.onTap,
+    this.thumbUrl,
+  });
+
+  final String? thumbUrl;
+  final String text;
+  final String query;
+  final String subtitle;
+  final bool isVideo;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadii.sm),
+              child: SizedBox(
+                width: 48,
+                height: 62,
+                child: thumbUrl != null
+                    ? CachedNetworkImage(imageUrl: mediaUrl(thumbUrl!), fit: BoxFit.cover)
+                    : Container(
+                        color: AppColors.surface,
+                        // A video with no poster frame, or a text post. Better a
+                        // glyph than a grey hole that reads as a broken row.
+                        child: Icon(
+                            isVideo ? Icons.play_circle_outline : Icons.article_outlined,
+                            color: AppColors.faint, size: 22),
+                      ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _Highlighted(
+                    text: text.trim().isEmpty ? '(no caption)' : text.trim(),
+                    query: query,
+                    maxLines: 2,
+                    style: AppTypography.sans(fontSize: 14.5, color: AppColors.text),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(subtitle,
+                      style: AppTypography.sans(fontSize: 12.5, color: AppColors.muted)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

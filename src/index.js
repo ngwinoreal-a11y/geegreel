@@ -3600,7 +3600,12 @@ async function handle(request, env, ctx) {
 
     const [accounts, videos, posts, sounds] = await Promise.all([
       env.DB.prepare(`
-        SELECT id, username, display_name, avatar_key FROM users
+        SELECT id, username, display_name, avatar_key, bio,
+               -- How many people follow them. A name on its own says nothing
+               -- about which of four similar handles is the one you meant.
+               (SELECT COUNT(*) FROM follows f2
+                 WHERE f2.followee_id = users.id AND f2.status = 'accepted') AS followers
+        FROM users
         WHERE status != 'banned'
           -- Bio too: people describe themselves in words they expect to be
           -- found by, and it was the one field about a person nobody could search.
@@ -3615,13 +3620,22 @@ async function handle(request, env, ctx) {
           username
         LIMIT 20
       `).bind(like, like, like, q, `${q}%`, `${q}%`).all(),
-      // A video matches on its caption OR on anything said underneath it. A
-      // comment is where the words people actually remember end up.
-      env.DB.prepare(FEED_SQL + ` WHERE ${NOT_BANNED} AND (
-          v.caption LIKE ?
-          OR EXISTS(SELECT 1 FROM comments c WHERE c.video_id = v.id AND c.body LIKE ?)
-        ) ORDER BY v.created_at DESC LIMIT 20`)
-        .bind(viewerId, viewerId, like, like).all(),
+      // Captions only — NOT comments.
+      //
+      // Comments were matched for a while and the owner had it removed: a
+      // video that matched on something a stranger said underneath it has
+      // nothing on it containing the word, so it reads as search returning
+      // junk. A result you cannot see the reason for is worse than one fewer
+      // result. Search matches what the POST itself says.
+      env.DB.prepare(FEED_SQL + ` WHERE ${NOT_BANNED} AND v.caption LIKE ?
+        ORDER BY
+          -- Where the word lands decides the order: a caption that starts with
+          -- it is more likely the thing being looked for than one that
+          -- mentions it in passing.
+          CASE WHEN v.caption LIKE ? THEN 0 ELSE 1 END,
+          v.created_at DESC
+        LIMIT 20`)
+        .bind(viewerId, viewerId, like, `${q}%`).all(),
       // Public posts are searched by caption too, same as videos — the Public
       // tab's content wasn't reachable from search at all before this.
       env.DB.prepare(`
@@ -3635,14 +3649,12 @@ async function handle(request, env, ctx) {
                        WHERE f.follower_id = ? AND f.followee_id = u.id
                          AND f.status = 'accepted')                       AS following
         FROM posts p JOIN users u ON u.id = p.user_id
-        WHERE u.status != 'banned' AND (
-          p.content LIKE ?
-          -- Same as videos: what people wrote underneath counts as part of the
-          -- post as far as finding it again goes.
-          OR EXISTS(SELECT 1 FROM post_comments pc WHERE pc.post_id = p.id AND pc.body LIKE ?)
-        )
-        ORDER BY p.created_at DESC LIMIT 20
-      `).bind(viewerId, viewerId, like, like).all(),
+        WHERE u.status != 'banned' AND p.content LIKE ?
+        ORDER BY
+          CASE WHEN p.content LIKE ? THEN 0 ELSE 1 END,
+          p.created_at DESC
+        LIMIT 20
+      `).bind(viewerId, viewerId, like, `${q}%`).all(),
       // Sounds were reachable from the composer's own picker and nowhere else,
       // so the library existed but could only be found by stumbling onto a
       // video that used one. Same shape the picker returns, so one row widget
@@ -3659,10 +3671,18 @@ async function handle(request, env, ctx) {
       `).bind(like, like, like).all(),
     ]);
 
+    // The text carrying the match, so the app can show it with the searched
+    // word picked out. Every result now contains the word somewhere visible —
+    // that is the point of dropping comments — and this is where.
+    const matched = own => ((own || "").toLowerCase().includes(q.toLowerCase()) ? own : null);
+
     return json({
-      accounts: accounts.results.map(publicUser),
-      videos: videos.results.map(shapeVideo),
-      posts: posts.results.map(shapePost),
+      accounts: accounts.results.map(u => ({
+        ...publicUser(u),
+        followers: u.followers,
+      })),
+      videos: videos.results.map(v => ({ ...shapeVideo(v), matchText: matched(v.caption) })),
+      posts: posts.results.map(p => ({ ...shapePost(p), matchText: matched(p.content) })),
       sounds: sounds.results.map(s => ({
         id: s.id,
         title: s.title,

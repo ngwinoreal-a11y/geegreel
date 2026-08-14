@@ -36,6 +36,16 @@ class SoundHit {
 /// The screen used to render only [accounts] even though the API had always
 /// sent videos and posts alongside them — so half of what the server found was
 /// thrown away before anyone could see it.
+/// A result plus the text that carried the match, so the screen can show the
+/// searched word picked out inside it. Every result contains the word
+/// somewhere visible — search stopped matching comments precisely so that
+/// would be true — and this says where.
+class Hit<T> {
+  const Hit(this.item, this.matchText);
+  final T item;
+  final String? matchText;
+}
+
 class SearchResults {
   const SearchResults({
     this.accounts = const [],
@@ -45,8 +55,8 @@ class SearchResults {
   });
 
   final List<UserModel> accounts;
-  final List<VideoModel> videos;
-  final List<PostModel> posts;
+  final List<Hit<VideoModel>> videos;
+  final List<Hit<PostModel>> posts;
   final List<SoundHit> sounds;
 
   bool get isEmpty =>
@@ -70,10 +80,18 @@ class SearchRepository {
             .map((e) => make((e as Map).cast<String, dynamic>()))
             .toList();
 
+    List<Hit<T>> hits<T>(String key, T Function(Map<String, dynamic>) make) =>
+        ((data[key] as List<dynamic>?) ?? const [])
+            .map((e) {
+              final m = (e as Map).cast<String, dynamic>();
+              return Hit<T>(make(m), m['matchText'] as String?);
+            })
+            .toList();
+
     return SearchResults(
       accounts: parse('accounts', UserModel.fromJson),
-      videos: parse('videos', VideoModel.fromJson),
-      posts: parse('posts', PostModel.fromJson),
+      videos: hits('videos', VideoModel.fromJson),
+      posts: hits('posts', PostModel.fromJson),
       sounds: parse('sounds', SoundHit.fromJson),
     );
   }
