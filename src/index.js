@@ -2492,6 +2492,20 @@ async function handle(request, env, ctx) {
     report.accessToken = !!accessToken;
     if (!accessToken || !devices.length) return json(report);
 
+    // Real images, not empty strings. The test used to send `avatar: ""` and no
+    // `image` at all, so the one part of the notification that can fail on its
+    // own — the phone fetching two pictures over the network before it can draw
+    // anything — was the one part the test never touched. Own avatar and own
+    // most recent video: both are certainly visible to this user.
+    const [me, myVideo] = await Promise.all([
+      env.DB.prepare("SELECT avatar_key FROM users WHERE id = ?").bind(user.id).first(),
+      env.DB.prepare(
+        "SELECT thumb_key FROM videos WHERE user_id = ? AND thumb_key IS NOT NULL ORDER BY created_at DESC LIMIT 1"
+      ).bind(user.id).first().catch(() => null),
+    ]);
+    report.avatar = me?.avatar_key ? `${PUBLIC_ORIGIN}/api/media/${me.avatar_key}` : "";
+    report.image = myVideo?.thumb_key ? `${PUBLIC_ORIGIN}/api/media/${myVideo.thumb_key}` : "";
+
     const endpoint = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
     for (const d of devices) {
       try {
@@ -2510,9 +2524,12 @@ async function handle(request, env, ctx) {
                 route: "/notifications",
                 url: "/",
                 tag: "test",
-                type: "test",
-                avatar: "",
+                // `like` rather than `test`: the action button's label is chosen
+                // by type, so a test typed "test" silently skipped that too.
+                type: "like",
+                avatar: report.avatar,
                 actor: "",
+                image: report.image,
               },
               android: { priority: "HIGH" },
             },

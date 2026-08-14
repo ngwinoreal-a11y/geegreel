@@ -61,14 +61,26 @@ Future<String?> _downloadImage(String url, {String prefix = 'notif'}) async {
         .getUrl(Uri.parse(url))
         .then((req) => req.close())
         .timeout(const Duration(seconds: 10));
-    if (res.statusCode != 200) return null;
+    if (res.statusCode != 200) {
+      debugPrint('[notif-image] $url -> HTTP ${res.statusCode}');
+      return null;
+    }
     final bytes = await consolidateHttpClientResponseBytes(res);
-    if (bytes.isEmpty) return null;
+    if (bytes.isEmpty) {
+      debugPrint('[notif-image] $url -> empty body');
+      return null;
+    }
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/${prefix}_${url.hashCode}.jpg');
     await file.writeAsBytes(bytes);
+    debugPrint('[notif-image] $url -> ${bytes.length} bytes at ${file.path}');
     return file.path;
-  } catch (_) {
+  } catch (e) {
+    // Deliberately silent to the user: a notification without its picture is
+    // still a correct notification, and there is nobody looking at a screen to
+    // tell. Never silent to the log — a missing picture used to have no
+    // explanation anywhere.
+    debugPrint('[notif-image] $url failed: $e');
     return null;
   } finally {
     client.close();
@@ -116,9 +128,12 @@ Future<void> _showFromData(Map<String, dynamic> data) async {
             FilePathAndroidBitmap(imagePath),
             contentTitle: title,
             summaryText: body.isNotEmpty ? body : null,
-            // The avatar stays the large icon while collapsed; hiding it on
-            // expand is what lets the picture have the full width.
-            hideExpandedLargeIcon: true,
+            // Keep the avatar visible while expanded, with the video under it —
+            // that is the arrangement TikTok uses and the one asked for. Hiding
+            // it buys the picture nothing: the picture is already full width
+            // either way, and without the avatar an expanded notification stops
+            // saying WHO did the thing.
+            hideExpandedLargeIcon: false,
           )
         : (body.isNotEmpty ? BigTextStyleInformation(body, contentTitle: title) : null),
     // Same tag = replace, so ten likes don't become ten rows in the shade.
@@ -262,7 +277,11 @@ class PushService {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
         _ref.read(appRouterProvider).push(route);
-      } catch (_) {}
+      } catch (e) {
+        // A tap that goes nowhere is the whole notification wasted, so this
+        // has to leave a trace even though there is no screen to show it on.
+        debugPrint('[notif-route] push("$route") failed: $e');
+      }
     });
   }
 
