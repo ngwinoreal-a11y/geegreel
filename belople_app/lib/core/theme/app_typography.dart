@@ -12,6 +12,34 @@ import 'app_colors.dart';
 /// Use these text styles instead of ad-hoc `TextStyle(...)` calls so every
 /// screen automatically matches the reference's type system.
 abstract final class AppTypography {
+  // --- A typed ❤️ renders WHITE, and nothing here can fix it ---
+  //
+  // Written down because it looks like a styling bug and three obvious fixes
+  // all fail, so the next person should not spend the morning I did.
+  //
+  // ❤ is U+2764, an old symbol whose DEFAULT presentation is text. Inter has
+  // its own monochrome glyph for it, so Inter answers for the character and
+  // paints it in the text colour. 😀 is fine because it is emoji-only and no
+  // text font has it, which is what makes this look like it is about hearts.
+  //
+  // What was tried on the device, and what happened:
+  //
+  //   1. fontFamilyFallback: ['Noto Color Emoji'] — no change. A fallback is
+  //      only consulted when the primary font LACKS the glyph, and Inter has it.
+  //   2. fontFamily: 'Noto Color Emoji' with Inter behind it — no change. On
+  //      this phone /system/etc/fonts.xml declares the emoji families with
+  //      `lang="und-Zsye"` and NO name attribute, so there is no family by that
+  //      name to select. It is reachable only through the fallback chain.
+  //   3. A plain TextStyle() with no family at all — STILL white. So it is not
+  //      our font choice: Roboto has the glyph too, and Flutter's chain never
+  //      reaches the emoji font. The U+FE0F that should force emoji
+  //      presentation is genuinely in the data (bytes E29DA4 EFB88F, checked
+  //      in D1) and is not honoured here.
+  //
+  // The only fix left is to BUNDLE a colour emoji font with the app and name
+  // it, which costs roughly 10 MB of APK. That is the owner's call, not a
+  // decision to slip into a typography file.
+
   static TextStyle sans({
     double fontSize = 14,
     FontWeight fontWeight = FontWeight.w400,
