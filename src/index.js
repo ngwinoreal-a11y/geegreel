@@ -5588,6 +5588,12 @@ const LIVE_PRESENCE_TTL_MS = 30_000;
 const LIVE_PRESENCE_WRITE_MS = 15_000;
 const LIVE_COUNT_CACHE_MS = 10_000;
 
+/// How long cleanup waits for Mux to name the recording before it gives up on
+/// one ever arriving. A session no encoder connected to produces no asset at
+/// all, and without a bound the sweeper would chase it every five minutes for
+/// ever. Mux finalises well inside this.
+const LIVE_ASSET_GRACE_MS = 30 * 60_000;
+
 /// How far a gift combo can run. The owner set this at 1000 deliberately: a
 /// supporter who wants to send a thousand should be able to keep tapping and
 /// have it land.
@@ -5657,15 +5663,43 @@ async function endLiveSession(env, session, reason) {
 /// every RTMP session creates a recorded asset, there is no way to turn that
 /// off, and storage bills from the moment it exists until it is deleted.
 ///
-/// Idempotent in both directions — `cleaned_at` stops a second pass, and
+/// **The two objects do not become deletable at the same time**, and getting
+/// that wrong is how the recording was never deleted at all. The live stream
+/// can go the moment the broadcast ends. The RECORDING's id only arrives with
+/// `video.asset.live_stream_completed`, which Mux sends once it has finalised —
+/// after the session has already been ended and cleaned. So the first pass ran
+/// with `mux_asset_id` still NULL, `deleteAsset(null)` returned without calling
+/// Mux at all, and `cleaned_at` was stamped anyway; when the asset webhook then
+/// called back WITH the id, the `cleaned_at` guard turned it away at the door.
+/// The database said clean and Mux billed that recording for ever.
+///
+/// So: the stamp goes on only when there was actually something to delete, or
+/// when enough time has passed that nothing is coming.
+///
+/// Idempotent in both directions — `cleaned_at` stops a repeat pass, and
 /// src/mux.js treats a 404 from Mux as success.
 async function cleanupLiveSession(env, sessionId) {
   const s = await env.DB.prepare("SELECT * FROM live_sessions WHERE id = ?").bind(sessionId).first();
   if (!s || s.cleaned_at) return;
 
   try {
-    await deleteAsset(env, s.mux_asset_id);
+    // Safe on the first pass: the stream key dies with the session either way.
     await deleteLiveStream(env, s.mux_live_stream_id);
+
+    if (s.mux_asset_id) {
+      await deleteAsset(env, s.mux_asset_id);
+    } else {
+      // No recording named yet. If one is coming, the asset webhook calls this
+      // again carrying it — leave the session dirty so that call gets through.
+      // If none is coming, the grace period ends the chase.
+      const endedAt = s.ended_at || s.updated_at || 0;
+      if (now() - endedAt < LIVE_ASSET_GRACE_MS) {
+        console.log(`[LIVE] ${sessionId}: stream deleted, waiting for the recording's id`);
+        return;
+      }
+      console.warn(`[LIVE] ${sessionId}: no recording arrived within the grace period — closing it out`);
+    }
+
     await env.DB.prepare(
       "UPDATE live_sessions SET mux_asset_id = NULL, cleaned_at = ?, updated_at = ? WHERE id = ?"
     ).bind(now(), now(), sessionId).run();
