@@ -26,8 +26,10 @@ import '../../auth/data/signup_options.dart';
 import '../data/audio_mix_service.dart';
 import '../data/upload_repository.dart';
 import '../data/video_edit_service.dart';
+import '../data/video_text_overlay.dart';
 import 'camera_filters.dart';
 import 'posted_sheet.dart';
+import 'text_overlay_editor_screen.dart';
 import '../../../core/widgets/top_toast.dart';
 
 enum _ComposerMode { video, photo, text }
@@ -102,6 +104,11 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   // Whether the clip has any audio of its own. Null until probed. False means
   // the "Your audio" slider is hidden — there is nothing for it to raise.
   bool? _clipHasAudio;
+
+  /// Text the poster put on the clip, in the order it was added. Burnt into the
+  /// file at publish time in the same FFmpeg pass as the look — see
+  /// [_applyFilter].
+  List<VideoTextOverlay> _textOverlays = [];
 
   /// The poster deliberately paused the preview. Only a tap sets this — it
   /// exists so [_ensurePreviewPlaying] can restart a clip that stopped on its
@@ -291,6 +298,10 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   }
 
   Future<void> _loadVideoPreview(File file) async {
+    // Text was placed against the clip that is being replaced. Its positions
+    // mean nothing on a different frame — and worse, a portrait line dragged to
+    // the foot of a portrait clip lands across the middle of a landscape one.
+    if (_textOverlays.isNotEmpty && mounted) setState(() => _textOverlays = []);
     _previewController?.dispose();
     final controller = VideoPlayerController.file(file);
     await controller.initialize();
@@ -389,20 +400,53 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   /// nothing said anything.
   Future<File> _applyFilter(File video) async {
     final chain = _filter.ffmpegChain;
-    if (chain == null) return video;
-    if (mounted) setState(() { _stage = 'Applying ${_filter.label}'; _progress = 0; });
-    final out = await VideoEditService.applyColourChain(
+    final overlays = _textOverlays.where((o) => !o.isEmpty).toList();
+    if (chain == null && overlays.isEmpty) return video;
+
+    // Rendered against the size the PREVIEW was showing, which is what the
+    // finger placing the text was pointing at. VideoPlayer reports it with any
+    // rotation metadata already applied, so a clip shot sideways gives the
+    // upright size here rather than the coded one.
+    final overlayPng = await VideoEditService.renderOverlayPng(
+      overlays: overlays,
+      videoPath: video.path,
+      displaySize: _previewController?.value.size,
+    );
+
+    if (mounted) {
+      setState(() {
+        _stage = chain == null
+            ? 'Adding your text'
+            : (overlayPng == null
+                ? 'Applying ${_filter.label}'
+                : 'Applying ${_filter.label} and your text');
+        _progress = 0;
+      });
+    }
+    final out = await VideoEditService.burnIn(
       videoPath: video.path,
       chain: chain,
+      overlayPngPath: overlayPng,
       onProgress: (p) { if (mounted) setState(() => _progress = p); },
     );
     if (mounted) setState(() { _stage = 'Uploading'; _progress = 0; });
     return File(out);
   }
 
-  /// The look failed to render. Asks whether to post the clip without it rather
-  /// than deciding for them: they may have picked the look on purpose, or they
-  /// may just want the video up.
+  /// Names what the burn-in pass was carrying, for the message shown when it
+  /// fails. "Couldn't apply Original" is what the label alone produced on a
+  /// clip whose only edit was text.
+  String get _burnInLabel {
+    final hasText = _textOverlays.any((o) => !o.isEmpty);
+    final hasLook = _filter.ffmpegChain != null;
+    if (hasLook && hasText) return 'the ${_filter.label} look and your text';
+    if (hasText) return 'your text';
+    return 'the ${_filter.label} look';
+  }
+
+  /// The burn-in failed. Asks whether to post the clip without it rather than
+  /// deciding for them: they may have picked the look on purpose, or they may
+  /// just want the video up.
   Future<bool> _askPublishWithoutLook(String name) async {
     final answer = await showDialog<bool>(
       context: context,
@@ -411,8 +455,8 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
         title: Text("Couldn't apply $name",
             style: AppTypography.sans(fontSize: 17, fontWeight: FontWeight.w700)),
         content: Text(
-          'Your video is fine — only the $name look failed to render. '
-          'Post it without the look?',
+          'Your video is fine — only $name failed to render. '
+          'Post it without?',
           style: AppTypography.sans(fontSize: 14),
         ),
         actions: [
@@ -485,11 +529,11 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
         try {
           filtered = await _applyFilter(_videoFile!);
         } on VideoEditFailure catch (e) {
-          debugPrint('[BLFILTER] ${_filter.label}: $e');
+          debugPrint('[BLFILTER] $_burnInLabel: $e');
           if (!mounted) return;
-          if (!await _askPublishWithoutLook(_filter.label)) {
+          if (!await _askPublishWithoutLook(_burnInLabel)) {
             // finally still clears _uploading.
-            setState(() => _error = "Couldn't apply the ${_filter.label} look — nothing was posted");
+            setState(() => _error = "Couldn't apply $_burnInLabel — nothing was posted");
             return;
           }
           filtered = _videoFile!;
@@ -595,6 +639,51 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
   Widget _tinted(Widget child) {
     final f = _filter.colorFilter;
     return f == null ? child : ColorFiltered(colorFilter: f, child: child);
+  }
+
+  /// Opens the text editor on this clip and takes back whatever came out of it.
+  /// A null result is the poster backing out, which keeps what they had.
+  Future<void> _editText() async {
+    final video = _videoFile;
+    if (video == null) return;
+    // The clip carries on playing behind a full-screen editor otherwise, with
+    // its sound, under a screen that has nothing to do with either.
+    _previewController?.pause();
+    _soundPreview?.pause();
+    final result = await Navigator.of(context).push<List<VideoTextOverlay>>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => TextOverlayEditorScreen(
+          videoPath: video.path,
+          overlays: _textOverlays,
+          tint: _filter.colorFilter,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (result != null) setState(() => _textOverlays = result);
+    // Back on step 2, where both are supposed to be running.
+    _previewController?.play();
+    if (_effectiveSoundId != null) _soundPreview?.play();
+  }
+
+  /// The `Aa` tool. Reads as "Text" until there is some, then says how much, so
+  /// the button is also the only place that reports what is on the clip.
+  Widget _textButton() {
+    final count = _textOverlays.where((o) => !o.isEmpty).length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: OutlinedButton.icon(
+        onPressed: _uploading ? null : _editText,
+        icon: const Text('Aa',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, height: 1)),
+        label: Text(switch (count) {
+          0 => 'Add text',
+          1 => 'Edit text (1)',
+          _ => 'Edit text ($count)',
+        }),
+      ),
+    );
   }
 
   /// Names the look riding on this clip and offers the one way to take it off.
@@ -764,6 +853,17 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
                             // the look used to live on the viewfinder only and
                             // vanish the moment you stopped recording.
                             _tinted(VideoPlayer(_previewController!)),
+                            // The text, drawn by the very painter that renders
+                            // the PNG FFmpeg burns in — so this preview is the
+                            // same promise the look above it makes.
+                            if (_textOverlays.isNotEmpty)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: CustomPaint(
+                                    painter: OverlayLayerPainter(_textOverlays),
+                                  ),
+                                ),
+                              ),
                             // Only when stopped: something to press, and a sign
                             // that the silence is a paused clip rather than a
                             // broken one.
@@ -806,8 +906,9 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
                   ),
                 ],
               ),
-              // Step 2: look + sound + mix levels + caption.
+              // Step 2: text + look + sound + mix levels + caption.
               if (_videoStep == 2) ...[
+              _textButton(),
               if (_filterIndex != 0) _filterChip(),
               if (!_usingSound) ...[
                 const SizedBox(height: 6),
@@ -914,8 +1015,17 @@ class _ComposerScreenState extends ConsumerState<ComposerScreen> with RouteAware
                               width: _previewController!.value.size.width,
                               height: _previewController!.value.size.height,
                               // The audience step's thumbnail wears the look
-                              // too — it is the last thing seen before Publish.
-                              child: _tinted(VideoPlayer(_previewController!)),
+                              // AND the text — it is the last thing seen before
+                              // Publish, and it showed a clip with no text on it
+                              // right up to the moment of posting one with.
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  _tinted(VideoPlayer(_previewController!)),
+                                  if (_textOverlays.isNotEmpty)
+                                    CustomPaint(painter: OverlayLayerPainter(_textOverlays)),
+                                ],
+                              ),
                             ),
                           ),
                         ),
