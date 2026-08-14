@@ -1785,7 +1785,7 @@ async function handle(request, env, ctx) {
         // whatever you saw longest ago, never what you just scrolled past.
         ? "ORDER BY seen_at IS NOT NULL, seen_at ASC, p.created_at DESC"
         : "ORDER BY p.created_at DESC"}
-      LIMIT ?
+      LIMIT ?${personalised ? " OFFSET ?" : ""}
     `;
 
     // Bind order follows the statement, not the logic: the two EXISTS in the
@@ -1795,6 +1795,12 @@ async function handle(request, env, ctx) {
     binds.push(viewerId, viewerId);
     if (!personalised && cursor) binds.push(parseInt(cursor));
     binds.push(limit);
+    // A real offset, not a page counter. Signed in, the cursor used to be
+    // "there was a full page, ask again" and the query ran from the top every
+    // time — so scrolling Public never reached an end, it just handed back the
+    // posts it had already shown. It walks the list now, and runs out.
+    const offset = personalised ? (parseInt(cursor || "0") || 0) : 0;
+    if (personalised) binds.push(offset);
 
     const { results } = await env.DB.prepare(sql).bind(...binds).all();
 
@@ -1811,26 +1817,14 @@ async function handle(request, env, ctx) {
       ctx.waitUntil(
         env.DB.batch(
           results.map(r =>
+            // DO NOTHING, not DO UPDATE. seen_at is when you FIRST saw a post
+            // and must never move. Re-stamping it on every serve gave the
+            // whole feed one timestamp, so "oldest seen first" collapsed into
+            // two groups trading places on each pull — the same two posts
+            // alternating for ever, which is exactly what was reported.
             env.DB.prepare(
               "INSERT INTO post_exposures (user_id, post_id, seen_at) VALUES (?, ?, ?) " +
-              "ON CONFLICT(user_id, post_id) DO UPDATE SET seen_at = excluded.seen_at"
-            ).bind(viewerId, r.id, t)
-          )
-        ).catch(e => console.error("[PUBLIC] recording exposures failed", e))
-      );
-    }
-
-    // Remember what was just handed over, so the next pull brings something
-    // else. Written after the response is on its way — a feed must not wait on
-    // its own bookkeeping.
-    if (viewerId && results.length) {
-      const t = now();
-      ctx.waitUntil(
-        env.DB.batch(
-          results.map(r =>
-            env.DB.prepare(
-              "INSERT INTO post_exposures (user_id, post_id, seen_at) VALUES (?, ?, ?) " +
-              "ON CONFLICT(user_id, post_id) DO UPDATE SET seen_at = excluded.seen_at"
+              "ON CONFLICT(user_id, post_id) DO NOTHING"
             ).bind(viewerId, r.id, t)
           )
         ).catch(e => console.error("[PUBLIC] recording exposures failed", e))
@@ -1883,14 +1877,13 @@ async function handle(request, env, ctx) {
     return json({
       posts: results.map(shapePost),
       ad: ad ? shapeAd(ad) : null,
-      // Signed in, the cursor is just "there was a full page, ask again" —
-      // recording the exposures above is what moves the window, so the next
-      // request naturally returns the next unseen batch. A timestamp cursor
-      // would fight that: it would skip past unseen older posts to honour an
-      // ordering the query no longer uses.
+      // Signed in this is an OFFSET into the ordering above, so scrolling walks
+      // the list and stops at the end of it. It used to be a page counter with
+      // the query starting from the top every time, which is why Public never
+      // ran out — it kept handing back posts it had already shown.
       nextCursor: results.length === limit
         ? (personalised
-            ? String((parseInt(cursor || "0") || 0) + 1)
+            ? String(offset + limit)
             : String(results[results.length - 1].created_at))
         : null,
     });
