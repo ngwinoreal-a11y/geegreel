@@ -32,6 +32,7 @@
 <link rel="stylesheet" href="/design-5.css">
 <link rel="stylesheet" href="/design-feed.css">
 <link rel="stylesheet" href="/design-public.css">
+<link rel="stylesheet" href="/design-live.css">
 <style>
   /* design-4.css's --sk-base (#1C1C1C) on this app's pure #000 page is too
      close in value — on a real screen it reads as "nothing loaded" rather
@@ -369,7 +370,9 @@ let state = { tab: "feed", feedTab: "foryou", page: null, videos: [], cursor: nu
               // Set by requireLogin() when a guest taps something that
               // needs an account — tells renderInner() to show authScreen
               // even on a page a guest can otherwise browse.
-              authPrompt: false };
+              authPrompt: false,
+              // Which live session "live-watch" opened for.
+              liveId: null };
 
 // How far down the main feed you'd scrolled — outside `state` since it isn't
 // part of navigation identity, just where you were. Restored by renderInner()
@@ -5148,6 +5151,230 @@ function walletHistoryPage() {
   return el;
 }
 
+// ---------- live ----------
+
+// hls.js only loads for the person who actually opens a live — Safari plays
+// Mux's .m3u8 URL natively and never needs it at all.
+let hlsJsPromise = null;
+function loadHlsJs() {
+  if (window.Hls) return Promise.resolve(window.Hls);
+  if (hlsJsPromise) return hlsJsPromise;
+  hlsJsPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js";
+    s.onload = () => resolve(window.Hls);
+    s.onerror = () => reject(new Error("Couldn't load the video player"));
+    document.head.appendChild(s);
+  });
+  return hlsJsPromise;
+}
+
+// Returns a teardown function once video is actually attached — the caller
+// awaits this and must be ready for the screen to already be gone by the
+// time hls.js has finished loading over a slow connection. onFatalError
+// fires instead of leaving the viewer staring at a black rectangle forever
+// — a live's playback URL going stale (the broadcast just ended) is not
+// rare enough to treat as unreachable code.
+async function attachLiveVideo(video, url, onFatalError) {
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = url;
+    video.addEventListener("error", () => onFatalError?.(), { once: true });
+    video.play().catch(() => {});
+    return () => { video.pause(); video.removeAttribute("src"); video.load(); };
+  }
+  const Hls = await loadHlsJs();
+  if (!Hls?.isSupported()) {
+    video.src = url;
+    video.addEventListener("error", () => onFatalError?.(), { once: true });
+    video.play().catch(() => {});
+    return () => { video.pause(); video.removeAttribute("src"); video.load(); };
+  }
+  const hls = new Hls();
+  hls.loadSource(url);
+  hls.attachMedia(video);
+  hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+  hls.on(Hls.Events.ERROR, (_evt, data) => { if (data.fatal) onFatalError?.(); });
+  return () => hls.destroy();
+}
+
+// A small red pill over the feed when at least one person is live — the only
+// thing that makes a live discoverable from the web at all right now. Checked
+// once per visit to the feed, not on a timer: nobody is staring at this tab
+// waiting for someone to go live.
+function checkLiveBadge(container) {
+  api("/live/active").then(r => {
+    if (!r.lives.length || !container.isConnected) return;
+    const btn = $(`<button class="live-badge">🔴 LIVE</button>`);
+    btn.onclick = () => { state.page = "live"; render(); };
+    container.appendChild(btn);
+  }).catch(() => {});
+}
+
+function liveCard(l) {
+  const r = $(`
+    <div class="row tap">
+      <div class="av" style="width:44px;height:44px;position:relative">
+        ${avatarInner(l.creator)}
+        <span style="position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);
+          background:#FF3040;color:#fff;font-size:8px;font-weight:800;letter-spacing:.3px;
+          padding:1px 5px;border-radius:6px;border:1.5px solid var(--bg);white-space:nowrap">LIVE</span>
+      </div>
+      <div style="flex:1;min-width:0">
+        <p style="margin:0;font-size:14px;font-weight:600">${esc(l.creator.displayName || l.creator.username)}</p>
+        <p style="margin:2px 0 0;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(l.title || "")}</p>
+      </div>
+      <span style="font-family:var(--mono);font-size:12px;color:var(--muted);flex-shrink:0">${fmt(l.viewerCount)} watching</span>
+    </div>`);
+  r.onclick = () => { state.page = "live-watch"; state.liveId = l.id; render(); };
+  return r;
+}
+
+function livePage() {
+  const el = $(`
+    <div class="page">
+      <div class="pagehead"><button id="back">${I.back}</button><h2>Live</h2></div>
+      <div id="list"><div class="spin"></div></div>
+    </div>`);
+  el.querySelector("#back").onclick = () => history.back();
+  const list = el.querySelector("#list");
+  api("/live/active").then(r => {
+    list.innerHTML = r.lives.length ? "" : `<p class="empty">No one is live right now.</p>`;
+    r.lives.forEach(l => list.appendChild(liveCard(l)));
+  }).catch(e => { list.innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+  return el;
+}
+
+function liveWatchPage() {
+  const id = state.liveId;
+  const el = $(`
+    <div class="page live-watch">
+      <video id="lwVideo" playsinline muted autoplay></video>
+      <div class="live-scrim-top">
+        <div class="av" id="lwAv" style="width:38px;height:38px"></div>
+        <div class="tap" id="lwCreator" style="flex:1;min-width:0">
+          <p id="lwName" style="margin:0;font-size:14px;font-weight:700;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6)"></p>
+          <p id="lwViewers" style="margin:2px 0 0;font-size:11px;color:rgba(255,255,255,.8)"></p>
+        </div>
+        <button id="lwFollow" class="foll-btn tap-sm" style="display:none"></button>
+        <button id="lwClose" class="chat-icon-btn">${I.x}</button>
+      </div>
+      <div id="lwComments" class="live-comments"></div>
+      <div id="lwComposer" class="live-composer" style="display:none">
+        <input id="lwMsg" placeholder="Say something…" maxlength="300">
+        <button id="lwSend" class="chat-icon-btn">${I.send}</button>
+      </div>
+      <div id="lwGone" style="display:none;position:fixed;inset:0;z-index:3;background:#000;
+        align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:20px;text-align:center"></div>
+    </div>`);
+
+  el.querySelector("#lwClose").onclick = () => history.back();
+
+  let since = 0, pollTimer = null, destroyVideo = null, active = true;
+
+  const showGone = (msg) => {
+    el.querySelector("#lwComments").style.display = "none";
+    el.querySelector("#lwComposer").style.display = "none";
+    const gone = el.querySelector("#lwGone");
+    gone.style.display = "flex";
+    gone.innerHTML = `
+      <p style="color:#fff;font-size:16px;font-weight:600;margin:0">${esc(msg)}</p>
+      <button id="lwGoneClose" class="foll-btn tap-sm">Close</button>`;
+    gone.querySelector("#lwGoneClose").onclick = () => history.back();
+  };
+
+  const renderComments = (comments) => {
+    const box = el.querySelector("#lwComments");
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+    comments.forEach(c => {
+      box.insertAdjacentHTML("beforeend",
+        `<p class="live-comment"><b>${esc(c.user.displayName || c.user.username)}</b> ${esc(c.body)}</p>`);
+    });
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  };
+
+  const poll = async () => {
+    if (document.hidden || !active) return;
+    try {
+      const t = await api(`/live/${id}/stream?since=${since}`);
+      since = t.since;
+      if (t.comments.length) renderComments(t.comments);
+      el.querySelector("#lwViewers").textContent = `${fmt(t.viewerCount)} watching`;
+      // Only reachable once the session was already 'live' when this screen
+      // opened (the initial fetch below 410s otherwise) — so anything but
+      // 'live' now genuinely means it just ended, unlike the broadcaster's
+      // own poll, which starts watching before Mux has confirmed anything.
+      if (t.status !== "live") {
+        clearInterval(pollTimer);
+        showGone(`${el.querySelector("#lwName").textContent || "This live"} has ended`);
+      }
+    } catch {}
+  };
+
+  api(`/live/${id}`).then(async (s) => {
+    if (!active) return;
+    el.querySelector("#lwAv").innerHTML = avatarInner(s.creator);
+    el.querySelector("#lwName").textContent = s.creator.displayName || s.creator.username;
+    el.querySelector("#lwViewers").textContent = `${fmt(s.viewerCount)} watching`;
+    el.querySelector("#lwCreator").onclick = () => {
+      state.viewUser = s.creator.username; state.page = "profile"; render();
+    };
+
+    if (!s.isOwner) {
+      const followBtn = el.querySelector("#lwFollow");
+      followBtn.style.display = "";
+      followBtn.classList.toggle("done", s.following);
+      followBtn.textContent = s.following ? "Following" : "Follow";
+      followBtn.onclick = async () => {
+        if (!requireLogin("Log in to follow")) return;
+        const on = followBtn.classList.contains("done");
+        followBtn.classList.toggle("done", !on);
+        followBtn.textContent = on ? "Follow" : "Following";
+        try { await api(`/users/${s.creator.id}/follow`, { method: on ? "DELETE" : "POST" }); }
+        catch (e) {
+          followBtn.classList.toggle("done", on);
+          followBtn.textContent = on ? "Following" : "Follow";
+          toast(e.message);
+        }
+      };
+      el.querySelector("#lwComposer").style.display = "flex";
+    }
+
+    if (!s.playbackUrl) { showGone(`${s.creator.displayName || s.creator.username} has ended their live`); return; }
+    const destroy = await attachLiveVideo(el.querySelector("#lwVideo"), s.playbackUrl, () => {
+      if (!active) return;
+      clearInterval(pollTimer);
+      showGone(`${s.creator.displayName || s.creator.username} has ended their live`);
+    });
+    if (!active) { destroy?.(); return; }
+    destroyVideo = destroy;
+
+    pollTimer = setInterval(poll, 3000);
+  }).catch((e) => {
+    if (!active) return;
+    showGone(e.status === 410 || e.status === 404 ? "This live has ended" : e.message);
+  });
+
+  const send = async () => {
+    const input = el.querySelector("#lwMsg");
+    const body = input.value.trim();
+    if (!body) return;
+    if (!requireLogin("Log in to comment")) return;
+    input.value = "";
+    try { await api(`/live/${id}/comments`, { method: "POST", body: { body } }); }
+    catch (e) { toast(e.message); }
+  };
+  el.querySelector("#lwSend").onclick = send;
+  el.querySelector("#lwMsg").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+
+  el.addEventListener("screen-exit", () => {
+    active = false;
+    clearInterval(pollTimer);
+    destroyVideo?.();
+  });
+
+  return el;
+}
+
 // ---------- monetization (creator) ----------
 
 function monetizationPage() {
@@ -5914,6 +6141,7 @@ const snapshotState = () => ({
         displayName: state.chatWith.displayName, avatarUrl: state.chatWith.avatarUrl }
     : null,
   followList: state.followList,
+  liveId: state.liveId,
 });
 
 function trackHistory() {
@@ -5977,7 +6205,7 @@ function renderInner() {
   // can't have — falls through to the login/signup screen. requireLogin()
   // (used throughout the feed's action handlers) sets state.authPrompt to
   // force this same screen from inside an action rather than a page.
-  const GUEST_PAGES = new Set([null, "search", "sound", "userfeed"]);
+  const GUEST_PAGES = new Set([null, "search", "sound", "userfeed", "live", "live-watch"]);
   const guestOnProfile = state.page === "profile" && state.viewUser;
   if (!store.token && state.authPrompt) { app.appendChild(authScreen()); return; }
   if (!store.token && !GUEST_PAGES.has(state.page) && !guestOnProfile) {
@@ -6010,6 +6238,8 @@ function renderInner() {
   if (state.page === "sound") { app.appendChild(soundPage()); return; }
   if (state.page === "search") { app.appendChild(searchPage()); attachNav(app, "search"); return; }
   if (state.page === "notifications") { app.appendChild(notificationsPage()); return; }
+  if (state.page === "live") { app.appendChild(livePage()); return; }
+  if (state.page === "live-watch") { app.appendChild(liveWatchPage()); return; }
 
   const isMsg = state.tab === "messages";
 
@@ -6040,6 +6270,7 @@ function renderInner() {
     state.viewUser = null; state.tab = "profile"; state.page = "profile"; render();
   };
   app.querySelector("#search").onclick = () => { state.tab = "search"; state.page = "search"; render(); };
+  if (!isMsg) checkLiveBadge(app);
 
   if (!isMsg) {
     app.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
