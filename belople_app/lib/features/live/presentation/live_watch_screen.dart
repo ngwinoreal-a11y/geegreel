@@ -175,7 +175,10 @@ class _LivePageState extends ConsumerState<_LivePage> {
     try {
       final repo = ref.read(liveRepositoryProvider);
       final s = await repo.session(widget.sessionId);
-      if (!mounted) return;
+      // Swiped past while this was in flight: _close() ran while there was
+      // nothing yet to close, so this stale call must not resurrect a player
+      // or timers for a page nobody is looking at.
+      if (!mounted || !widget.isActive) return;
       setState(() {
         _session = s;
         _viewers = s.viewerCount;
@@ -189,8 +192,12 @@ class _LivePageState extends ConsumerState<_LivePage> {
 
       final player = VideoPlayerController.networkUrl(Uri.parse(s.playbackUrl!));
       await player.initialize();
+      if (!mounted || !widget.isActive) {
+        player.dispose();
+        return;
+      }
       await player.play();
-      if (!mounted) {
+      if (!mounted || !widget.isActive) {
         player.dispose();
         return;
       }
