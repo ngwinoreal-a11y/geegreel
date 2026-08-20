@@ -143,7 +143,12 @@ class LiveTick {
   final List<LiveComment> comments;
   final int since;
 
-  bool get ended => status != 'live';
+  // Not "not live" — a fresh session sits in 'starting' until Mux's webhook
+  // confirms the RTMP stream, and the broadcaster starts polling the moment
+  // it goes live locally, well before that confirmation lands. Reading
+  // "starting" as ended was closing every broadcast a few seconds in,
+  // whether or not the stream ever actually connected.
+  bool get ended => status == 'ended' || status == 'failed';
 
   factory LiveTick.fromJson(Map<String, dynamic> j) => LiveTick(
         status: j['status'] as String? ?? 'ended',

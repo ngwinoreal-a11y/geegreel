@@ -74,6 +74,17 @@ class _LiveBroadcastScreenState extends ConsumerState<LiveBroadcastScreen> {
       if (!mounted) return;
       setState(() => _camera = controller);
 
+      // The plugin renders the preview through a legacy (virtual-display)
+      // platform view, which attaches to the native side on its own async
+      // channel — not on Flutter's frame pump. startVideoStreaming() shares
+      // that view's OpenGL context with the encoder, and calling it right
+      // after setState() was racing the view's attachment: the shared
+      // context did not exist yet, and the encoder's SurfaceManager crashed
+      // reading a null EGLContext. There is no signal to await here, only
+      // this to wait it out.
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+
       // ~1.5 Mbps: enough for 720p talking-head video, low enough to hold on a
       // mobile uplink here. The encoder drops quality rather than frames when
       // the connection tightens, which is the trade the plan asks for.
@@ -85,6 +96,14 @@ class _LiveBroadcastScreenState extends ConsumerState<LiveBroadcastScreen> {
       // Nothing about going live is allowed to fail quietly: the creator is
       // standing there believing they are on air.
       debugPrint('[BLLIVE] could not start broadcasting: $e');
+      // The previous screen already created this session server-side before
+      // handing off here — leaving it open blocks every retry with "You
+      // already have a live going" until the sweeper's cron catches it
+      // minutes later. The camera never went live, so there is nothing to
+      // stop locally, just the session to close.
+      unawaited(ref.read(liveRepositoryProvider).end(widget.start.sessionId).catchError((err) {
+        debugPrint('[BLLIVE] ending the failed session failed: $err');
+      }));
       if (mounted) setState(() => _error = "Couldn't start your live — check your connection and try again");
     }
   }
